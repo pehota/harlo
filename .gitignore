@@ -1,0 +1,8 @@
+# Runtime state created by the loop when it runs (in a target project's .claude/state/,
+# or here if you dev/test the harness against itself).
+.claude/state/
+*.log
+
+# Common toolchain noise if this repo is ever used as a project root for testing.
+node_modules/
+.DS_Store

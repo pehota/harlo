@@ -1,0 +1,28 @@
+{
+  "commands": {
+    "typecheck": "bun run typecheck",
+    "lint": "bun run lint",
+    "test": "bun run test",
+    "test_related": "bunx vitest related --run",
+    "format": "bunx prettier --write",
+    "lint_file": "bunx eslint",
+    "mutation": "bunx stryker run --incremental",
+    "code-review": "bash \"$HARNESS_HOME/checks/code-review.sh\""
+  },
+  "source_globs": [
+    "src",
+    "apps",
+    "packages"
+  ],
+  "test_file_exts": [
+    "ts",
+    "tsx"
+  ],
+  "package_manager": "bun",
+  "blocked_command_patterns": [
+    "npm ",
+    "yarn ",
+    "pnpm ",
+    "npx "
+  ]
+}

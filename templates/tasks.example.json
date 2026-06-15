@@ -1,0 +1,46 @@
+{
+  "$schema": "Task state for the harness. The orchestrator owns this file; subagents read it. One file => one owner across tasks (the harness assumes you keep ownership disjoint).",
+  "spec": "Add server-side search to Link Shelf with a typed API and a debounced React UI.",
+  "tasks": [
+    {
+      "id": "data-search",
+      "title": "Search query + index in the data layer",
+      "status": "pending",
+      "owns": ["packages/data/src/search.ts", "packages/data/src/search.test.ts"],
+      "deliverables": ["packages/data/src/search.ts", "packages/data/src/search.test.ts"],
+      "dependsOn": [],
+      "acceptance": [
+        "searchBookmarks(q) returns matches ranked by title then url",
+        "empty query returns [] without hitting the store",
+        "query is case-insensitive"
+      ]
+    },
+    {
+      "id": "api-search",
+      "title": "GET /search endpoint",
+      "status": "blocked",
+      "owns": ["apps/api/src/routes/search.ts", "apps/api/src/routes/search.test.ts"],
+      "deliverables": ["apps/api/src/routes/search.ts"],
+      "dependsOn": ["data-search"],
+      "acceptance": [
+        "GET /search?q= returns 200 with {id,title,url}[]",
+        "missing q returns 400",
+        "contract documented for the frontend: GET /search?q= -> {id,title,url}[]"
+      ]
+    },
+    {
+      "id": "ui-search",
+      "title": "Debounced search box + results list",
+      "status": "blocked",
+      "owns": ["apps/web/src/features/search/**"],
+      "deliverables": ["apps/web/src/features/search/SearchBox.tsx"],
+      "dependsOn": ["api-search"],
+      "acceptance": [
+        "input debounced 300ms",
+        "uses @climatepartner/components primitives, not raw MUI",
+        "renders empty + loading + error + results states",
+        "named export, design tokens for styling"
+      ]
+    }
+  ]
+}

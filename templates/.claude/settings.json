@@ -1,0 +1,79 @@
+{
+  "$comment": "Claude Code enhancement layer (L2) for the config-driven loop harness. Stack-specific behavior comes entirely from .harness.json in the project root (source_globs, blocked_command_patterns, commands.*) — nothing here is TS/Bun/React-specific. PLAN phase (role=orchestrator, human-approved tasks.json) then autonomous LOOP phase (role=implement, one bounded task per run). Determinism = binary gates wired to lifecycle events; safety = PreToolUse guards (no human to approve prompts during unattended runs).",
+
+  "env": {
+    "HARNESS_MAX_STOP_RETRIES": "5"
+  },
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/session-context.sh", "args": [], "statusMessage": "Loading task state" }
+        ]
+      }
+    ],
+
+    "PreToolUse": [
+      {
+        "$comment": "Orchestrator (PLAN) must not write source; implementer (LOOP) may. Role decides.",
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/orchestrator-guard.sh", "args": [] }
+        ]
+      },
+      {
+        "$comment": "Force Bun; block other PMs and destructive commands. This is the safety net for unattended runs.",
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/bash-guard.sh", "args": [] }
+        ]
+      }
+    ],
+
+    "PostToolUse": [
+      {
+        "$comment": "G1 fast per-file feedback (non-blocking): eslint --fix + prettier on the touched file.",
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-and-check.sh", "args": [], "timeout": 60 }
+        ]
+      }
+    ],
+
+    "SubagentStop": [
+      {
+        "$comment": "If a task run fans out to subagents, gate each one. typecheck + lint + scoped vitest. exit 2 = keep working.",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/gate-task.sh", "args": [], "timeout": 600 }
+        ]
+      }
+    ],
+
+    "TaskCompleted": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/task-acceptance.sh", "args": [], "timeout": 600 }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "$comment": "Role-dispatched. implement => scoped task gate (force-continue until green). orchestrator/interactive => global gate. plan => tasks.json sanity only.",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/gate-stop.sh", "args": [], "timeout": 900 }
+        ]
+      }
+    ],
+
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/persist.sh", "args": [], "async": true }
+        ]
+      }
+    ]
+  }
+}
