@@ -39,7 +39,7 @@ requirements from the task statement and record them into done-state
 
 ## Step 0 — Config: detect / refresh (script)
 
-Run `$CLAUDE_PROJECT_DIR/.claude/scripts/done-detect.sh` and consume its stdout —
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-detect.sh` and consume its stdout —
 the **effective** config (`overrides` merged over `detected`). The script probes
 lockfiles + `package.json`/`Cargo.toml`/`go.mod`/`pyproject.toml`/`Makefile`,
 recomputes the `source_fingerprint`, and rewrites `detected` only when the source
@@ -54,8 +54,7 @@ by folding external instruction sources onto the base DoD.
 Fold these sources together, precedence **low → high** (a higher source overrides
 a lower one on conflict — the user's rules win):
 
-1. **Base DoD** — read `$CLAUDE_PROJECT_DIR/.claude/harness/base-dod.md`
-   (note: `harness/`, not the gitignored `.harness/`). The low-precedence baseline.
+1. **Base DoD** — read `${CLAUDE_PLUGIN_ROOT}/dod/base-dod.md`. The low-precedence baseline.
 2. **Your own active instructions** — the standing guidance already governing you
    this session, *however it was provided* (system prompt, project or user
    instructions, enterprise policy — the harness does not assume any particular
@@ -84,7 +83,7 @@ the gate's): `SESSION_ID=$(ls -t "$CLAUDE_PROJECT_DIR"/.claude/.harness/baseline
 
 Then resolve the changeset base via the shared resolver — do **not** hand-pick a
 baseline. Run
-`bash "$CLAUDE_PROJECT_DIR/.claude/scripts/harness-resolve.sh" "$SESSION_ID"` and
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/harness-resolve.sh" "$SESSION_ID"` and
 read its printed `base=` and `task_key=` lines. Scope the changeset as
 `git diff <base> HEAD` (add `--stat` for the summary). In task mode `<base>` is
 the **pinned task base** → the diff spans the whole feature across every session
@@ -173,7 +172,7 @@ Prerequisite).
 
 ## Step 7 — Write done-state (script)
 
-Run `$CLAUDE_PROJECT_DIR/.claude/scripts/done-write-state.sh "$SESSION_ID"` —
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-write-state.sh "$SESSION_ID"` —
 passing the **same `$SESSION_ID` resolved in Step 1** so the writer and the gate
 never disagree — supplying the
 **judgment fields** as a JSON payload on **stdin** (`dod`, `tests` summary,

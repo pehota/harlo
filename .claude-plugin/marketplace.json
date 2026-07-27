@@ -1,0 +1,11 @@
+{
+  "name": "harlo",
+  "owner": { "name": "Dimitar Apostolov" },
+  "plugins": [
+    {
+      "name": "completion-harness",
+      "source": "./completion-harness",
+      "description": "Definition-of-Done completion gate."
+    }
+  ]
+}

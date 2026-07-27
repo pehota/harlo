@@ -1,10 +1,16 @@
 #!/bin/bash
 #
-# Completion Harness — installer.
+# Completion Harness — installer (NON-PLUGIN FALLBACK).
 #
-# Idempotently wires the Stop + SessionStart hooks into a TARGET project's
-# machine-local settings, copies the bundle into the project's .claude/, seeds
-# a starter done-config.json, and gitignores harness state.
+# The primary distribution is the Claude Code plugin (see .claude-plugin/ and
+# the README "Install as a plugin" section). Use this script only when the
+# plugin path is unavailable — it mirrors the plugin root 1:1 under the target
+# project's .claude/ so the bundle's plugin-native SKILL resolves with a single
+# path substitution.
+#
+# Idempotently wires the Stop + SessionStart + PreToolUse hooks into a TARGET
+# project's machine-local settings, copies the bundle into the project's
+# .claude/, seeds a starter done-config.json, and gitignores harness state.
 #
 # Usage: bash install.sh /path/to/project      (defaults to $PWD)
 
@@ -28,7 +34,7 @@ fi
 echo "Installing completion harness into: $TARGET_DIR"
 
 CLAUDE_DIR="$TARGET_DIR/.claude"
-mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/harness"
+mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod"
 
 # --- copy bundle files ------------------------------------------------------
 cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
@@ -41,15 +47,24 @@ cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-st
 cp "$SCRIPT_DIR/scripts/harness-common.sh"    "$CLAUDE_DIR/scripts/harness-common.sh"
 cp "$SCRIPT_DIR/scripts/harness-resolve.sh"   "$CLAUDE_DIR/scripts/harness-resolve.sh"
 cp "$SCRIPT_DIR/scripts/auto-branch.sh"       "$CLAUDE_DIR/scripts/auto-branch.sh"
-cp "$SCRIPT_DIR/skills/done/SKILL.md"         "$CLAUDE_DIR/skills/done/SKILL.md"
-# Base DoD → committed, portable artifact under .claude/harness/ (NOT the
-# gitignored .claude/.harness/). Step 0.5 of /done reads it. DOD.md (the harness
-# project's own meta DoD) is intentionally NOT copied — it stays in the bundle.
-cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/harness/base-dod.md"
+# The bundle SKILL.md is plugin-native (resolves code/data at
+# ${CLAUDE_PLUGIN_ROOT}/...). For the non-plugin install, rewrite that root to
+# the mirrored .claude/ layout so scripts resolve at
+# $CLAUDE_PROJECT_DIR/.claude/scripts/... and base-dod at
+# $CLAUDE_PROJECT_DIR/.claude/dod/base-dod.md. Single-quoted sed is load-bearing:
+# it prevents this shell from expanding the vars, and sed does a literal replace.
+# State refs ($CLAUDE_PROJECT_DIR/.claude/.harness/...) are untouched.
+sed 's#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g' \
+    "$SCRIPT_DIR/skills/done/SKILL.md" > "$CLAUDE_DIR/skills/done/SKILL.md"
+# Base DoD → committed, portable artifact under .claude/dod/ (mirrors the
+# plugin's dod/; NOT the gitignored .claude/.harness/). Step 0.5 of /done reads
+# it. DOD.md (the harness project's own meta DoD) is intentionally NOT copied —
+# it stays in the bundle.
+cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/dod/base-dod.md"
 chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
          "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
          "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
-echo "  copied scripts/, skills/done/, and harness/base-dod.md"
+echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------
 CONFIG_FILE="$CLAUDE_DIR/done-config.json"

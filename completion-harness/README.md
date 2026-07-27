@@ -25,9 +25,36 @@ hand-written by the LLM): Step 0 config detection + fingerprinting
 facts (`scripts/done-write-state.sh`, which refuses a dirty tree).
 
 State lives under `<project>/.claude/.harness/` (git-ignored) and is keyed by
-`session_id`, so parallel sessions in separate worktrees are fully isolated.
+**task** (the git branch), with session as a fallback on trunk — so a task's
+verification survives across sessions, and parallel work in separate worktrees
+(different branches) is fully isolated.
 
-## Install
+## Install as a plugin (primary)
+
+The completion harness ships as a self-contained Claude Code plugin, distributed
+via a marketplace in this same repo.
+
+```
+/plugin marketplace add <repo>          # this repo (URL or local path)
+/plugin install completion-harness@harlo
+```
+
+Local development — load the plugin directly from the bundle dir without a
+marketplace:
+
+```bash
+claude --plugin-dir completion-harness
+```
+
+The plugin wires the SessionStart / Stop / PreToolUse hooks from
+`hooks/hooks.json` and resolves its scripts and base DoD under
+`${CLAUDE_PLUGIN_ROOT}`. Per-project state still lives under
+`<project>/.claude/.harness/` (git-ignored).
+
+`install.sh` (below) is the **non-plugin fallback** — use it only when the
+plugin path is unavailable.
+
+## Install (non-plugin fallback)
 
 ```bash
 bash install.sh /path/to/project    # defaults to $PWD
@@ -35,7 +62,7 @@ bash install.sh /path/to/project    # defaults to $PWD
 
 This is idempotent. It:
 - copies `scripts/`, `skills/done/`, and the base DoD artifact
-  (`dod/base-dod.md` → `.claude/harness/base-dod.md`) into the project's
+  (`dod/base-dod.md` → `.claude/dod/base-dod.md`) into the project's
   `.claude/` — `/done` reads that base DoD and folds in the agent's own active
   instructions plus the task into one effective DoD per run (setup-agnostic — no
   assumption about where your instructions live),
