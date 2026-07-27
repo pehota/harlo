@@ -470,6 +470,62 @@ Add to the existing `SessionStart` array:
 
 ---
 
+## Distribution: marketplace plugin (target model)
+
+The portable bundle + `install.sh` (above) is the **fallback**. The intended distribution
+is a **Claude Code plugin** from a marketplace — which dissolves most of the "install"
+problem, because enabling the plugin *is* the installation.
+
+### What the plugin provides globally (no per-project copy or wiring)
+A plugin ships its own `hooks/hooks.json`, `skills/`, and scripts, with hook commands
+resolved via `${CLAUDE_PLUGIN_ROOT}`. When the plugin is **enabled**:
+- **Hooks fire from the plugin** — Stop→`done-gate.sh`, SessionStart→`baseline-snapshot.sh`,
+  PreToolUse(Write|Edit)→`auto-branch.sh`. No `settings.local.json` `jq`-merge per project.
+- **`/done` skill + all scripts** live in the plugin. `harness-common.sh` is sourced from
+  `${CLAUDE_PLUGIN_ROOT}`; `base-dod.md` is read from there.
+
+This removes the copy-and-wire step of `install.sh` entirely — and with it the three
+footguns of self-installing at SessionStart (bootstrap circularity, nothing-to-copy-from,
+overwriting committed scripts / dirtying the tree). Those were artifacts of the copy model.
+
+### What remains per-project (lazy runtime init — NOT an "install")
+Only project-local state + config, which the scripts already create lazily:
+- `.claude/.harness/` (baselines, done-state, review-log, task-base) — `mkdir -p` on first
+  hook fire.
+- `done-config.json` — self-seeded/refreshed by `done-detect.sh` at `/done` (legitimately
+  per-project: detected commands differ).
+- One `.gitignore` line for `.claude/.harness/`.
+
+**Run this idempotently at every SessionStart, not one-shot "first use."** A first-use flag
+doesn't survive a fresh clone, a new worktree, or a second machine; an every-session
+idempotent check (a no-op after the first) self-heals all three. The plugin's own
+SessionStart hook is the place for it.
+
+### The one genuinely manual, one-time step
+**Enabling the plugin** (per user/machine, from the marketplace). A plugin cannot
+auto-enable itself. Persist enablement via `enabledPlugins` in **`.claude/settings.json`**
+(project scope, committed) so everyone who clones — and headless/CI runs — pick it up.
+
+### Headless / CI caveat (verified against the docs, v2.1.207+)
+Plugins load in headless (`claude -p`, Agent SDK) the same way as interactive — from
+`enabledPlugins` in settings — **except** under `--bare`, which skips plugin/hook/skill
+discovery entirely. Confirmed: `SessionStart`/`SessionEnd` hooks fire and skills/slash
+commands resolve in `-p` mode. **Undocumented / must be tested empirically:** whether
+`PreToolUse` hooks fire and whether a `decision:block` from the Stop gate actually halts a
+non-interactive run. So for CI, verify the gate + auto-branch behavior empirically before
+relying on them, and never run the harness under `--bare`.
+
+### Decisions to settle when building the plugin
+- `base-dod.md`: ship global in the plugin (simplest; Step 0.5 already folds in the agent's
+  own instructions) with an optional project-local override.
+- `done-config.json`: stays per-project; committed (team shares detected commands) vs
+  gitignored.
+- Keep `install.sh` as the non-plugin fallback.
+- Enablement scope: an enabled plugin's hooks fire in *every* project (the intent — enforce
+  DoD everywhere); confirm that vs. per-project opt-in.
+
+---
+
 ## Checklist coverage
 
 | Original failure | Caught by |
