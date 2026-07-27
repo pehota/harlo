@@ -28,8 +28,11 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" 2>/dev/null
 # Reap stale harness state (older than 14 days). Fresh files (this session's
 # just-written baseline, active parallel sessions) are far younger, so safe.
 # Runs BEFORE any early return so non-git sessions get cleaned up too.
+# EXCLUDE task-base/ — a task's pinned base must live as long as its branch
+# (reaping it would re-pin at a later merge-base if trunk moved, silently
+# narrowing the changeset scope). Pins are tiny; orphaned ones are harmless.
 if [ -d "$HARNESS_DIR" ]; then
-  find "$HARNESS_DIR" -type f -mtime +14 -delete 2>/dev/null || true
+  find "$HARNESS_DIR" -type f -not -path '*/task-base/*' -mtime +14 -delete 2>/dev/null || true
 fi
 
 # --- record baseline SHA ----------------------------------------------------

@@ -61,7 +61,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "overrides": {},
   "max_fix_attempts": 3,
   "baseline_snapshot": true,
-  "deploy_check_cmd": null
+  "deploy_check_cmd": null,
+  "trunk": null,
+  "auto_branch": true,
+  "branch_prefix": "task/"
 }
 JSON
   echo "  created starter done-config.json"
