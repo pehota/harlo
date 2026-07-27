@@ -40,6 +40,44 @@ if [ -z "$HEAD_SHA" ]; then
 fi
 printf '%s\n' "$HEAD_SHA" > "$BASELINE_DIR/${SESSION_ID}.sha" 2>/dev/null
 
+# --- resolve identity (lazily pins the task base in task mode) --------------
+# Source the shared resolver and resolve. In task mode this pins the fork base
+# under .harness/task-base on first call. HC_WARN is non-empty only when we fell
+# back to session mode BECAUSE of trunk (on trunk, or unconfident trunk) — in
+# that case surface a non-blocking guidance message about task continuity.
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
+if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+  hc_resolve "$SESSION_ID" 2>/dev/null
+fi
+
+if [ -n "$HC_WARN" ]; then
+  # auto_branch default is TRUE when the key is absent, or the config/jq is
+  # unavailable. NOTE: a plain `// true` jq default is WRONG here — jq's `//`
+  # treats a literal `false` as empty and would flip it back to true — so we
+  # must probe with has() and only then read the value.
+  AUTO_BRANCH="true"
+  CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
+  if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
+    if jq -e 'has("auto_branch")' "$CONFIG_FILE" >/dev/null 2>&1; then
+      AUTO_BRANCH=$(jq -r '.auto_branch' "$CONFIG_FILE" 2>/dev/null)
+    fi
+  fi
+
+  if [ "$AUTO_BRANCH" = "false" ]; then
+    MSG="⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
+  else
+    MSG="on trunk $HC_TRUNK; a task branch will be auto-created on first edit (task continuity via branch)."
+  fi
+  # Surface as a non-blocking systemMessage on stdout (guarded); never fail.
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg m "$MSG" '{"systemMessage":$m}' 2>/dev/null
+  else
+    printf '{"systemMessage":"%s"}\n' "$MSG"
+  fi
+fi
+
 # --- optional background test snapshot --------------------------------------
 CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 SNAPSHOT_ENABLED="false"

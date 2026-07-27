@@ -43,30 +43,65 @@ Flow:
 
 ---
 
-## Parallelism & isolation
+## Identity: task (branch), with session fallback
 
-All harness state is keyed by `session_id` (every hook receives it on stdin;
-the built-in ralph-loop Stop hook uses the same pattern).
+The harness keys verification state by the **task**, using the **git branch** as the task
+identity — because completion is a property of the task, not the session, and a task can
+span many sessions. `session_id` is only a **fallback** (trunk / detached / no confident
+trunk). One resolver, `harness-common.sh` (`hc_resolve`), is the single source of identity
+truth, sourced identically by `baseline-snapshot.sh`, `done-gate.sh`, and
+`done-write-state.sh` so they can never diverge. The `/done` skill reads it via
+`harness-resolve.sh`.
 
-| State | Path |
-|---|---|
-| Baseline SHA | `~/.claude/baselines/<session_id>.sha` |
-| Baseline test snapshot | `~/.claude/baselines/<sha>.tests.json` (keyed by SHA, shared across sessions) |
-| Done-state | `.claude/done-state/<session_id>.json` (project-local) |
-| Config | `.claude/done-config.json` (project-local, shared) |
+**Resolution (offline, conservative):**
+- `branch = git symbolic-ref --short -q HEAD` (empty if detached).
+- `trunk` = config `.trunk` → else local `main` → else `master` (via `show-ref`; never
+  `origin/HEAD`, since repos may have no remote) → else *unconfident*.
+- **TASK mode** iff on a branch, trunk is confident, and `branch != trunk`
+  → `task_key = br-<sanitized-branch>`. Else **SESSION mode** → `task_key = session-<id>`.
 
-Cases:
+**Base (changeset anchor), pinned once:**
+- TASK mode → `base = merge-base(trunk, HEAD)`, written to `task-base/<task_key>.sha` on
+  first sight and reused thereafter (immune to trunk moving / mis-detection later;
+  inspectable). Empty merge-base (unrelated histories) → degrade to SESSION + warn, no pin.
+- SESSION mode → `base = baselines/<session_id>.sha` (HEAD at SessionStart).
+- Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
+  mid-session, so SessionStart isn't the only place it must pin).
 
-- **Sequential tasks, one session** — ✅ SHA comparison re-arms per changeset. New commits → gate blocks → re-run `/done`.
-- **Parallel sessions in separate worktrees** (the recommended workflow) — ✅ done-state is project-local per worktree; baseline is per-session. Fully isolated.
-- **Parallel sessions in the same directory** — ⚠️ made *safe* not *correct*: each session's gate demands its own verification, so one session can't clear another. The two agents still race on the git tree itself — a git problem the harness does not pretend to solve. The `/done` skill and block message state: **parallel work must use separate worktrees.**
+| State | Path | Keyed by |
+|---|---|---|
+| Task base (pinned) | `.claude/.harness/task-base/<task_key>.sha` | task (branch) |
+| Session baseline | `.claude/.harness/baselines/<session_id>.sha` | session (fallback + test-snapshot anchor) |
+| Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |
+| Done-state | `.claude/.harness/done-state/<task_key>.json` | **task** — survives session end |
+| Review-log | `.claude/.harness/review-log/<HEAD>.json` | reviewed commit |
+| Config | `.claude/done-config.json` | project |
 
-The Stop hook re-checks `tree_clean` and `HEAD == verified_sha` at gate time (not just trusting the stored flags), so stale state from a concurrent commit is caught.
+**Cases:**
+- **Multi-session task** — ✅ same branch → same `task_key` → a resumed session inherits the
+  done-state and the pinned base; `/done` reviews the whole feature (`base..HEAD`), not just
+  the latest session's slice.
+- **Parallel in separate worktrees** (recommended) — ✅ different branches → different
+  `task_key` → isolated.
+- **Same-dir same-branch parallel** — ⚠️ shares the task key; *unsupported* → use worktrees.
+- **On trunk** — SESSION fallback (see auto-branch below); one-time warning, never blocks.
+
+The gate re-checks `tree_clean` and `HEAD == verified_sha` live, so stale state from a
+concurrent commit is caught.
+
+### Auto-branch (on trunk, first edit)
+
+Config `auto_branch` (default **true**): a `PreToolUse(Write|Edit)` hook (`auto-branch.sh`)
+detects "on trunk, about to edit" and `git checkout -b <branch_prefix><timestamp>` (carries
+WIP), moving the work into TASK mode so it gets cross-session continuity. Fast no-op when
+already off trunk (it fires on every edit), and on detached/mid-rebase/merge or checkout
+failure it **stays on trunk and never blocks the edit**. `auto_branch:false` → stays on trunk
+with the SessionStart warning. To *resume* an existing task, checkout its branch first.
 
 ### State lifecycle & cleanup
 
 `.claude/.harness/` state is **load-bearing during a session** — the gate re-reads
-`done-state/<session_id>.json` and `review-log/<HEAD>.json` on every turn-end — so it is
+`done-state/<task_key>.json` and `review-log/<HEAD>.json` on every turn-end — so it is
 never cleaned mid-session. Cleanup is **age-based, at SessionStart**: `baseline-snapshot.sh`
 reaps any file under `.claude/.harness/` older than **14 days** (`find -mtime +14 -delete`,
 guarded, never fails the hook). This is self-healing, needs no `SessionEnd` hook (which

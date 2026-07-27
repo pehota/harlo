@@ -35,13 +35,20 @@ cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
 cp "$SCRIPT_DIR/scripts/baseline-snapshot.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh"
 cp "$SCRIPT_DIR/scripts/done-detect.sh"       "$CLAUDE_DIR/scripts/done-detect.sh"
 cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-state.sh"
+# Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
+# harness-resolve.sh is the executable wrapper; auto-branch.sh is the
+# PreToolUse hook.
+cp "$SCRIPT_DIR/scripts/harness-common.sh"    "$CLAUDE_DIR/scripts/harness-common.sh"
+cp "$SCRIPT_DIR/scripts/harness-resolve.sh"   "$CLAUDE_DIR/scripts/harness-resolve.sh"
+cp "$SCRIPT_DIR/scripts/auto-branch.sh"       "$CLAUDE_DIR/scripts/auto-branch.sh"
 cp "$SCRIPT_DIR/skills/done/SKILL.md"         "$CLAUDE_DIR/skills/done/SKILL.md"
 # Base DoD → committed, portable artifact under .claude/harness/ (NOT the
 # gitignored .claude/.harness/). Step 0.5 of /done reads it. DOD.md (the harness
 # project's own meta DoD) is intentionally NOT copied — it stays in the bundle.
 cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/harness/base-dod.md"
 chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
-         "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh"
+         "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
+         "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
 echo "  copied scripts/, skills/done/, and harness/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------
@@ -68,14 +75,17 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.local.json"
 
 STOP_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/done-gate.sh"'
 START_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/baseline-snapshot.sh"'
+PRE_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
 
 MERGED=$(jq \
   --arg stop "$STOP_CMD" \
-  --arg start "$START_CMD" '
+  --arg start "$START_CMD" \
+  --arg pre "$PRE_CMD" '
   # ensure hooks containers exist
   .hooks = (.hooks // {})
   | .hooks.Stop = (.hooks.Stop // [])
   | .hooks.SessionStart = (.hooks.SessionStart // [])
+  | .hooks.PreToolUse = (.hooks.PreToolUse // [])
 
   # append Stop hook only if this exact command is not already wired
   | ([ .hooks.Stop[]?.hooks[]?.command ] | any(. == $stop)) as $hasStop
@@ -88,6 +98,13 @@ MERGED=$(jq \
   | if $hasStart then .
     else .hooks.SessionStart += [ {"hooks": [ {"type":"command","command":$start} ]} ]
     end
+
+  # append PreToolUse(Write|Edit) auto-branch hook only if not already wired.
+  # PreToolUse entries carry a "matcher" that Stop/SessionStart do not.
+  | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $pre)) as $hasPre
+  | if $hasPre then .
+    else .hooks.PreToolUse += [ {"matcher":"Write|Edit","hooks": [ {"type":"command","command":$pre} ]} ]
+    end
 ' "$SETTINGS_FILE" 2>/dev/null)
 
 if [ -z "$MERGED" ]; then
@@ -95,7 +112,7 @@ if [ -z "$MERGED" ]; then
   exit 1
 fi
 printf '%s\n' "$MERGED" > "$SETTINGS_FILE"
-echo "  wired Stop + SessionStart hooks into settings.local.json"
+echo "  wired Stop + SessionStart + PreToolUse hooks into settings.local.json"
 
 # --- gitignore machine-local harness state ----------------------------------
 # .harness/ (per-session state) and settings.local.json (machine-local hooks)

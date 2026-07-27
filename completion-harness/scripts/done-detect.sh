@@ -169,12 +169,20 @@ if [ ! -f "$CONFIG_FILE" ]; then
       overrides: {},
       max_fix_attempts: 3,
       baseline_snapshot: true,
-      deploy_check_cmd: null
+      deploy_check_cmd: null,
+      trunk: null,
+      auto_branch: true,
+      branch_prefix: "task/"
     }
   ' > "$CONFIG_FILE" 2>/dev/null
 
 elif [ "$STORED_FP" != "$NEW_FP" ]; then
-  # Changed: targeted merge — replace only detected + fingerprint, preserve rest.
+  # Changed: targeted merge — replace only detected + fingerprint, preserve the
+  # human-owned sticky fields. The identity keys (trunk/auto_branch/
+  # branch_prefix) are sticky too: PRESERVE them when present, SEED defaults only
+  # when absent (an older config predating them). `// default` supplies the seed
+  # without ever clobbering an existing value — including a literal `false`,
+  # because these are set with explicit assignment, not read through `//`.
   TMP=$(mktemp 2>/dev/null)
   if [ -n "$TMP" ]; then
     jq \
@@ -182,6 +190,9 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
       --arg fp "$NEW_FP" '
       .detected = $detected
       | .source_fingerprint = $fp
+      | (if has("trunk") then . else .trunk = null end)
+      | (if has("auto_branch") then . else .auto_branch = true end)
+      | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
     ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
   fi

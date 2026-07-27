@@ -22,11 +22,12 @@ Your job is the judgment: run, read, decide, fix, escalate.
 made *safe* (each session needs its own verification) but not *correct* (agents
 still race on the git tree — a git problem this harness does not solve).
 
-The Stop hook keeps blocking until a valid done-state exists at
-`$CLAUDE_PROJECT_DIR/.claude/.harness/done-state/<session_id>.json`. Use
-`$CLAUDE_PROJECT_DIR` for the project root (fall back to `$PWD`). Get
-`<session_id>` from the baseline filename you were given at session start (or the
-most recent `.claude/.harness/baselines/*.sha`) — Step 7's script resolves it.
+The Stop hook keeps blocking until a valid done-state exists for this **task** at
+`$CLAUDE_PROJECT_DIR/.claude/.harness/done-state/<task_key>.json`. Use
+`$CLAUDE_PROJECT_DIR` for the project root (fall back to `$PWD`). The `<task_key>`
+(and the changeset base) are resolved by `harness-resolve.sh`: on a feature branch
+it's the branch — task identity, stable across sessions; on trunk it falls back to
+the session. Step 1 and Step 7's scripts resolve it for you.
 
 ## Prerequisite — capture `task_checks` at task start
 
@@ -80,9 +81,19 @@ instructions or the task is picked up automatically next run.
 
 Resolve the session id **once** and reuse it downstream (so it can't drift from
 the gate's): `SESSION_ID=$(ls -t "$CLAUDE_PROJECT_DIR"/.claude/.harness/baselines/*.sha | head -1 | xargs -n1 basename | sed 's/\.sha$//')`.
-Then `git diff "$(cat "$CLAUDE_PROJECT_DIR/.claude/.harness/baselines/$SESSION_ID.sha")" HEAD --stat`
-(or the merge-base diff on a feature branch). This diff is the scope: **everything
-downstream is scoped to this changeset, never the whole repo.**
+
+Then resolve the changeset base via the shared resolver — do **not** hand-pick a
+baseline. Run
+`bash "$CLAUDE_PROJECT_DIR/.claude/scripts/harness-resolve.sh" "$SESSION_ID"` and
+read its printed `base=` and `task_key=` lines. Scope the changeset as
+`git diff <base> HEAD` (add `--stat` for the summary). In task mode `<base>` is
+the **pinned task base** → the diff spans the whole feature across every session
+on this branch; on the trunk/session fallback `<base>` is this session's
+baseline. This diff is the scope: **everything downstream is scoped to this
+changeset, never the whole repo.**
+
+Task identity = the branch; resume a task by being on its branch (or its
+worktree). The base is pinned once at first sight.
 
 ## Step 2 — Tests (with before/after checkpoint)
 

@@ -46,6 +46,19 @@ if [ -z "$SESSION_ID" ]; then
   exit 1
 fi
 
+# --- resolve identity (task_key) via the shared resolver --------------------
+# Done-state is keyed by HC_TASK_KEY (task-branch continuity across sessions),
+# not the raw session id — the gate reads the same key. The injected session_id
+# JSON field below stays the raw resolved id. Guarded: on any failure fall back
+# to a session-scoped key so the writer still produces a consistent path.
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
+if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+  hc_resolve "$SESSION_ID" 2>/dev/null
+fi
+[ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
+
 # --- inject live git facts ---------------------------------------------------
 VERIFIED_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 if [ -z "$VERIFIED_SHA" ]; then
@@ -118,7 +131,7 @@ fi
 # --- merge injected facts over the payload (facts win) ----------------------
 DONE_STATE_DIR="$PROJECT_DIR/.claude/.harness/done-state"
 mkdir -p "$DONE_STATE_DIR" 2>/dev/null
-OUT_FILE="$DONE_STATE_DIR/${SESSION_ID}.json"
+OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 
 RESULT=$(printf '%s' "$PAYLOAD" | jq \
   --arg sid "$SESSION_ID" \

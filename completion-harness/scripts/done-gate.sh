@@ -39,6 +39,19 @@ STOP_HOOK_ACTIVE=$(printf '%s' "$HOOK_INPUT" | jq -r '.stop_hook_active // false
 # when session_id is absent (both fall back to "unknown-session").
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
 
+# --- resolve identity (task_key, base) via the shared resolver --------------
+# Sourced library: sets HC_MODE HC_TASK_KEY HC_BASE (+ PROJECT_DIR HARNESS_DIR).
+# Done-state is keyed by HC_TASK_KEY (task-branch continuity across sessions),
+# not the raw session id. Guarded: if it cannot be sourced we fall back to a
+# session-scoped key so the gate never crashes.
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
+if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+  hc_resolve "$SESSION_ID" 2>/dev/null
+fi
+[ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
+
 # --- helper: emit block + exit 0 --------------------------------------------
 block() {
   local reason="$1"
@@ -63,22 +76,23 @@ if [ -z "$HEAD_SHA" ]; then
 fi
 
 # --- paths (task-mandated locations under .harness) -------------------------
+# Done-state is keyed by HC_TASK_KEY (task mode: br-<branch>; session mode:
+# session-<id>) so a task's done-state is shared across resuming sessions.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
-BASELINE_FILE="$HARNESS_DIR/baselines/${SESSION_ID}.sha"
-DONE_STATE_FILE="$HARNESS_DIR/done-state/${SESSION_ID}.json"
+DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
-# --- Step 3: no commits this session (HEAD == baseline) AND clean tree -------
-# Quiet exit ONLY when nothing was committed this session AND the working tree
-# is clean. If HEAD == baseline but the tree is DIRTY, we do NOT exit here: an
-# uncommitted "done" must still be gated, so we fall through to the remaining
-# steps (Step 4 missing-done-state -> block).
-if [ -f "$BASELINE_FILE" ]; then
-  BASELINE_SHA=$(cat "$BASELINE_FILE" 2>/dev/null)
-  if [ -n "$BASELINE_SHA" ] && [ "$BASELINE_SHA" = "$HEAD_SHA" ]; then
-    STEP3_TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
-    if [ -z "$STEP3_TREE_STATUS" ]; then
-      exit 0
-    fi
+# --- Step 3: no commits on this changeset (HEAD == base) AND clean tree ------
+# Quiet exit ONLY when nothing was committed since the base AND the working tree
+# is clean. HC_BASE is the resolver's anchor: in task mode it is the pinned fork
+# base (HEAD==base => no commits yet on the branch); in session mode it is the
+# SessionStart baseline (HEAD==baseline => no session commits). If HC_BASE is
+# empty (no anchor) we skip the quiet-exit and fall through. If HEAD == base but
+# the tree is DIRTY, we do NOT exit here: an uncommitted "done" must still be
+# gated, so we fall through to the remaining steps (Step 4 -> block).
+if [ -n "$HC_BASE" ] && [ "$HC_BASE" = "$HEAD_SHA" ]; then
+  STEP3_TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+  if [ -z "$STEP3_TREE_STATUS" ]; then
+    exit 0
   fi
 fi
 
