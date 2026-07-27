@@ -31,8 +31,8 @@ most recent `.claude/.harness/baselines/*.sha`) — Step 7's script resolves it.
 ## Prerequisite — capture `task_checks` at task start
 
 Task-stated verifications ("visually verify the button", "confirm the endpoint
-returns 200") drift out of focus by the end, exactly like CLAUDE.md does. So at
-**task start** — not at `/done` time — extract the explicit verification
+returns 200") drift out of focus by the end, just like your standing instructions
+do. So at **task start** — not at `/done` time — extract the explicit verification
 requirements from the task statement and record them into done-state
 `task_checks`. Step 6 only *runs* them.
 
@@ -50,26 +50,31 @@ changed — preserving `overrides`, `max_fix_attempts`, `baseline_snapshot`,
 The checklist is **not hardcoded here.** Build the *effective DoD* for this task
 by folding external instruction sources onto the base DoD.
 
-1. **Read the base DoD** at `$CLAUDE_PROJECT_DIR/.claude/harness/base-dod.md`
-   (note: `harness/`, not the gitignored `.harness/`). Its items are the
-   low-precedence baseline.
-2. **Scan the external instruction sources**, precedence **low → high** (a later
-   source overrides an earlier one on conflict):
-   1. `~/.claude/MY_RULES.md` → its "Definition of Done" section
-   2. project `CLAUDE.md` / `.claude/CLAUDE.md`
-   3. task-stated verifications (→ these also become `task_checks`, Step 6)
-   4. **explicit user instructions this session**
-3. **Merge** every completion-affecting instruction into **one deduped effective
-   checklist.** External/user instructions augment the base DoD and, on conflict,
-   **override** the harness defaults — the user's rules win.
-4. **Never silently drop a folded item.** Each item is a blocking check: it maps
-   to a built-in step below, or becomes a `task_check` (Step 6). If genuinely
-   unenforceable, surface an escalation (A/B/C) with a reason — do not drop it.
-5. **Record the effective DoD verbatim** into done-state `dod` (Step 7) — proof
-   of the exact standard the changeset was held to.
+Fold these sources together, precedence **low → high** (a higher source overrides
+a lower one on conflict — the user's rules win):
 
-This assembly runs **on every `/done` invocation** — never cached. A change to
-`MY_RULES.md`, `CLAUDE.md`, or the task is picked up automatically next run.
+1. **Base DoD** — read `$CLAUDE_PROJECT_DIR/.claude/harness/base-dod.md`
+   (note: `harness/`, not the gitignored `.harness/`). The low-precedence baseline.
+2. **Your own active instructions** — the standing guidance already governing you
+   this session, *however it was provided* (system prompt, project or user
+   instructions, enterprise policy — the harness does not assume any particular
+   file or location). Extract every completion / Definition-of-Done / quality
+   standard in force for you and fold it in. This is what keeps the harness
+   **setup-agnostic**: it adapts to whatever instructions you actually run under,
+   not to a hardcoded path.
+3. **Task-stated verifications** in the task itself (→ these also become
+   `task_checks`, Step 6).
+4. **Explicit user instructions this session.**
+
+**Merge** every completion-affecting instruction into **one deduped effective
+checklist.** **Never silently drop a folded item:** each is a blocking check that
+maps to a step below or becomes a `task_check` (Step 6); if genuinely
+unenforceable, surface an escalation (A/B/C) with a reason — do not drop it.
+**Record the effective DoD verbatim** into done-state `dod` (Step 7) — proof of the
+exact standard the changeset was held to.
+
+This assembly runs **on every `/done` invocation** — never cached. A change to your
+instructions or the task is picked up automatically next run.
 
 ## Step 1 — Changeset scope
 
@@ -90,6 +95,11 @@ Run the effective test command. Compare against the baseline snapshot at
   it anyway.** Only after `max_fix_attempts` is exhausted does it become a
   Category C user decision.
 
+If a **lint command is configured** (effective `lint` from Step 0), run it too
+and record its exit code — you will include `lint: {"exit_code": N}` in the
+Step-7 payload. Non-zero → fix (or escalate), same discipline as tests. No lint
+command configured → skip; do not fabricate a `lint` field.
+
 ## Step 3 — App startup
 
 Run `effective.start` (or the detected startup probe) and confirm the app comes
@@ -101,16 +111,41 @@ smoke-tested".
 If `deploy_check_cmd` is set, run it and check the exit code. If absent, **state**
 the deploy target and whether it was exercised — never claim false coverage.
 
-## Step 4 — Code review (changeset-scoped, fresh agent)
+## Step 4 — Code review (independent subagent writes the review-log)
 
-Invoke `/code-review` scoped to the **Step-1 diff** (spawns an independent
-reviewer).
+Spawn a **fresh review subagent** (Task tool — e.g. a `code-reviewer` agent)
+scoped to the **Step-1 changeset diff**. Its deliverable **is a file it writes
+itself** — you do **not** transcribe a count from your own context (that is
+self-review; the harness requires an independent reviewer — don't grade your own
+homework).
+
+Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
+and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
+(where `<HEAD>` is the current `git rev-parse HEAD`) with this schema:
+
+```json
+{
+  "reviewed_sha": "<HEAD>",
+  "findings": [{"severity": "…", "file": "…", "line": 0, "desc": "…"}],
+  "open_findings": 0
+}
+```
+
+`open_findings` is the count of findings the subagent judges still open. The
+gate and `done-write-state.sh` both read this log for the **current HEAD** and
+require `open_findings == 0`. Because the log is keyed to the reviewed SHA,
+fixing a finding (which moves HEAD) automatically invalidates the old log —
+re-review is forced for free (Step 5).
 
 ## Step 5 — Address findings (bounded loop)
 
-For each finding: **fix it, or explicitly justify it as N/A.** After fixes,
-re-verify (Global rule → Step 2). A **per-item** counter enforces
-`max_fix_attempts` (default 3); on exhaustion the item escalates via Category C.
+For each open finding: **fix it**, or genuinely can't → escalate (Category C,
+after `max_fix_attempts`, default 3 — a per-item counter). After fixing, **commit
+(HEAD moves) and re-run Step 4** so a fresh review-log is written for the new
+HEAD. Re-review-after-fix is thus forced by the HEAD-keyed log, not by
+bookkeeping. A won't-fix finding that does not move HEAD must be escalated, never
+silently waived. There is **no findings/addressed counting** — the log for the
+final HEAD carrying `open_findings == 0` is the whole proof.
 
 ## Step 6 — Task-specific checks
 
@@ -131,21 +166,24 @@ Run `$CLAUDE_PROJECT_DIR/.claude/scripts/done-write-state.sh "$SESSION_ID"` —
 passing the **same `$SESSION_ID` resolved in Step 1** so the writer and the gate
 never disagree — supplying the
 **judgment fields** as a JSON payload on **stdin** (`dod`, `tests` summary,
-`app_started`, `review`, `task_checks`, `escalation`). The script **injects the
-git facts live** — `verified_sha` from `git rev-parse HEAD`, `tree_clean` from
-`git status --porcelain` — and **refuses to write over a dirty tree** (commit
-first). You never hand-write a SHA. Payload shape (facts are injected, not
-supplied):
+optional `lint` summary, `app_started`, `task_checks`, `escalation`). **`review`
+is NOT a payload field** — the review evidence is the separate HEAD-keyed
+review-log the Step-4 subagent wrote. The script **injects the git facts live** —
+`verified_sha` from `git rev-parse HEAD`, `tree_clean` from `git status
+--porcelain` — **refuses to write over a dirty tree** (commit first), and (absent
+an escalation) refuses unless tests are green, lint is green when configured, and
+the review-log for HEAD has `open_findings == 0`. You never hand-write a SHA.
+Payload shape (facts are injected, not supplied):
 
 ```json
 {
   "dod": {
-    "sources": ["base", "~/.claude/MY_RULES.md#definition-of-done", "task"],
-    "items": ["tests green", "app starts", "changeset-scoped independent review", "findings addressed", "re-verified after fixes", "verification real not synthetic", "deploy target stated", "visually verify button"]
+    "sources": ["base", "agent-instructions", "task", "session"],
+    "items": ["tests green", "lint green", "app starts", "changeset-scoped independent review", "re-verified after fixes", "verification real not synthetic", "deploy target stated", "visually verify button"]
   },
   "tests": {"exit_code": 0, "newly_red": [], "pre_existing_red": []},
+  "lint": {"exit_code": 0},
   "app_started": true,
-  "review": {"findings": 3, "addressed": 3},
   "task_checks": [
     {"desc": "visually verify button", "status": "passed", "how": "browser screenshot vs Figma"}
   ],
@@ -153,9 +191,12 @@ supplied):
 }
 ```
 
-`dod` records the effective DoD from Step 0.5 verbatim — `sources` lists the
-inputs folded in, `items` is the deduped checklist. The script writes
+`lint` is included only when a lint command is configured (Step 2); omit it
+otherwise. `dod` records the effective DoD from Step 0.5 verbatim — `sources`
+lists the inputs folded in, `items` is the deduped checklist. The script writes
 `session_id`, `verified_sha`, `tree_clean` itself and prints the path written.
+The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 4) lives beside
+the done-state; both the writer and the gate read it.
 
 ## Step 8 — Report
 

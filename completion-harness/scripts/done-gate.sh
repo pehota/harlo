@@ -117,7 +117,8 @@ fi
 # --- Step 8: recorded checklist outcomes must all be green -> else BLOCK -----
 # With no escalation (step 7 already returned if one was present), the gate
 # enforces the CHECKLIST OUTCOMES, not just commit hygiene: a done-state that
-# records red tests / unaddressed findings / a failed task_check must NOT pass.
+# records red tests / red lint / a failed task_check, or a HEAD with no
+# independent review-log (or one with open findings), must NOT pass.
 #
 # Fail direction is deliberately INVERTED from the script's global fail-safe:
 # here a MISSING/null/malformed outcome (or a jq crash) is treated as NOT green
@@ -133,15 +134,28 @@ if [ "$TESTS_EXIT" != "0" ]; then
   block "recorded tests are not green (exit_code=${TESTS_EXIT}) — fix and re-run /done, or escalate."
 fi
 
-# review: findings and addressed must both be present and equal. A single jq
-# verdict so an absent/malformed .review yields "" (jq crash) or "notgreen".
-REVIEW_VERDICT=$(jq -r '
-  if (.review.findings != null and .review.addressed != null
-      and (.review.findings == .review.addressed))
-  then "green" else "notgreen" end
-' "$DONE_STATE_FILE" 2>/dev/null)
-if [ "$REVIEW_VERDICT" != "green" ]; then
-  block "recorded code-review findings are not all addressed (review=$(jq -c '.review // null' "$DONE_STATE_FILE" 2>/dev/null)) — address them and re-run /done, or escalate."
+# lint (conditional). Only projects with a lint command record a .lint object.
+# If .lint is PRESENT its exit_code must be exactly "0"; if it is absent/null
+# (no lint configured) skip — write-state enforces lint-when-configured, so a
+# missing .lint here is not a failure. A present-but-nonzero (or a jq crash
+# yielding "") fails toward BLOCK via the string compare.
+LINT_EXIT=$(jq -r '.lint.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
+if [ "$LINT_EXIT" != "MISSING" ] && [ "$LINT_EXIT" != "0" ]; then
+  block "recorded lint is not green (exit_code=${LINT_EXIT}) — fix and re-run /done, or escalate."
+fi
+
+# review: an INDEPENDENT review-log must exist for the current HEAD, written by
+# the Step-4 review subagent (not a self-reported count in done-state). Its
+# open_findings must be exactly "0". A missing log, or open_findings absent
+# ("MISSING") / nonzero / a jq crash (""), all fail toward BLOCK via the string
+# compare against a sentinel — same discipline as the tests.exit_code check.
+REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
+if [ ! -f "$REVIEW_LOG" ]; then
+  block "no independent code review recorded for HEAD ${HEAD_SHA:0:7} — run /done."
+fi
+OPEN=$(jq -r '.open_findings // "MISSING"' "$REVIEW_LOG" 2>/dev/null)
+if [ "$OPEN" != "0" ]; then
+  block "${OPEN} unresolved review findings — address them and re-run /done, or escalate."
 fi
 
 # task_checks: every entry must be status "passed". Count the non-passed ones;

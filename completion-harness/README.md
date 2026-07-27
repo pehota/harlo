@@ -36,8 +36,9 @@ bash install.sh /path/to/project    # defaults to $PWD
 This is idempotent. It:
 - copies `scripts/`, `skills/done/`, and the base DoD artifact
   (`dod/base-dod.md` → `.claude/harness/base-dod.md`) into the project's
-  `.claude/` — `/done` reads that base DoD and folds external instruction
-  sources (`MY_RULES.md`, `CLAUDE.md`, the task) into one effective DoD per run,
+  `.claude/` — `/done` reads that base DoD and folds in the agent's own active
+  instructions plus the task into one effective DoD per run (setup-agnostic — no
+  assumption about where your instructions live),
 - wires the Stop + SessionStart hooks into `.claude/settings.local.json`
   (machine-local; merged with `jq`, existing hooks preserved),
 - seeds a starter `.claude/done-config.json` if absent,

@@ -16,12 +16,17 @@ with a reason.
       and diff against the baseline snapshot. Newly-red (passed on baseline,
       fails now) → you broke it → must fix, no escape. Already-red on baseline →
       boyscout default: fix it anyway. Do not proceed with red tests.
+- [ ] **Lint green (if configured).** If a lint command is configured, run it and
+      confirm exit code 0. No lint command → skip.
 - [ ] **App starts.** Exercise `effective.start` (or the detected startup probe)
       and confirm the app comes up.
-- [ ] **Changeset-scoped independent (fresh-agent) review.** Invoke `/code-review`
-      scoped to the changeset diff — an independent reviewer, never self-review.
-- [ ] **Findings addressed.** Every review finding is fixed, or explicitly
-      justified as N/A.
+- [ ] **Changeset-scoped independent (fresh-agent) review.** A fresh review
+      subagent, scoped to the changeset diff, writes the review-log
+      `.claude/.harness/review-log/<HEAD>.json` — an independent artifact, never
+      a self-reported count.
+- [ ] **No open review findings.** The review-log for the current HEAD has
+      `open_findings == 0`. Every finding is fixed (moving HEAD → a fresh log) or
+      escalated — never silently waived.
 - [ ] **Re-verified after fixes.** After applying any fix, return to the tests
       step and re-verify with the fixes in place.
 - [ ] **Verification real (exercised), not synthetic (diff-read).** Verify by
