@@ -24,6 +24,14 @@ HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
 mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" 2>/dev/null
 
+# --- reap stale harness state -----------------------------------------------
+# Reap stale harness state (older than 14 days). Fresh files (this session's
+# just-written baseline, active parallel sessions) are far younger, so safe.
+# Runs BEFORE any early return so non-git sessions get cleaned up too.
+if [ -d "$HARNESS_DIR" ]; then
+  find "$HARNESS_DIR" -type f -mtime +14 -delete 2>/dev/null || true
+fi
+
 # --- record baseline SHA ----------------------------------------------------
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 if [ -z "$HEAD_SHA" ]; then

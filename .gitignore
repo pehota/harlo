@@ -3,3 +3,6 @@ harness-trial/
 
 # Machine-local Claude Code settings
 .claude/settings.local.json
+
+# Private grading rubrics for harness testing — never commit
+test-expectations/

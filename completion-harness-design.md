@@ -63,6 +63,16 @@ Cases:
 
 The Stop hook re-checks `tree_clean` and `HEAD == verified_sha` at gate time (not just trusting the stored flags), so stale state from a concurrent commit is caught.
 
+### State lifecycle & cleanup
+
+`.claude/.harness/` state is **load-bearing during a session** — the gate re-reads
+`done-state/<session_id>.json` and `review-log/<HEAD>.json` on every turn-end — so it is
+never cleaned mid-session. Cleanup is **age-based, at SessionStart**: `baseline-snapshot.sh`
+reaps any file under `.claude/.harness/` older than **14 days** (`find -mtime +14 -delete`,
+guarded, never fails the hook). This is self-healing, needs no `SessionEnd` hook (which
+wouldn't fire on a crash), and is parallel-safe — freshly written files from active sessions
+are far younger than the threshold. Durable progress lives in **git**, not in `.harness/`.
+
 ---
 
 ## Stop hook: `~/.claude/scripts/done-gate.sh`
