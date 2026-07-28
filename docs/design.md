@@ -53,6 +53,25 @@ truth, sourced identically by `baseline-snapshot.sh`, `done-gate.sh`, and
 `done-write-state.sh` so they can never diverge. The `/done` skill reads it via
 `harness-resolve.sh`.
 
+**Session-id resolution (SESSION-mode identity source).** In SESSION mode the
+done-state key is `session-<id>`, so the `/done` skill, the writer, and the gate
+must all agree on which `<id>` that is — the gate takes it from its Stop-hook
+stdin `session_id`. If the skill picks a *different* id, `/done` writes a valid
+done-state under a key the gate never reads → a **silent forever-block**. To make
+the id authoritative rather than guessed, `baseline-snapshot.sh` (SessionStart)
+writes the real `session_id` from its own hook stdin to a single well-known marker
+`.claude/.harness/current-session` (overwritten each SessionStart), in addition to
+`baselines/<id>.sha`. The skill (and the writer/preflight fallbacks) resolve the id
+in precedence: **(a)** the `current-session` marker (authoritative for the
+supported single-session/worktree model — parallel same-dir is already
+unsupported), else **(b)** the legacy `ls -t baselines/*.sha` heuristic as last
+resort. The `$CLAUDE_CODE_SESSION_ID` env var is deliberately **not** used — it is
+undocumented and leaks a *child*-session id into subagent shells (and into test
+subprocesses), which would mis-key the state; the per-project marker is the
+trustworthy source. As a structural backstop, the writer **rejects** a session-mode id with no
+matching `baselines/<id>.sha` (see the writer's dead-id rejection below), so a
+mismatch fails loudly at `/done` time instead of blocking forever.
+
 `harness-common.sh` also houses `hc_tree_status` — the **single shared
 baseline-relative working-tree classifier** used by the gate (Step 6), the `/done`
 writer, and the preflight; **none of them reimplements it.** It classifies each
@@ -98,6 +117,7 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 | Task base (pinned) | `.claude/.harness/task-base/<task_key>.sha` | task (branch) |
 | Task tree-base (pinned) | `.claude/.harness/tree-base/<task_key>.dirty` | task (branch) — pinned ONCE at the fork; classifier's "pre-existing" set |
 | Session baseline | `.claude/.harness/baselines/<session_id>.sha` | session (fallback + test-snapshot anchor) |
+| Current-session marker | `.claude/.harness/current-session` | authoritative session id (written each SessionStart from hook stdin; the id source for the skill/writer) |
 | Session tree-base | `.claude/.harness/baselines/<session_id>.dirty` | session — rewritten each SessionStart; classifier's "pre-existing" set |
 | Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |
 | Done-state | `.claude/.harness/done-state/<task_key>.json` | **task** — survives session end |
@@ -134,9 +154,17 @@ already contain this session's WIP and whitelist it).
 ### SessionStart (`baseline-snapshot.sh`)
 
 Beyond recording the baseline SHA and the background test snapshot, SessionStart now:
-- **Records the tree baseline** (`HC_TREE_BASE_FILE`) — rewritten every session in session
-  mode; pinned **once and never overwritten** in task mode. The file is always created (even
-  when empty) so "missing" (→ strict) is distinguishable from "clean at baseline".
+- **Writes the authoritative `current-session` marker** — the real `session_id` from its own
+  hook stdin, overwritten each SessionStart (see *Session-id resolution* above). This is the
+  id the `/done` skill and writer prefer over the `ls -t` heuristic, so they cannot key a
+  done-state to an id the gate never reads.
+- **Records the tree baseline** (`HC_TREE_BASE_FILE`) **unconditionally, every SessionStart,
+  before any edit, even when the tree is clean** — rewritten every session in session mode;
+  pinned **once and never overwritten** in task mode. The file is always created (even when
+  empty) so "missing" (→ strict) is distinguishable from "clean at baseline". If the resolver
+  could not run (`HC_TREE_BASE_FILE` empty), it falls back to the session-scoped
+  `baselines/<id>.dirty` so a `.dirty` is **always** captured — a missing tree baseline makes
+  `hc_tree_status` treat every pre-existing file as introduced, which deadlocks the gate.
 - **Self-seeds config to avoid silent inertness:** when `baseline_snapshot` is enabled but no
   test command is detected, it runs `done-detect.sh` first (fixing the chicken-and-egg where
   a fresh project's empty `detected:{}` meant it never snapshotted).
@@ -200,6 +228,20 @@ Fires on every main-agent turn exit. Logic in order:
      an empty `findings: []` legitimately counts zero and allows. The
      `open_findings` integer is a backward-compat fallback used **only when the
      `findings` key is entirely absent** (old-style logs).
+   - **the review-log's `files_reviewed` covers every changed file** (structural
+     coverage). The gate computes the changed set from `git diff --name-only
+     <HC_BASE>..HEAD` and requires `files_reviewed ⊇ changed files`, via the
+     shared `hc_review_coverage_gap` (same function the writer uses). A changed
+     file **not attested** → non-empty gap → **BLOCK** ("review did not cover
+     changed files: …") — this turns "the review covered the whole changeset"
+     into a structural check, not prose hope, closing the too-narrow-scope leak
+     that caused the fix→re-review loop. A missing/non-array `files_reviewed` with
+     a real changeset → gap = all changed files → block (this **forces** the
+     attestation). When **no changeset base** is resolvable (`HC_BASE` empty) or
+     the diff cannot be computed, the function returns `SKIP` and the gate does
+     **not** block on coverage — a no-regression degrade (there was no coverage
+     check before). Every other computation error with a real changeset returns
+     the full changed set (block), never `SKIP` — fail toward block.
    - every `task_checks[]` status `passed`
 
    Otherwise block, naming the failed outcome.
@@ -228,15 +270,27 @@ prevents a stale escalation from disarming the gate for the rest of the session
 (independent-review finding).
 
 `done-write-state.sh` mirrors step 8: it **refuses to write** a done-state unless (with no
-escalation) `tests.exit_code == 0`, `lint.exit_code == 0` when lint is configured, and a
+escalation) `tests.exit_code == 0`, `lint.exit_code == 0` when lint is configured, a
 review-log for the current HEAD exists with **zero blocking findings** (recomputed by the
-same `hc_review_blocking` from `findings[].severity` + `min_review_level`, so the writer and
-the gate can never diverge) — giving the agent the feedback at `/done` time rather than at
-stop time. Its dirty-tree refusal uses the **same
+same `hc_review_blocking` from `findings[].severity` + `min_review_level`), and the log's
+`files_reviewed` **covers every changed file** in `<HC_BASE>..HEAD` (recomputed by the same
+`hc_review_coverage_gap` the gate uses; `SKIP` when no base is resolvable → no coverage
+refusal) — so the writer and the gate can never diverge and the agent gets the feedback at
+`/done` time rather than at stop time. Its dirty-tree refusal uses the **same
 `hc_tree_status` classifier** as the gate: it refuses **iff introduced blockers exist**
 (the changeset's own uncommitted work), writes when only pre-existing warnings remain, and
 sets `tree_clean` to reflect "no blockers" (not "no dirt at all"). The gate remains the
 structural backstop (it fires even if the file was hand-written).
+
+**Dead-id rejection (SESSION mode).** Before writing, the writer rejects — exit
+nonzero, no done-state — a session-mode `session_id` that has **no matching
+`baselines/<id>.sha`**. Such an id keys the done-state to `session-<id>`, but the
+gate derives its own `session-<gate-id>` key from its Stop-hook stdin; if they
+differ, the gate never reads what the writer wrote → a **silent forever-block**.
+Failing loud here (the error lists the valid ids and the `current-session` marker,
+and tells the agent to pass the id the gate uses) converts that silent deadlock
+into an actionable `/done`-time failure. In TASK mode the branch keys the
+done-state, so this check applies only to the session-mode path.
 
 **Threat model — this defends against drift, not malice.** The harness's real adversary is
 the *drifting* agent that anchors on "implementation done" and silently omits steps. Against
@@ -283,11 +337,15 @@ Run at **task start**, before editing or spawning subagents. It calls the shared
 logic (`hc_resolve` + `hc_tree_status`) — it does **not** reimplement the gate — and
 reports whether the gate is winnable, with exact remediation. It **exits non-zero on a
 HARD problem** — notably `baseline_snapshot:true` but **no test command** (the
-before/after red-test discrimination would be inert) and **pre-existing blockers** in the
-tree — in which case the skill must stop and fix/surface before working. Warnings (missing
-`.dirty` baseline, `jq` absent) are non-blocking. It **never seeds a permissive baseline**
-when one is missing (it can run after edits, which would whitelist the agent's own work) —
-it reports the gap and tells the user to restart the session so SessionStart pins it.
+before/after red-test discrimination would be inert), **pre-existing blockers** in the
+tree, and a **missing tree baseline (`.dirty`)** — in which case the skill must stop and
+fix/surface before working. The missing-`.dirty` case is a HARD problem, **not a warning**:
+without a baseline, `hc_tree_status` treats every pre-existing file as introduced → the gate
+blocks on files the agent never touched → a **guaranteed deadlock**. Its remediation:
+restart the session so SessionStart records the tree baseline (only `jq` absent remains a
+non-blocking warning). It **never seeds a permissive baseline** when one is missing (it can
+run after edits, which would whitelist the agent's own work) — it reports the gap and tells
+the user to restart the session so SessionStart pins it.
 
 **Prerequisite — capture `task_checks` at task start.** Task-stated verifications drift
 out of focus like standing instructions; the agent records them into done-state `task_checks` when the
@@ -313,8 +371,11 @@ built-in step becomes a task_check (step 6).
 
 ### Step 1 — Changeset scope
 
-`git diff <baseline_sha> HEAD --stat` (or merge-base diff on a feature branch).
-Everything downstream is scoped to **this changeset**, never the whole repo.
+Resolve the session id first (env var → `current-session` marker → `ls -t`
+heuristic; see *Session-id resolution*), reuse it downstream so it can't drift
+from the gate's, then `git diff <baseline_sha> HEAD --stat` (or merge-base diff on
+a feature branch). Everything downstream is scoped to **this changeset**, never
+the whole repo.
 
 ### Step 2 — Tests (with before/after checkpoint)
 
@@ -360,10 +421,19 @@ concurrently. Failure → fix → return to step 2.
 
 Spawn a **fresh, independent, Write-capable** review subagent. **Hand it the REAL diff, not
 a summary:** give it the resolved Step-1 `<base>` SHA + the changed-file list and instruct it
-to run `git diff <base> HEAD` **itself** over the **full changeset**. Its deliverable **is
+to run `git diff --name-only <base> HEAD` **itself** to get the authoritative changed-file
+list and review **every** file in the **full changeset**. Its deliverable **is
 the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the log itself:
-`{ "reviewed_sha": "<HEAD>", "min_review_level": "high", "findings": [ {severity, file, line,
-desc} … ], "open_findings": <n>, "advisory_findings": <n> }`. Because the deliverable is a
+`{ "reviewed_sha": "<HEAD>", "min_review_level": "high", "files_reviewed": [paths …],
+"findings": [ {severity, file, line, desc} … ], "open_findings": <n>, "advisory_findings":
+<n> }`. `files_reviewed` is the repo-relative paths (as `git diff --name-only` emits them)
+the reviewer attests it examined; the gate/writer require it to cover every changed file in
+`<base>..HEAD` **structurally** (a changed file not attested blocks), so the attestation
+must be complete and truthful. **Deterministic-first (prompt-level economy):** the reviewer
+is told **not** to re-report what the Step-2 tests/lint/type-check already catch (formatting,
+style, unused vars, type errors) — that is advisory noise — and to spend its judgment on
+what those tools cannot catch (logic errors, blast-radius, missing test coverage, broken
+invariants, security). Because the deliverable is a
 *written* file, the agent type must have a Write tool (e.g. `general-purpose`); a review-only
 type that lacks Write (e.g. `feature-dev:code-reviewer`) cannot produce the log and must not
 be used. The main agent does **not** transcribe a count from its own context (that would be

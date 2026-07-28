@@ -93,16 +93,16 @@ C4Container
 
   System_Boundary(h, "Completion Harness") {
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
-    Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline; self-seeds config; background test snapshot; reaps stale state")
+    Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (always, even empty) + current-session marker; self-seeds config; background test snapshot; reaps stale state")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
     Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, review, fix loop, task_checks, write-state, report")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier)")
     Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as key=value")
     Container(detect, "Config detector", "done-detect.sh", "Probe toolchain + fingerprint; seed/preserve done-config.json")
-    Container(write, "State writer", "done-write-state.sh", "Inject live git facts; refuse dirty/non-green; write done-state")
-    Container(pf, "Preflight", "done-preflight.sh", "Prove the gate is winnable before work")
+    Container(write, "State writer", "done-write-state.sh", "Inject live git facts; refuse dirty/non-green/dead session-id; write done-state")
+    Container(pf, "Preflight", "done-preflight.sh", "Prove the gate is winnable before work (missing tree baseline = HARD block)")
     ContainerDb(cfg, "Config", "done-config.json", "Effective commands + knobs (human-owned + auto-detected)")
-    ContainerDb(state, "State store", ".claude/.harness/*", "baselines, task-base, tree-base, done-state, review-log")
+    ContainerDb(state, "State store", ".claude/.harness/*", "baselines, current-session, task-base, tree-base, done-state, review-log")
   }
   System_Ext(git, "Git repo")
   System_Ext(tool, "Project toolchain")
@@ -206,7 +206,7 @@ flowchart TD
   R --> T["hc_tree_status(session_id)<br/>→ HC_TREE_BLOCKERS / HC_TREE_WARNINGS"]
   KEY --> DEC["gate decision logic (Steps 1-9, see §6)"]
   T --> DEC
-  DEC --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)"]
+  DEC --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)<br/>hc_review_coverage_gap(files_reviewed, HC_BASE..HEAD)"]
 ```
 
 **How to read this.** The gate itself contains no identity or tree logic — it
@@ -233,7 +233,7 @@ sequenceDiagram
   participant GIT as Git
   participant ST as State store
 
-  RT->>ST: SessionStart (baseline-snapshot.sh)<br/>pin baselines/&lt;sid&gt;.sha + tree baseline; reap +14d
+  RT->>ST: SessionStart (baseline-snapshot.sh)<br/>pin baselines/&lt;sid&gt;.sha + tree baseline + current-session marker; reap +14d
   Note over RT,ST: hc_resolve; if task mode pin task-base/tree-base
   AG->>GIT: edits code (Write/Edit)
   RT->>GIT: PreToolUse (auto-branch.sh)<br/>on trunk → checkout -b task/&lt;ts&gt;; pin tree-base
@@ -297,13 +297,15 @@ flowchart TD
   K3 -->|no| BLK8c["BLOCK: no independent review for HEAD"]
   K3 -->|yes| K4{"hc_review_blocking(log, min_review_level) == '0'?<br/>(structural: rank(severity) >= rank(min); default high;<br/>unknown/missing severity or jq-fail → block)"}
   K4 -->|no| BLK8d["BLOCK: N blocking (≥ min) findings"]
-  K4 -->|yes| K5{"task_checks: all status=='passed'?"}
+  K4 -->|yes| KC{"hc_review_coverage_gap(log, HC_BASE, HEAD) empty or 'SKIP'?<br/>(structural: files_reviewed ⊇ changed files in HC_BASE..HEAD;<br/>SKIP = no base → no coverage block; error w/ changeset → block)"}
+  KC -->|no (gap)| BLK8cov["BLOCK: review did not cover changed files"]
+  KC -->|yes| K5{"task_checks: all status=='passed'?"}
   K5 -->|no| BLK8e["BLOCK: task_checks not all passed"]
   K5 -->|yes| ALLOW9["Step 9: exit 0 (ALLOW)"]
 
   classDef block fill:#ffe0e0,stroke:#c00;
   classDef allow fill:#e0ffe0,stroke:#0a0;
-  class BLK4,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8d,BLK8e block;
+  class BLK4,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8d,BLK8cov,BLK8e block;
   class ALLOW0,ALLOW1,ALLOW2,ALLOW3,ALLOW7,ALLOW9 allow;
 ```
 
@@ -337,6 +339,18 @@ flowchart TD
   integer is a backward-compat fallback used **only when the `findings` key is
   entirely absent** (old-style logs; missing → 1 → block). `done-write-state.sh`
   mirrors this exactly via the same function.
+- **The review is COVERAGE-gated, structurally.** After the severity check the
+  gate calls `hc_review_coverage_gap(log, HC_BASE, HEAD)`: it computes the changed
+  set from `git diff --name-only HC_BASE..HEAD` and subtracts the log's
+  `files_reviewed` array (whole-line, space-safe). A non-empty gap (a changed file
+  the reviewer did **not** attest) → BLOCK — making "the review covered the whole
+  changeset" a structural check instead of prose hope. A missing/non-array
+  `files_reviewed` with a real changeset → gap = all changed files → block, which
+  **forces** the attestation. When `HC_BASE` is empty/unresolvable (or the diff
+  fails) the function returns `SKIP` and the gate does **not** block on coverage — a
+  no-regression degrade (there was no coverage check before). Any other error with a
+  real changeset returns the full changed set (block), never `SKIP`.
+  `done-write-state.sh` mirrors this via the same function.
 
 ---
 
@@ -380,6 +394,13 @@ flowchart TD
 - `HC_WARN` is set only when the fallback was *caused by trunk* (on trunk, or
   unconfident trunk) — SessionStart surfaces that as guidance; a plain detached
   HEAD produces no warning.
+- **Session-id agreement (SESSION mode).** In SESSION mode `HC_TASK_KEY =
+  session-<id>`, so the skill, the writer, and the gate must all resolve the same
+  `<id>`. The gate takes it from its Stop-hook stdin; SessionStart records the same
+  id to the `current-session` marker; the skill prefers env var → marker → `ls -t`
+  heuristic. As a backstop, `done-write-state.sh` **rejects** a session-mode id with
+  no `baselines/<id>.sha` (exit nonzero, lists valid ids) — otherwise a mismatched
+  id keys a done-state the gate never reads → a silent forever-block.
 
 ---
 
@@ -435,11 +456,19 @@ never surfaced (⚠ doc drift — design shows them surfaced; §14).
 ## 9. The review loop (SKILL Steps 4-5)
 
 Step 4 spawns a fresh, **Write-capable**, independent subagent handed the **real
-diff** (`git diff <base> HEAD`, run by the reviewer itself) over the **full
-changeset**, instructed to be **exhaustive** and tag every finding with a
-`severity`; its deliverable *is* a file it writes: `review-log/<HEAD>.json`.
-Step 5 is a bounded fix loop that exploits the HEAD-keying to make re-review
-free, and gates only on findings **at/above `min_review_level`**.
+diff** (it runs `git diff --name-only <base> HEAD` itself for the authoritative
+changed-file list, then reviews the **full changeset**), instructed to be
+**exhaustive**, tag every finding with a `severity`, and record the files it
+examined in `files_reviewed`; its deliverable *is* a file it writes:
+`review-log/<HEAD>.json`. Two gates apply to that log: **severity** (blocking count
+via `hc_review_blocking`) and **coverage** (`files_reviewed ⊇ changed files` via
+`hc_review_coverage_gap` — structural, so a too-narrow review can't pass as done).
+The reviewer is also told **deterministic-first**: don't re-report what Step-2
+tests/lint/type-check already catch (formatting, style, unused vars, type errors);
+spend judgment on logic, blast-radius, missing test coverage, invariants, security —
+prompt-level economy that keeps each review cheap. Step 5 is a bounded fix loop that
+exploits the HEAD-keying to make re-review free, and gates only on findings
+**at/above `min_review_level`**.
 
 ```mermaid
 flowchart TD
@@ -473,6 +502,7 @@ informational only; the gate trusts the structural recompute.
 ```mermaid
 flowchart LR
   H[".claude/.harness/"] --> BL["baselines/"]
+  H --> CS["current-session"]
   H --> TB["task-base/"]
   H --> TRB["tree-base/"]
   H --> DS["done-state/"]
@@ -489,12 +519,13 @@ flowchart LR
 | Dir / file | Holds | Keyed by | Written by | Pinned once vs rewritten | Reap (14d)? |
 |---|---|---|---|---|---|
 | `baselines/<sid>.sha` | HEAD at SessionStart (session base) | **session id** | baseline-snapshot | rewritten each session | yes |
+| `current-session` | authoritative session id (from SessionStart hook stdin) | — (single file) | baseline-snapshot | rewritten each SessionStart | yes |
 | `baselines/<sid>.dirty` | fork-point porcelain (session mode tree baseline) | **session id** | baseline-snapshot | rewritten each session | yes |
 | `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | yes |
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | **excluded** |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | **excluded** |
 | `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | yes |
-| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | yes |
+| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | yes |
 | `../done-config.json` | effective commands + knobs | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change | n/a (outside `.harness/`) |
 
 **How to read this / key decisions.** `task-base/` and `tree-base/` are
@@ -540,6 +571,8 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Pre-existing dirty tree** | Lines present at baseline → WARNING (ignored) → gate does NOT block on them (deadlock broken) | `hc_tree_status` in-baseline branch; gate Step 6 |
 | **Pre-existing untracked** | `?? x` in baseline → WARNING under `baseline` policy; BLOCKER under `strict` | `hc_tree_status` untracked handling |
 | **Agent's own new file** | Not in baseline → BLOCKER → gate Step 6 BLOCK; writer refuses | `hc_tree_status` else-branch (both policies) |
+| **Missing tree baseline (`.dirty`)** | SessionStart records it unconditionally (even empty, with a session-scoped fallback if the resolver failed); if still absent, `hc_tree_status` degrades to STRICT (every pre-existing file "introduced" → deadlock), so preflight raises a **HARD problem** (NOT WINNABLE), not a warning | `baseline-snapshot.sh` unconditional `.dirty`; `done-preflight.sh` Check 3 (blocking) |
+| **Dead session id (SESSION mode)** | `session_id` with no `baselines/<id>.sha` → writer **refuses** (exit nonzero, lists valid ids + `current-session` marker); otherwise the done-state keys `session-<id>` the gate never reads → silent forever-block | `done-write-state.sh` dead-id backstop; skill prefers the `current-session` marker |
 | **Multi-session task resume** | Same branch → same `task_key` → inherits done-state + pinned base/tree-base | `hc_resolve` task mode reads existing pins |
 | **Parallel same-branch (same dir)** | Shares `task_key` — **unsupported**; use worktrees (different branch → different key) | keying by `task_key`; SKILL "parallel work must use worktrees" |
 | **No test command** | `baseline_snapshot` on but no cmd → self-run `done-detect.sh`; still none → write `{status:inert}` marker + systemMessage; preflight raises HARD problem | `baseline-snapshot.sh` inert branch; `done-preflight.sh` Check 4 |
