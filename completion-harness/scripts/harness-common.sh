@@ -327,6 +327,95 @@ hc_review_blocking() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc_review_coverage_gap <review_log_file> <base> <head> [proj]
+#
+# STRUCTURAL coverage check for the review step. Answers: "did the reviewer
+# actually attest to having examined every file the changeset touched?" —
+# turning "the review covered the whole changeset" from prose hope into a gate
+# check. Companion to hc_review_blocking (severity) — same fail-toward-block
+# discipline, sourced identically by done-gate.sh (Step 8) and
+# done-write-state.sh so they can never diverge.
+#
+# Prints the newline-separated changeset files NOT attested as reviewed.
+#   EMPTY output  → full coverage (PASS).
+#   non-empty     → those files changed but were not attested → caller BLOCKS.
+#   the token SKIP → coverage cannot be computed (no changeset base) → caller
+#                    must NOT block on coverage (no-regression degrade; there was
+#                    no coverage check before this feature).
+#
+# Definitions:
+#   changed  = `git -C <proj> diff --name-only <base> <head>` (two-dot range).
+#   reviewed = the log's .files_reviewed array (absent or NOT an array → []).
+#   gap      = changed \ reviewed  (files changed but not attested).
+#
+# Guards / fail direction:
+#   - <base> empty/unset OR the git diff command fails → print SKIP. Coverage is
+#     meaningless without a changeset base; this is the ONLY no-block degrade.
+#   - Everything else guarded toward BLOCK: on a jq error, an unreadable log, or
+#     any other failure with a non-empty changed set, print the FULL changed set
+#     (block) rather than empty (allow).
+#   - A missing/non-array files_reviewed with a non-empty changed set → gap = all
+#     changed files → non-empty → block. This is what FORCES the attestation:
+#     the reviewer must list files_reviewed to pass.
+#
+# Space-safety: paths may contain spaces, so membership is by EXACT WHOLE-LINE
+# equality (`grep -Fxvf <reviewed> <changed>`), never field-splitting — the same
+# discipline hc_tree_status uses for porcelain lines.
+hc_review_coverage_gap() {
+  local log="$1" base="$2" head="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+
+  # No changeset base → coverage is not computable. SKIP (no-block degrade).
+  [ -z "$base" ] && { printf 'SKIP'; return 0; }
+
+  # Changed set from the two-dot range. A git failure here means we cannot
+  # compute a changeset at all → SKIP (parity with the missing-base case: no
+  # changeset base we can trust).
+  local changed
+  if ! changed=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null); then
+    printf 'SKIP'
+    return 0
+  fi
+
+  # Empty changed set → nothing to cover → full coverage trivially (PASS).
+  [ -z "$changed" ] && return 0
+
+  # From here a non-empty changeset EXISTS; every remaining failure path prints
+  # the full changed set (block), never empty (allow).
+
+  # Reviewed set = .files_reviewed[] when it is an array, else empty. jq missing
+  # or a malformed/unreadable log → treat reviewed as empty → gap = all changed
+  # → block. We only accept an explicit array; anything else is [] (block).
+  local reviewed=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$log" ]; then
+    reviewed=$(jq -r '
+      if (has("files_reviewed") and ((.files_reviewed | type) == "array"))
+      then .files_reviewed[]
+      else empty end
+    ' "$log" 2>/dev/null)
+    # jq crash yields empty stdout too — indistinguishable from a genuinely
+    # empty array, and both mean "nothing attested" → block. Safe either way.
+  fi
+
+  # gap = changed \ reviewed, by exact whole-line equality (space-safe).
+  # grep -Fxvf <reviewed> <changed>: print changed lines NOT present verbatim in
+  # the reviewed set. Empty reviewed set → grep prints every changed line.
+  local gap grc
+  if [ -z "$reviewed" ]; then
+    gap="$changed"
+  else
+    gap=$(printf '%s\n' "$changed" | grep -Fxvf <(printf '%s\n' "$reviewed") 2>/dev/null)
+    grc=$?
+    # grep exits 0 (lines printed) or 1 (no lines = full coverage). Anything
+    # >1 is a real error → fail toward block with the full changed set.
+    [ "$grc" -gt 1 ] && gap="$changed"
+  fi
+
+  printf '%s' "$gap"
+  return 0
+}
+
 # hc_tree_remediation — build the exact remediation text from the globals set by
 # the most recent hc_tree_status call. Names ONLY the blocking (introduced)
 # files. Pre-existing (warned-only) entries are intentionally NOT surfaced —

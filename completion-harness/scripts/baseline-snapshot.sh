@@ -42,6 +42,20 @@ if [ -d "$HARNESS_DIR" ]; then
     -mtime +14 -delete 2>/dev/null || true
 fi
 
+# --- record the AUTHORITATIVE current-session marker ------------------------
+# SessionStart is the one hook that knows the REAL session_id (from its own hook
+# stdin) and reliably runs before any edit. Write that id to a single well-known
+# marker, overwritten every SessionStart. This is the authoritative session-id
+# source for the /done skill and the writer/preflight: it removes their reliance
+# on the `ls -t baselines/*.sha` heuristic, which can pick the WRONG id (a stale
+# or a parallel session's baseline) and make /done write a done-state under a key
+# the Stop gate never reads → a silent forever-block. Authoritative for the
+# supported single-session/worktree model; parallel same-dir sessions are already
+# unsupported (they race on the git tree). Written BEFORE the git-repo check so
+# the marker is recorded even in a non-git dir (it is the session id, not a git
+# fact). Guarded; never fails the hook.
+printf '%s\n' "$SESSION_ID" > "$HARNESS_DIR/current-session" 2>/dev/null
+
 # --- record baseline SHA ----------------------------------------------------
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 if [ -z "$HEAD_SHA" ]; then
@@ -80,6 +94,18 @@ fi
 #
 # Always create the file (even when empty) so "missing" (→ strict) is
 # distinguishable from "clean at baseline". Fully guarded; never fails the hook.
+#
+# UNCONDITIONAL fallback: if the resolver could not run (harness-common.sh
+# failed to source → HC_TREE_BASE_FILE empty), we still MUST record a .dirty for
+# SOME baseline, else hc_tree_status degrades to STRICT and treats every
+# pre-existing file as introduced → the gate blocks everything → deadlock. Fall
+# back to the session-scoped path the resolver would have used in session mode
+# (baselines/<sid>.dirty), so a .dirty is ALWAYS captured on any git-repo
+# SessionStart. (Non-git dirs return above at the no-git early exit: they have no
+# tree baseline and the Stop gate fails open on a non-git repo, so no deadlock.)
+if [ -z "$HC_TREE_BASE_FILE" ]; then
+  HC_TREE_BASE_FILE="$BASELINE_DIR/${SESSION_ID}.dirty"
+fi
 if [ -n "$HC_TREE_BASE_FILE" ]; then
   if [ "$HC_MODE" = "task" ]; then
     if [ ! -f "$HC_TREE_BASE_FILE" ]; then

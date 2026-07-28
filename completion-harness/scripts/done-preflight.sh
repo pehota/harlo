@@ -46,9 +46,16 @@ if [ -f "$(dirname "$0")/harness-common.sh" ]; then
   . "$(dirname "$0")/harness-common.sh" 2>/dev/null
 fi
 
-# Resolve session id the same way done-write-state.sh does: arg, else newest
-# baselines/*.sha.
+# Resolve session id with the SAME precedence the skill/writer use so preflight
+# can't drift onto a different key than the rest of the pipeline (which would
+# false-positive the missing-.dirty block): arg → authoritative current-session
+# marker → newest baselines/*.sha heuristic. The env var is deliberately NOT
+# used — it leaks into child/subagent shells (carrying a child session id) and
+# into test subprocesses, so the per-project marker is the trustworthy source.
 SESSION_ID="${1:-}"
+if [ -z "$SESSION_ID" ] && [ -f "$HARNESS_DIR/current-session" ]; then
+  SESSION_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null)
+fi
 if [ -z "$SESSION_ID" ]; then
   SESSION_ID=$(ls -t "$BASELINE_DIR"/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//')
 fi
@@ -72,11 +79,14 @@ fi
 
 if [ ! -f "$DIRTY_FILE" ]; then
   # Missing tree baseline → the classifier degrades to STRICT (every current
-  # change blocks — the safe direction). Preflight does NOT seed it: preflight
-  # can run AFTER edits, so snapshotting live porcelain here would capture the
+  # change blocks). This is a GUARANTEED deadlock, not a mere degrade: without a
+  # baseline, hc_tree_status treats every PRE-EXISTING file as introduced → the
+  # gate blocks on files the agent never touched → /done can never pass. So this
+  # is a HARD problem, not a warning. Preflight does NOT seed it: preflight can
+  # run AFTER edits, so snapshotting live porcelain here would capture the
   # agent's own work as "pre-existing" and later let it pass the gate. Only
   # SessionStart (baseline-snapshot.sh) — which runs before edits — may pin it.
-  warn "no pinned tree baseline ($DIRTY_FILE) — the SessionStart hook has not pinned it, so tree classification degrades to STRICT: every current untracked/modified file will BLOCK. Restart the session so baseline-snapshot.sh pins the baseline before you edit; preflight will NOT seed it (it may run after edits, which would whitelist your own work)."
+  prob "no pinned tree baseline ($DIRTY_FILE) — the SessionStart hook has not recorded it, so tree classification degrades to STRICT: the gate will treat ALL pre-existing files as yours and block forever (guaranteed deadlock). Remediation: restart the session so SessionStart (baseline-snapshot.sh) records the tree baseline before you edit; preflight will NOT seed it (it may run after edits, which would whitelist your own work)."
 fi
 
 # --- Check 4: baseline_snapshot enabled but no effective test command -------

@@ -197,6 +197,23 @@ if [ "$OPEN" != "0" ]; then
   block "${OPEN} blocking (≥ ${MIN_LEVEL}) review findings for HEAD ${HEAD_SHA:0:7} — address them and re-run /done, or escalate."
 fi
 
+# review COVERAGE: the review-log must attest (in .files_reviewed) EVERY file the
+# changeset touched (git diff --name-only HC_BASE..HEAD). This turns "the review
+# covered the whole changeset" into a STRUCTURAL check, not prose hope —
+# recomputed by the same shared function the writer uses (hc_review_coverage_gap)
+# so the two can never diverge. A non-empty gap (files changed but not attested)
+# BLOCKS; SKIP (no changeset base → coverage not computable) passes — a
+# no-regression degrade, there was no coverage check before. hc_review_blocking's
+# availability guard above already forces a block if the library failed to source,
+# so a missing function here cannot silently allow. A coverage-computation error
+# with a real changeset returns the full changed set (non-empty → block), never
+# SKIP — so it fails toward block, not toward an accidental allow.
+GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR")
+if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
+  GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
+  block "review did not cover changed files: ${GAP_LIST}— re-review the full changeset (HEAD ${HEAD_SHA:0:7} vs base ${HC_BASE:0:7}) and record every changed file in the review-log's files_reviewed."
+fi
+
 # task_checks: every entry must be status "passed". Count the non-passed ones;
 # an absent task_checks array yields length 0 (vacuously green). A jq crash
 # yields "" which is != "0" -> block.

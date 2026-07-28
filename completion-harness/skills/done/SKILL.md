@@ -45,8 +45,12 @@ subagents. It calls the shared gate logic (`hc_resolve` + `hc_tree_status`) to
 report whether the gate is winnable. If it reports a **HARD problem** (non-zero
 exit — e.g. `baseline_snapshot` enabled but no test command, or a deadlock-risk
 tree state), **stop and fix or surface it** before proceeding; do not begin work
-against an unwinnable gate. Warnings (missing `.dirty`, `jq` absent) are
-non-blocking and are printed with exact remediation.
+against an unwinnable gate. A **missing tree baseline (`.dirty`)** is a HARD
+problem, not a warning: it means SessionStart didn't record the baseline, so the
+gate degrades to strict and treats every pre-existing file as yours (guaranteed
+deadlock) — restart the session so `baseline-snapshot.sh` records it before you
+edit. Only `jq` absent remains a non-blocking warning; all problems print exact
+remediation.
 
 ## Step 0 — Config: detect / refresh (script)
 
@@ -90,7 +94,29 @@ instructions or the task is picked up automatically next run.
 ## Step 1 — Changeset scope
 
 Resolve the session id **once** and reuse it downstream (so it can't drift from
-the gate's): `SESSION_ID=$(ls -t "$CLAUDE_PROJECT_DIR"/.claude/.harness/baselines/*.sha | head -1 | xargs -n1 basename | sed 's/\.sha$//')`.
+the gate's). In SESSION mode the done-state key is `session-<id>`, so if this id
+differs from the id the Stop gate reads (its hook-stdin `session_id`), `/done`
+writes a valid done-state under a key the gate never reads → **silent forever
+block**. Resolve it in this **precedence** (first hit wins):
+
+```bash
+# (a) the current-session marker written by SessionStart (baseline-snapshot.sh)
+#     from its OWN hook stdin — the authoritative id the gate also derives from,
+#     for the supported single-session/worktree model (parallel same-dir is
+#     already unsupported);
+# (b) the ls -t baselines/*.sha heuristic — LAST resort only.
+# NOTE: the $CLAUDE_CODE_SESSION_ID env var is deliberately NOT used — it is
+# undocumented and leaks a CHILD-session id into subagent shells, which would
+# mis-key the state. The per-project marker is the trustworthy source.
+MARKER="$CLAUDE_PROJECT_DIR/.claude/.harness/current-session"
+SESSION_ID=""
+if [ -f "$MARKER" ]; then SESSION_ID=$(cat "$MARKER"); fi
+if [ -z "$SESSION_ID" ]; then SESSION_ID=$(ls -t "$CLAUDE_PROJECT_DIR"/.claude/.harness/baselines/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//'); fi
+```
+
+If the resolved id has no matching `baselines/<id>.sha`, the writer (Step 7) will
+**reject it loudly** in session mode rather than write a dead key — prefer the
+`current-session` marker if that happens.
 
 Then resolve the changeset base via the shared resolver — do **not** hand-pick a
 baseline. Run
@@ -188,9 +214,30 @@ you reviewing your own diff — and that requirement stands regardless of which
 Write-capable type you choose.
 
 **Hand the reviewer the REAL diff, not a summary.** Give it the resolved Step-1
-`<base>` SHA and the changed-file list, and instruct it to run `git diff <base>
-HEAD` **itself** and review the **full changeset**. Do not paraphrase the diff for
+`<base>` SHA and the changed-file list, and instruct it to run `git diff --name-only
+<base> HEAD` **itself** to get the authoritative changed-file list, then review
+**EVERY** file in it via `git diff <base> HEAD`. Do not paraphrase the diff for
 it — a summary leaks issues one round at a time (trickle).
+
+**Coverage is STRUCTURALLY gated — attest it truthfully.** Instruct the reviewer to
+record the repo-relative paths it examined (as emitted by `git diff --name-only`)
+into the review-log's `files_reviewed` array. The gate and `done-write-state.sh`
+recompute the changed-file set from `git diff --name-only <base>..HEAD` and require
+`files_reviewed ⊇ changed files` — a changed file NOT attested **blocks** with
+"review did not cover changed files: …". So the attestation must be **complete and
+truthful**: it must list every changed file the reviewer actually examined, and a
+false claim (attesting a file it did not read) is visible in the transcript. This is
+what makes "the review covered the whole changeset" a structural gate check, not
+prose hope — closing the too-narrow-scope leak that causes fix→re-review churn.
+
+**Deterministic-first — spend judgment where tools can't reach.** The tests, lint,
+and type-check already ran in Step 2 and catch formatting, style, unused vars, and
+type errors **deterministically**. Instruct the reviewer to **NOT re-report issues
+those tools catch or would catch** — re-reporting them just generates advisory noise
+and burns tokens. Spend its judgment on what deterministic tools **cannot** catch:
+logic errors, the blast-radius questions below (especially whether widening a read
+also widens a write), missing/insufficient test coverage, broken invariants, and
+security. This is what keeps the review **economical**.
 
 **Be EXHAUSTIVE in round 1.** Instruct the reviewer to enumerate **EVERY** issue it
 finds, prioritized by severity — do **not** stop at the first few, do **not** cover
@@ -229,12 +276,16 @@ and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
 {
   "reviewed_sha": "<HEAD>",
   "min_review_level": "high",
+  "files_reviewed": ["src/a.ts", "src/b.ts"],
   "findings": [{"severity": "high", "file": "…", "line": 0, "desc": "…"}],
   "open_findings": 0,
   "advisory_findings": 0
 }
 ```
 
+`files_reviewed` is the repo-relative paths (exactly as `git diff --name-only`
+emits them) the reviewer attests it examined. The gate/writer require it to cover
+every changed file in `<base>..HEAD` (structural coverage — see above).
 Each finding's `severity` is one of `critical | high | medium | low`.
 `open_findings` / `advisory_findings` are **informational** counts the subagent
 records (blocking vs advisory, by its own read of the threshold). They are **not**

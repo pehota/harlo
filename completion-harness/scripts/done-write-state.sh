@@ -36,8 +36,17 @@ if ! printf '%s' "$PAYLOAD" | jq empty >/dev/null 2>&1; then
 fi
 
 # --- resolve session id ------------------------------------------------------
+# Same precedence as the skill/preflight so writer-key == gate-key: arg →
+# authoritative current-session marker → newest baselines/*.sha heuristic. The
+# skill normally passes the marker-resolved id as $1; the marker fallback is
+# defense-in-depth if the writer is ever invoked without one. The env var is
+# deliberately NOT used — it leaks into child/subagent shells and test
+# subprocesses, so the per-project marker is the trustworthy source.
 SESSION_ID="${1:-}"
 BASELINE_DIR="$PROJECT_DIR/.claude/.harness/baselines"
+if [ -z "$SESSION_ID" ] && [ -f "$PROJECT_DIR/.claude/.harness/current-session" ]; then
+  SESSION_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
+fi
 if [ -z "$SESSION_ID" ]; then
   SESSION_ID=$(ls -t "$BASELINE_DIR"/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//')
 fi
@@ -58,6 +67,29 @@ if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; the
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 [ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
+
+# --- structural backstop: reject a DEAD session id in session mode ----------
+# In SESSION mode the done-state key is "session-<id>", the SAME key the Stop
+# gate derives from ITS hook-stdin session_id. If this id has NO matching
+# baselines/<id>.sha, SessionStart never recorded it → the gate will key off a
+# DIFFERENT id and never read what we write → a silent forever-block. Fail LOUD
+# here instead. (In TASK mode the branch keys the done-state, not the id, so this
+# check applies only to the session-mode path.) Skipped when the baselines dir is
+# absent entirely (no baselines to compare against → nothing to reconcile).
+# NOTE: this guard fires for an id passed EXPLICITLY as $1 with no matching .sha
+# (the skill's Step-7 call). The no-arg `ls -t` fallback above can only ever pick
+# an id that HAS a .sha (it globbed them), so it cannot itself produce a dead id;
+# the DRIFT case (ls -t picking a stale/parallel session) is prevented UPSTREAM by
+# the skill preferring the current-session marker. The two protections are
+# complementary — do not remove one assuming the other is redundant.
+if [ "$HC_MODE" = "session" ] && [ -d "$BASELINE_DIR" ] && ls "$BASELINE_DIR"/*.sha >/dev/null 2>&1; then
+  if [ ! -f "$BASELINE_DIR/${SESSION_ID}.sha" ]; then
+    VALID_IDS=$(ls -t "$BASELINE_DIR"/*.sha 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//' | tr '\n' ' ')
+    MARKER_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
+    echo "error: refusing to write — session id '${SESSION_ID}' has no baselines/${SESSION_ID}.sha, so the done-state key 'session-${SESSION_ID}' is one the Stop gate never reads (silent forever-block). Pass the id the gate uses: the current-session marker (${MARKER_ID:-none recorded}), or one of the valid ids: ${VALID_IDS:-none}" >&2
+    exit 1
+  fi
+fi
 
 # --- inject live git facts ---------------------------------------------------
 VERIFIED_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
@@ -141,6 +173,27 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   fi
   if [ "$P_OPEN" != "0" ]; then
     echo "error: refusing to write — ${P_OPEN} blocking (≥ ${MIN_LEVEL}) review findings for HEAD ${VERIFIED_SHA:0:7}; address them and re-run, or supply an escalation" >&2
+    exit 1
+  fi
+
+  # review COVERAGE: mirror the gate's structural coverage check via the same
+  # shared function. The review-log must attest EVERY file the changeset touched
+  # (git diff --name-only HC_BASE..VERIFIED_SHA). A non-empty gap refuses; SKIP
+  # (no changeset base → not computable) passes (no-regression degrade). Gives the
+  # agent the coverage feedback at /done time rather than at stop time. Same
+  # fail-toward-block discipline: a computation error with a real changeset returns
+  # the full changed set (non-empty → refuse), never SKIP.
+  if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
+    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR")
+  else
+    # Library failed to source — the review-log refusal above already exited via
+    # the ERR path, so we never reach here without the function; but guard anyway
+    # by refusing (fail toward block, never silently write).
+    P_GAP="LIBUNAVAILABLE"
+  fi
+  if [ -n "$P_GAP" ] && [ "$P_GAP" != "SKIP" ]; then
+    P_GAP_LIST=$(printf '%s' "$P_GAP" | tr '\n' ' ')
+    echo "error: refusing to write — review did not cover changed files: ${P_GAP_LIST}(HEAD ${VERIFIED_SHA:0:7} vs base ${HC_BASE:0:7}); re-review the full changeset and record every changed file in the review-log's files_reviewed, or supply an escalation" >&2
     exit 1
   fi
 
