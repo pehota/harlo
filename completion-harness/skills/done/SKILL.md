@@ -54,8 +54,8 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-detect.sh` and consume its stdout —
 the **effective** config (`overrides` merged over `detected`). The script probes
 lockfiles + `package.json`/`Cargo.toml`/`go.mod`/`pyproject.toml`/`Makefile`,
 recomputes the `source_fingerprint`, and rewrites `detected` only when the source
-changed — preserving `overrides`, `max_fix_attempts`, `baseline_snapshot`,
-`deploy_check_cmd`. No LLM guessing of command names.
+changed — preserving `overrides`, `max_fix_attempts`, `max_review_rounds`,
+`baseline_snapshot`, `deploy_check_cmd`. No LLM guessing of command names.
 
 ## Step 0.5 — Assemble the effective DoD
 
@@ -141,11 +141,35 @@ the deploy target and whether it was exercised — never claim false coverage.
 
 ## Step 4 — Code review (independent subagent writes the review-log)
 
-Spawn a **fresh review subagent** (Task tool — e.g. a `code-reviewer` agent)
-scoped to the **Step-1 changeset diff**. Its deliverable **is a file it writes
-itself** — you do **not** transcribe a count from your own context (that is
-self-review; the harness requires an independent reviewer — don't grade your own
-homework).
+Spawn a **fresh, independent, Write-capable** review subagent (Task tool) scoped
+to the **Step-1 changeset diff**. Its deliverable **is a file it writes itself** —
+you do **not** transcribe a count from your own context (that is self-review; the
+harness requires an independent reviewer — don't grade your own homework).
+
+**Pick a Write-capable agent type** — e.g. `general-purpose` (or the default
+`claude` agent). **Do NOT use a review-only agent type that lacks a Write tool**
+(e.g. `feature-dev:code-reviewer`): the deliverable of this step is a *written*
+log file, and an agent that cannot Write cannot produce it (this has wasted whole
+sessions). "Fresh and independent" means a new subagent with clean context — not
+you reviewing your own diff — and that requirement stands regardless of which
+Write-capable type you choose.
+
+**Mandatory blast-radius question set.** Instruct the subagent to *actually
+answer* each of these in its findings (not merely scan the diff) — a finding for
+every "yes":
+
+1. **Does this change widen what is read or accepted? If so, does it ALSO —
+   intentionally or not — widen what is written, allowed, or executed?** (This is
+   the highest-value question. A read-side widening that leaks into a write-,
+   permission-, or execution-side widening is the classic silent-scope bug.)
+2. Does it change an invariant, precondition, or contract that other code relies
+   on?
+3. Are new inputs / branches / error paths validated and handled the **same** as
+   the existing ones — or can a failure fall through to a success path?
+4. Does the change silently broaden a type, scope, capability, or lifetime beyond
+   what the task required?
+5. **(Confirming pass only — Step 5)** does a fix in this diff introduce a NEW
+   issue elsewhere?
 
 Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
 and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
@@ -167,13 +191,44 @@ re-review is forced for free (Step 5).
 
 ## Step 5 — Address findings (bounded loop)
 
-For each open finding: **fix it**, or genuinely can't → escalate (Category C,
-after `max_fix_attempts`, default 3 — a per-item counter). After fixing, **commit
-(HEAD moves) and re-run Step 4** so a fresh review-log is written for the new
-HEAD. Re-review-after-fix is thus forced by the HEAD-keyed log, not by
-bookkeeping. A won't-fix finding that does not move HEAD must be escalated, never
-silently waived. There is **no findings/addressed counting** — the log for the
-final HEAD carrying `open_findings == 0` is the whole proof.
+The fix → re-review loop is **bounded** by `max_review_rounds` (from Step-0
+config, default 2). This is a **prompt-level** cap you obey — exactly like
+`max_fix_attempts` — not a counter tracked by any script. **Round 1** is the
+initial full-changeset review of Step 4; **round 2** is the confirming pass below.
+
+**Zero-findings short-circuit (the common, cheap path).** If the round-1 review
+returned `open_findings == 0`, there is **nothing to fix**: HEAD does not move,
+the review-log the subagent already wrote for the current HEAD satisfies the gate,
+and you are **done reviewing with NO second review**. This is why a clean
+changeset costs exactly **one** review — no size heuristic is needed.
+
+Otherwise (round 1 has open findings):
+
+1. **Batch the fixes.** Collect **ALL** open findings and fix them in **one**
+   pass. For a finding you genuinely can't fix, keep trying up to
+   `max_fix_attempts` (default 3, per-item); a won't-fix finding that does not
+   move HEAD must be **escalated** (Category C), never silently waived.
+2. **Commit ONCE.** Commit the whole batch as a single commit so **HEAD moves
+   once**, not once per finding. The old review-log (keyed to the previous HEAD)
+   is now stale — re-review is forced for free.
+3. **Confirming pass (round 2), scoped to the fix diff.** Re-run Step 4, but
+   scope the fresh review to the **diff the fix commit introduced** (`git diff
+   <HEAD before the fix commit> HEAD`), not the whole changeset again — it is
+   cheaper and it is where regressions hide. Include the confirming-pass question
+   ("does a fix in this diff introduce a NEW issue elsewhere?"). The subagent
+   still writes a fresh review-log for the **new HEAD** (the gate requires it).
+4. **Cap reached → STOP and escalate, do not loop again.** If round 2 STILL
+   returns open findings, do **NOT** start a round 3. **Escalate via
+   AskUserQuestion** (Category C): present the remaining findings and ask *"fix
+   further, or accept and proceed?"* Record the user's decision in `escalation`.
+
+The log for the final HEAD carrying `open_findings == 0` (or a Category-C
+`escalation` capturing the user's accept decision) is the whole proof — there is
+**no findings/addressed counting** in any script.
+
+**Surface loop-causing fixes:** if a fix made in round 1 caused a finding to
+appear in the round-2 confirming pass, call that out explicitly in the Step 8
+report.
 
 ## Step 6 — Task-specific checks
 

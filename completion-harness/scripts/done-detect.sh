@@ -168,6 +168,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
       detected: $detected,
       overrides: {},
       max_fix_attempts: 3,
+      max_review_rounds: 2,
       baseline_snapshot: true,
       deploy_check_cmd: null,
       trunk: null,
@@ -180,10 +181,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
 elif [ "$STORED_FP" != "$NEW_FP" ]; then
   # Changed: targeted merge — replace only detected + fingerprint, preserve the
   # human-owned sticky fields. The identity keys (trunk/auto_branch/
-  # branch_prefix) are sticky too: PRESERVE them when present, SEED defaults only
-  # when absent (an older config predating them). `// default` supplies the seed
-  # without ever clobbering an existing value — including a literal `false`,
-  # because these are set with explicit assignment, not read through `//`.
+  # branch_prefix) plus untracked_policy and max_review_rounds are sticky too:
+  # PRESERVE them when present, SEED defaults only when absent (an older config
+  # predating them). The `if has(...) then . else .k = default end` form supplies
+  # the seed without ever clobbering an existing value — including a literal
+  # `false` — because these are set with explicit assignment, not read through
+  # `//`. (max_fix_attempts / baseline_snapshot / deploy_check_cmd are preserved
+  # implicitly: this merge only ever touches .detected and .source_fingerprint.)
   TMP=$(mktemp 2>/dev/null)
   if [ -n "$TMP" ]; then
     jq \
@@ -195,6 +199,7 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
       | (if has("auto_branch") then . else .auto_branch = true end)
       | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
       | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
+      | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
     ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
   fi

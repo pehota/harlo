@@ -77,6 +77,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "detected": {},
   "overrides": {},
   "max_fix_attempts": 3,
+  "max_review_rounds": 2,
   "baseline_snapshot": true,
   "deploy_check_cmd": null,
   "trunk": null,
