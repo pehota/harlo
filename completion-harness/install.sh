@@ -80,6 +80,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "max_review_rounds": 2,
   "baseline_snapshot": true,
   "deploy_check_cmd": null,
+  "start_check_cmd": null,
+  "start_timeout": 30,
   "trunk": null,
   "auto_branch": true,
   "branch_prefix": "task/",

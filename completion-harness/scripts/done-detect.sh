@@ -171,6 +171,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
       max_review_rounds: 2,
       baseline_snapshot: true,
       deploy_check_cmd: null,
+      start_check_cmd: null,
+      start_timeout: 30,
       trunk: null,
       auto_branch: true,
       branch_prefix: "task/",
@@ -188,6 +190,8 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
   # `false` — because these are set with explicit assignment, not read through
   # `//`. (max_fix_attempts / baseline_snapshot / deploy_check_cmd are preserved
   # implicitly: this merge only ever touches .detected and .source_fingerprint.)
+  # start_check_cmd / start_timeout follow the same seed-if-absent, preserve-if-present
+  # rule as the other human-owned sticky keys.
   TMP=$(mktemp 2>/dev/null)
   if [ -n "$TMP" ]; then
     jq \
@@ -200,6 +204,8 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
       | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
       | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
       | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
+      | (if has("start_check_cmd") then . else .start_check_cmd = null end)
+      | (if has("start_timeout") then . else .start_timeout = 30 end)
     ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
   fi

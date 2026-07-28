@@ -107,6 +107,17 @@ worktree). The base is pinned once at first sight.
 
 ## Step 2 — Tests (with before/after checkpoint)
 
+**Confirm the check actually covers the changeset (before trusting green).** After
+selecting the effective test/lint command, verify it structurally *exercises the
+Step-1 changed files*. If the configured/authoritative check cannot cover the
+changeset — a scoped runner that excludes the changed package, a suite that never
+touches the new code path, a filter that skips the changed dir — then a green
+result is **FALSE coverage**: do NOT report green. State the coverage gap and
+**escalate (Category C)** rather than claim the changeset is verified.
+
+Independent checks may run **concurrently** — lint ∥ tests. Sequential ordering is
+required only where there is a real data dependency (a fix → re-verify).
+
 Run the effective test command. Compare against the baseline snapshot at
 `.claude/.harness/baselines/<sha>.tests.json` (captured at SessionStart):
 
@@ -130,19 +141,41 @@ command configured → skip; do not fabricate a `lint` field.
 
 ## Step 3 — App startup
 
-Run `effective.start` (or the detected startup probe) and confirm the app comes
-up. For Docker / systemd / k8s targets that cannot be exercised locally, you
-**must state the target explicitly and whether it was exercised** — e.g.
-"started the binary; real target is a Docker container, container not
-smoke-tested".
+**Never block indefinitely on a start command.** A `start`/`dev` script for a
+server or whole-stack app can boot the entire stack and never return. Do NOT run it
+unbounded. Two safe paths:
+
+- **`start_check_cmd` is set (config, default `null`)** → run **it** (an explicit
+  readiness probe, parallel to `deploy_check_cmd`) and check its exit code. This is
+  the correct path for a long-running server: the operator points it at a
+  lightweight probe (e.g. `curl -sf localhost:3000/health`).
+- **Otherwise** → run the effective `start` **bounded by `start_timeout`
+  (config, default `30` seconds), backgrounded, then terminated.** Success =
+  it came up / stayed up without crashing within the timeout. Never wait for it to
+  return on its own. If `start` is a server that cannot be meaningfully smoke-tested
+  this way (no HTTP endpoint, needs external deps), **STATE that** and treat it as
+  **reduced coverage**; if it truly cannot run at all, escalate (Category A) with
+  the captured error.
+
+**Whole-stack case (explicit):** either the operator sets `start_check_cmd` to a
+lightweight probe, or accepts the timeout-boot-then-kill smoke test. There is no
+third "wait forever" option.
+
+For Docker / systemd / k8s targets that cannot be exercised locally, you **must
+state the target explicitly and whether it was exercised** — e.g. "started the
+binary; real target is a Docker container, container not smoke-tested".
 
 If `deploy_check_cmd` is set, run it and check the exit code. If absent, **state**
 the deploy target and whether it was exercised — never claim false coverage.
 
+This step (app/start probe) is independent of the Step-4 review subagent — the two
+may run **concurrently**.
+
 ## Step 4 — Code review (independent subagent writes the review-log)
 
 Spawn a **fresh, independent, Write-capable** review subagent (Task tool) scoped
-to the **Step-1 changeset diff**. Its deliverable **is a file it writes itself** —
+to the **Step-1 changeset diff**. This review is independent of the Step-3 app/start
+probe — you may launch it to run **concurrently** with Step 3. Its deliverable **is a file it writes itself** —
 you do **not** transcribe a count from your own context (that is self-review; the
 harness requires an independent reviewer — don't grade your own homework).
 
@@ -279,12 +312,16 @@ Payload shape (facts are injected, not supplied):
   "task_checks": [
     {"desc": "visually verify button", "status": "passed", "how": "browser screenshot vs Figma"}
   ],
+  "review_rounds": 1,
   "escalation": null
 }
 ```
 
 `lint` is included only when a lint command is configured (Step 2); omit it
-otherwise. `dod` records the effective DoD from Step 0.5 verbatim — `sources`
+otherwise. `review_rounds` (integer, **optional**) is your judgment record of how
+many review rounds you used (Step 5). It is **informational only** — neither the
+writer nor the gate enforces it (no new structural state); it exists so the effort
+is captured in done-state alongside the Step-8 report. `dod` records the effective DoD from Step 0.5 verbatim — `sources`
 lists the inputs folded in, `items` is the deduped checklist. The script writes
 `session_id`, `verified_sha`, `tree_clean` itself and prints the path written.
 The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 4) lives beside
@@ -295,6 +332,11 @@ the done-state; both the writer and the gate read it.
 One paragraph: changeset stat, what passed (test counts, app startup, review
 outcome, task-check outcomes), and **anything escalated and why**. Escalations
 are surfaced on the same turn — **no silent passes.**
+
+Include an **EFFORT line**: review rounds used (of `max_review_rounds`), fix
+attempts made, and wall-clock elapsed if readily available. **Token/dollar cost is
+not measurable from the shell** — do not estimate it; these rounds/attempts/elapsed
+proxies are the honest accounting.
 
 ---
 
@@ -326,6 +368,23 @@ Record the *user's* decision plus the attempts made.
   "user_decision":"accept, tracked separately"}
 ```
 
+**`user_halt` — the user spontaneously stops the task mid-work.** Distinct from
+A/B/C (which are check-blocked): here the user tells you to stop before the gate is
+green. Record what IS done and what is NOT — no silent claim of completion.
+
+```json
+"escalation":{"type":"user_halt","step":"<where work stopped>",
+  "user_decision":"<verbatim what the user said>",
+  "completed":"<what IS done/verified>","remaining":"<what is NOT>"}
+```
+
+It requires an **actual user statement in the transcript** (like Category C — a
+`user_halt` with no such statement is a detectable lie). It routes through the
+**same gate path** as every escalation (non-null → honored for the current HEAD),
+routes to the **USER** (never a silent self-waiver), is echoed in Step 8, and
+**disarms only the current changeset**: a later commit moves HEAD → the gate blocks
+again → `/done` must re-run.
+
 Every escalation must be echoed in the Step 8 summary. A and B require captured
-command output; C requires an actual AskUserQuestion exchange in the transcript —
-a `user_accepted` with no such exchange is a detectable lie.
+command output; C and `user_halt` require an actual user exchange/statement in the
+transcript — an escalation with no such exchange is a detectable lie.
