@@ -58,13 +58,14 @@ baseline-relative working-tree classifier** used by the gate (Step 6), the `/don
 writer, and the preflight; **none of them reimplements it.** It classifies each
 `git status --porcelain` line relative to a pinned tree baseline (path in
 `HC_TREE_BASE_FILE`, set by `hc_resolve`): a line **introduced since the baseline**
-is a BLOCKER (`HC_TREE_BLOCKERS`), a line **already present at baseline** is a
-WARNING (`HC_TREE_WARNINGS`). A **missing** baseline file is treated as the empty
-set → every current change is "introduced" → blocks (safe direction — never a
-silent pass). `hc_tree_remediation` renders the exact "commit or stash these
-changes you introduced: … (pre-existing, only warned: …)" message from those
-globals. The `untracked_policy` knob (`done-config.json`, default `"baseline"` |
-`"strict"`) governs untracked lines — see the config section.
+is a BLOCKER (`HC_TREE_BLOCKERS`), a line **already present at baseline** is
+pre-existing (`HC_TREE_WARNINGS`) and is **ignored — never surfaced** (it is
+irrelevant to the changeset and would only invite boyscout scope-creep). A
+**missing** baseline file is treated as the empty set → every current change is
+"introduced" → blocks (safe direction — never a silent pass). `hc_tree_remediation`
+renders the exact "commit or stash these changes you introduced: …" message from
+the blockers only. The `untracked_policy` knob (`done-config.json`, default
+`"baseline"` | `"strict"`) governs untracked lines — see the config section.
 
 **Resolution (offline, conservative):**
 - `branch = git symbolic-ref --short -q HEAD` (empty if detached).
@@ -173,11 +174,11 @@ Fires on every main-agent turn exit. Logic in order:
 6. **Working tree has INTRODUCED changes → BLOCK.** Not "any non-empty `git status
    --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks
    **iff `HC_TREE_BLOCKERS` is non-empty**, i.e. work introduced since the pinned tree
-   baseline. Pre-existing entries (present at baseline) are **warned, not blocked** —
+   baseline. Pre-existing entries (present at baseline) are **ignored, not blocked** —
    this is what breaks the pre-existing-untracked deadlock **without weakening the gate:
    the changeset's OWN uncommitted work still blocks** (an agent's introduced file is,
-   by construction, not in the baseline). The block message names the blockers and, if
-   any, the warned pre-existing entries (`hc_tree_remediation`). `untracked_policy`
+   by construction, not in the baseline). The block message names only the introduced
+   blockers (`hc_tree_remediation`); pre-existing entries are never surfaced. `untracked_policy`
    (default `"baseline"`) tunes untracked handling; `"strict"` blocks every untracked
    line regardless of baseline. If the classifier can't be sourced, the gate falls back
    to the **strict** live check (block on any non-empty porcelain) — never toward allow.
@@ -387,7 +388,7 @@ The LLM supplies only the judgment fields (`dod`, `task_checks`, `escalation`, `
 `lint` summaries) as a JSON payload. The script **injects the git facts live** —
 `verified_sha = git rev-parse HEAD`, `tree_clean` from the `hc_tree_status` classifier —
 and **refuses to write** when the tree has **introduced blockers** (baseline-relative, same
-classifier as the gate — pre-existing entries only warn), or when (absent an escalation)
+classifier as the gate — pre-existing entries are ignored), or when (absent an escalation)
 tests/lint aren't green or no `open_findings == 0` review-log exists for HEAD. No
 hand-written SHA strings.
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
