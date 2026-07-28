@@ -560,6 +560,17 @@ hc_validate() {
   jq . "$schema_file" >/dev/null 2>&1 || { printf 'ERR: %s: schema not valid JSON\n' "$schema_file"; return 1; }
   jq . "$json_file"   >/dev/null 2>&1 || { printf 'ERR: %s: instance not valid JSON\n' "$json_file"; return 1; }
 
+  # Each file must be EXACTLY ONE JSON document. `jq .` over an empty or
+  # whitespace-only file reads zero inputs and exits 0 (silent success), which
+  # would make the validator body below run over no input and pass — a
+  # fail-OPEN hole. `jq -s 'length'` slurps every value into an array; require
+  # length 1 so empty/whitespace (0) and concatenated multi-doc (>1) both fail
+  # toward reject. Applied to BOTH files: an empty schema arrives via
+  # --slurpfile as [] → $schema[0] == null → every check is skipped → OK, the
+  # same fail-open. Fail-closed for both.
+  [ "$(jq -s 'length' "$schema_file" 2>/dev/null)" = "1" ] || { printf 'ERR: %s: schema is not exactly one JSON document\n' "$schema_file"; return 1; }
+  [ "$(jq -s 'length' "$json_file"   2>/dev/null)" = "1" ] || { printf 'ERR: %s: instance is not exactly one JSON document\n' "$json_file"; return 1; }
+
   # The recursive validator `v($schema; $path)` RETURNS a flat array of
   # "path: why" error strings (empty array = valid), collected depth-first in
   # document order. In bash we take `.[0]` — the FIRST error. Keyword order per
