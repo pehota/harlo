@@ -257,6 +257,76 @@ EOF
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc_review_blocking <review_log_file> <min_level>
+#
+# Prints the integer count of BLOCKING findings (severity rank >= min_level
+# rank). Single source of truth for severity gating — like hc_tree_status is for
+# the tree — sourced identically by done-gate.sh (Step 8) and done-write-state.sh
+# so they can never diverge.
+#
+# - Severity ranks: low=0 medium=1 high=2 critical=3.
+# - A finding BLOCKS iff rank(finding.severity) >= rank(min_level).
+#     default min_level "high" → high+critical block; medium+low are advisory.
+#     min_level "low" → everything blocks (strictest).
+# - UNKNOWN or MISSING finding severity ranks as BLOCKING (rank 99) — safe
+#   direction: a typo'd/absent severity can never dodge the gate.
+# - If min_level is unknown/empty, normalize to "high".
+# - If the "findings" key is PRESENT it is authoritative and MUST be an array:
+#   count from it (an EMPTY array counts 0 -> allow, reviewer found nothing).
+#   A present-but-non-array findings (object/string/number/null) is a malformed
+#   or forged log -> jq errors -> "ERR" -> block (the self-reported open_findings
+#   is NEVER consulted when findings is present).
+# - If the "findings" key is ABSENT, FALL BACK to the log's .open_findings
+#   integer (backward compat with old-style logs; missing -> 1 so it blocks).
+# - If the log is missing or jq fails, print "ERR" (caller treats != "0" as
+#   block). NEVER prints "0" on error — fail toward block.
+hc_review_blocking() {
+  local log="$1" min_level="$2"
+
+  # jq is required to reason structurally; without it, fail toward block.
+  command -v jq >/dev/null 2>&1 || { printf 'ERR'; return 0; }
+  [ -f "$log" ] || { printf 'ERR'; return 0; }
+
+  # Normalize an unknown/empty min_level to "high".
+  case "$min_level" in
+    low|medium|high|critical) ;;
+    *) min_level="high" ;;
+  esac
+
+  local out
+  out=$(jq -r --arg min "$min_level" '
+    ({"low":0,"medium":1,"high":2,"critical":3}) as $rank
+    | ($rank[$min] // 2) as $threshold
+    | if (has("findings")) then
+        # findings key PRESENT → it is authoritative. It MUST be an array; a
+        # present-but-non-array findings (object/string/number/null) can never
+        # dodge the gate by riding the self-reported open_findings — jq errors
+        # here, the outer guard prints ERR, the caller blocks. An EMPTY array is
+        # a legitimate "reviewer found nothing" → counts 0 → allow.
+        if ((.findings | type) == "array") then
+          [ .findings[]
+            | (($rank[(.severity // "")] // 99)) as $r
+            | select($r >= $threshold)
+          ] | length
+        else
+          error("findings present but not an array")
+        end
+      else
+        # findings key ABSENT → old-style log; fall back to the self-reported
+        # open_findings integer (missing → 1 → block).
+        (.open_findings // 1)
+      end
+  ' "$log" 2>/dev/null)
+
+  # Guard: any failure (empty / non-numeric) fails toward block.
+  case "$out" in
+    ''|*[!0-9]*) printf 'ERR' ;;
+    *) printf '%s' "$out" ;;
+  esac
+  return 0
+}
+
 # hc_tree_remediation — build the exact remediation text from the globals set by
 # the most recent hc_tree_status call. Names ONLY the blocking (introduced)
 # files. Pre-existing (warned-only) entries are intentionally NOT surfaced —

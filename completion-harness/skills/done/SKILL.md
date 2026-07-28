@@ -187,6 +187,23 @@ sessions). "Fresh and independent" means a new subagent with clean context — n
 you reviewing your own diff — and that requirement stands regardless of which
 Write-capable type you choose.
 
+**Hand the reviewer the REAL diff, not a summary.** Give it the resolved Step-1
+`<base>` SHA and the changed-file list, and instruct it to run `git diff <base>
+HEAD` **itself** and review the **full changeset**. Do not paraphrase the diff for
+it — a summary leaks issues one round at a time (trickle).
+
+**Be EXHAUSTIVE in round 1.** Instruct the reviewer to enumerate **EVERY** issue it
+finds, prioritized by severity — do **not** stop at the first few, do **not** cover
+only part of the diff. If the changeset is too large to fully cover in one pass, the
+reviewer must **say so explicitly** in the log (`"note"` field) and report — never
+silently truncate. This up-front exhaustiveness is what stops the fix→re-review
+churn caused by trickled findings.
+
+**Tag every finding with `severity`** (one of `critical | high | medium | low`).
+Tell the reviewer the configured `min_review_level` (from Step-0 config, default
+`high`) and that findings **below** it are **advisory** — it must still list them
+(they are recorded/reported in Step 8), but they do not gate.
+
 **Mandatory blast-radius question set.** Instruct the subagent to *actually
 answer* each of these in its findings (not merely scan the diff) — a finding for
 every "yes":
@@ -211,16 +228,24 @@ and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
 ```json
 {
   "reviewed_sha": "<HEAD>",
-  "findings": [{"severity": "…", "file": "…", "line": 0, "desc": "…"}],
-  "open_findings": 0
+  "min_review_level": "high",
+  "findings": [{"severity": "high", "file": "…", "line": 0, "desc": "…"}],
+  "open_findings": 0,
+  "advisory_findings": 0
 }
 ```
 
-`open_findings` is the count of findings the subagent judges still open. The
-gate and `done-write-state.sh` both read this log for the **current HEAD** and
-require `open_findings == 0`. Because the log is keyed to the reviewed SHA,
-fixing a finding (which moves HEAD) automatically invalidates the old log —
-re-review is forced for free (Step 5).
+Each finding's `severity` is one of `critical | high | medium | low`.
+`open_findings` / `advisory_findings` are **informational** counts the subagent
+records (blocking vs advisory, by its own read of the threshold). They are **not**
+what the gate trusts: **the gate and `done-write-state.sh` recompute the blocking
+count STRUCTURALLY from `findings[].severity` and the config `min_review_level`**
+(a finding blocks iff `rank(severity) >= rank(min_review_level)`; ranks
+`low=0 medium=1 high=2 critical=3`; an unknown/missing severity ranks as
+BLOCKING — safe direction). So the reviewer **cannot dodge the gate by miscounting
+`open_findings`** — it must tag severities accurately. Because the log is keyed to
+the reviewed SHA, fixing a finding (which moves HEAD) automatically invalidates the
+old log — re-review is forced for free (Step 5).
 
 ## Step 5 — Address findings (bounded loop)
 
@@ -229,18 +254,26 @@ config, default 2). This is a **prompt-level** cap you obey — exactly like
 `max_fix_attempts` — not a counter tracked by any script. **Round 1** is the
 initial full-changeset review of Step 4; **round 2** is the confirming pass below.
 
-**Zero-findings short-circuit (the common, cheap path).** If the round-1 review
-returned `open_findings == 0`, there is **nothing to fix**: HEAD does not move,
-the review-log the subagent already wrote for the current HEAD satisfies the gate,
-and you are **done reviewing with NO second review**. This is why a clean
-changeset costs exactly **one** review — no size heuristic is needed.
+**Only findings at/above `min_review_level` must be fixed.** Below-threshold
+(advisory) findings do **not** gate — record and report them in Step 8. You MAY
+fix trivial advisory findings, but **only inside the SAME batch commit** (one HEAD
+move) — **never** fix an advisory finding in a way that triggers an extra required
+review round.
 
-Otherwise (round 1 has open findings):
+**Zero-BLOCKING-findings short-circuit (the common, cheap path).** If the round-1
+review returned **zero blocking findings** (findings at/above `min_review_level`),
+there is **nothing that gates**: HEAD does not move, the review-log the subagent
+already wrote for the current HEAD satisfies the gate, and you are **done reviewing
+with NO second review** — advisory findings may remain; they don't gate. This is
+why a clean changeset costs exactly **one** review — no size heuristic is needed.
 
-1. **Batch the fixes.** Collect **ALL** open findings and fix them in **one**
-   pass. For a finding you genuinely can't fix, keep trying up to
-   `max_fix_attempts` (default 3, per-item); a won't-fix finding that does not
-   move HEAD must be **escalated** (Category C), never silently waived.
+Otherwise (round 1 has blocking findings):
+
+1. **Batch the fixes.** Collect **ALL** blocking findings (and any trivial advisory
+   ones you choose to sweep in — same commit only) and fix them in **one** pass. For
+   a finding you genuinely can't fix, keep trying up to `max_fix_attempts` (default
+   3, per-item); a won't-fix blocking finding that does not move HEAD must be
+   **escalated** (Category C), never silently waived.
 2. **Commit ONCE.** Commit the whole batch as a single commit so **HEAD moves
    once**, not once per finding. The old review-log (keyed to the previous HEAD)
    is now stale — re-review is forced for free.
@@ -251,13 +284,14 @@ Otherwise (round 1 has open findings):
    ("does a fix in this diff introduce a NEW issue elsewhere?"). The subagent
    still writes a fresh review-log for the **new HEAD** (the gate requires it).
 4. **Cap reached → STOP and escalate, do not loop again.** If round 2 STILL
-   returns open findings, do **NOT** start a round 3. **Escalate via
+   returns **blocking** findings, do **NOT** start a round 3. **Escalate via
    AskUserQuestion** (Category C): present the remaining findings and ask *"fix
    further, or accept and proceed?"* Record the user's decision in `escalation`.
 
-The log for the final HEAD carrying `open_findings == 0` (or a Category-C
-`escalation` capturing the user's accept decision) is the whole proof — there is
-**no findings/addressed counting** in any script.
+The log for the final HEAD carrying **zero blocking findings** (or a Category-C
+`escalation` capturing the user's accept decision) is the whole proof — the gate
+recomputes the blocking count structurally from `findings[].severity` +
+`min_review_level`; there is **no findings/addressed counting** in any script.
 
 **Surface loop-causing fixes:** if a fix made in round 1 caused a finding to
 appear in the round-2 confirming pass, call that out explicitly in the Step 8
@@ -288,7 +322,9 @@ review-log the Step-4 subagent wrote. The script **injects the git facts live** 
 `verified_sha` from `git rev-parse HEAD`, `tree_clean` from `git status
 --porcelain` — **refuses to write over a dirty tree** (commit first), and (absent
 an escalation) refuses unless tests are green, lint is green when configured, and
-the review-log for HEAD has `open_findings == 0`. You never hand-write a SHA.
+the review-log for HEAD has **zero blocking findings** (recomputed structurally
+from `findings[].severity` + `min_review_level`, same as the gate). You never
+hand-write a SHA.
 
 The "dirty tree" refusal is **baseline-relative**: only changes you *introduced*
 this session block; files already present at the SessionStart baseline are

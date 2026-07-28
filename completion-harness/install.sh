@@ -85,7 +85,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "trunk": null,
   "auto_branch": true,
   "branch_prefix": "task/",
-  "untracked_policy": "baseline"
+  "untracked_policy": "baseline",
+  "min_review_level": "high"
 }
 JSON
   echo "  created starter done-config.json"

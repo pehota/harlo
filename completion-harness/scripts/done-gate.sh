@@ -173,17 +173,28 @@ if [ "$LINT_EXIT" != "MISSING" ] && [ "$LINT_EXIT" != "0" ]; then
 fi
 
 # review: an INDEPENDENT review-log must exist for the current HEAD, written by
-# the Step-4 review subagent (not a self-reported count in done-state). Its
-# open_findings must be exactly "0". A missing log, or open_findings absent
-# ("MISSING") / nonzero / a jq crash (""), all fail toward BLOCK via the string
-# compare against a sentinel — same discipline as the tests.exit_code check.
+# the Step-4 review subagent (not a self-reported count in done-state). The
+# BLOCKING count is computed STRUCTURALLY by hc_review_blocking from the log's
+# findings[].severity and the configured min_review_level (default "high") — the
+# reviewer cannot dodge the gate by miscounting open_findings. Findings BELOW the
+# threshold are advisory and never block. A missing log, or a jq crash / unknown
+# severity ("ERR"), all fail toward BLOCK — same fail-toward-block discipline as
+# the tests.exit_code check.
 REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
 if [ ! -f "$REVIEW_LOG" ]; then
   block "no independent code review recorded for HEAD ${HEAD_SHA:0:7} — run /done."
 fi
-OPEN=$(jq -r '.open_findings // "MISSING"' "$REVIEW_LOG" 2>/dev/null)
+MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
+[ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
+# Explicit availability guard (parity with the hc_tree_status fallback): if the
+# library failed to source, force ERR so we fail toward BLOCK, never toward allow.
+if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+  OPEN=$(hc_review_blocking "$REVIEW_LOG" "$MIN_LEVEL")
+else
+  OPEN="ERR"
+fi
 if [ "$OPEN" != "0" ]; then
-  block "${OPEN} unresolved review findings — address them and re-run /done, or escalate."
+  block "${OPEN} blocking (≥ ${MIN_LEVEL}) review findings for HEAD ${HEAD_SHA:0:7} — address them and re-run /done, or escalate."
 fi
 
 # task_checks: every entry must be status "passed". Count the non-passed ones;

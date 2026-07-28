@@ -176,14 +176,16 @@ if [ ! -f "$CONFIG_FILE" ]; then
       trunk: null,
       auto_branch: true,
       branch_prefix: "task/",
-      untracked_policy: "baseline"
+      untracked_policy: "baseline",
+      min_review_level: "high"
     }
   ' > "$CONFIG_FILE" 2>/dev/null
 
 elif [ "$STORED_FP" != "$NEW_FP" ]; then
   # Changed: targeted merge — replace only detected + fingerprint, preserve the
   # human-owned sticky fields. The identity keys (trunk/auto_branch/
-  # branch_prefix) plus untracked_policy and max_review_rounds are sticky too:
+  # branch_prefix) plus untracked_policy, max_review_rounds and min_review_level
+  # are sticky too:
   # PRESERVE them when present, SEED defaults only when absent (an older config
   # predating them). The `if has(...) then . else .k = default end` form supplies
   # the seed without ever clobbering an existing value — including a literal
@@ -204,6 +206,7 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
       | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
       | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
       | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
+      | (if has("min_review_level") then . else .min_review_level = "high" end)
       | (if has("start_check_cmd") then . else .start_check_cmd = null end)
       | (if has("start_timeout") then . else .start_timeout = 30 end)
     ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null

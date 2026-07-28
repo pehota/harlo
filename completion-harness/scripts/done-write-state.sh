@@ -118,19 +118,29 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
     fi
   fi
 
-  # review-log: an independent review-log for the LIVE HEAD must exist with
-  # open_findings == 0. Mirrors the gate so the agent gets the feedback at /done
-  # time. HEAD is the live rev-parse computed above (VERIFIED_SHA). A missing
-  # log, or open_findings absent/nonzero/jq-crash (""), all refuse via the
-  # sentinel string compare.
+  # review-log: an independent review-log for the LIVE HEAD must exist. The
+  # BLOCKING count is computed STRUCTURALLY by hc_review_blocking (the same shared
+  # function the gate uses) from findings[].severity and the configured
+  # min_review_level (default "high") — mirrors the gate so the agent gets the
+  # feedback at /done time. Findings below the threshold are advisory and never
+  # refuse. HEAD is the live rev-parse computed above (VERIFIED_SHA). A missing
+  # log, or a jq crash / unknown severity ("ERR"), all refuse (fail toward block).
   REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${VERIFIED_SHA}.json"
   if [ ! -f "$REVIEW_LOG" ]; then
     echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} (.claude/.harness/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
     exit 1
   fi
-  P_OPEN=$(jq -r '.open_findings // "MISSING"' "$REVIEW_LOG" 2>/dev/null)
+  MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
+  [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
+  # Explicit availability guard (parity with the hc_tree_status fallback): if the
+  # library failed to source, force ERR so we refuse the write, never write silently.
+  if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+    P_OPEN=$(hc_review_blocking "$REVIEW_LOG" "$MIN_LEVEL")
+  else
+    P_OPEN="ERR"
+  fi
   if [ "$P_OPEN" != "0" ]; then
-    echo "error: refusing to write — ${P_OPEN} unresolved review findings for HEAD ${VERIFIED_SHA:0:7}; address them and re-run, or supply an escalation" >&2
+    echo "error: refusing to write — ${P_OPEN} blocking (≥ ${MIN_LEVEL}) review findings for HEAD ${VERIFIED_SHA:0:7}; address them and re-run, or supply an escalation" >&2
     exit 1
   fi
 
