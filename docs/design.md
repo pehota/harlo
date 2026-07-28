@@ -20,6 +20,16 @@ Three parts. No single one is sufficient.
 | **`/done` skill** | The executor. Runs the checklist in order, blocking on each step, and writes the done-state. | Does the reasoning a hook can't. |
 | **`done-config.json`** | Per-project cache of verification commands, auto-detected and drift-checked. | Makes the harness portable and zero-config. |
 
+**Hard contracts underneath.** Every JSON artifact the harness passes between a
+producer and a consumer (done-state, review-log, done-config, resolver-output,
+base-dod) has a declared JSON-Schema under `contracts/` and carries a
+`contract_version` (const `1`). This exists so the gate never trusts a field of a
+malformed or forged-but-invalid artifact: producers **stamp** the version and
+validate before writing; consumers **assert** it via `hc_validate` before reading
+a single field. It is the *shape*-level expression of the harness's core posture
+("never make the gate easier to pass") — any validation failure fails **toward
+BLOCK/refuse**. See *Hard contracts* below.
+
 Flow:
 
 ```
@@ -230,6 +240,69 @@ threshold. Durable progress lives in **git**, not in `.harness/`.
 
 ---
 
+## Hard contracts (versioned + fail-closed)
+
+Every JSON artifact the harness produces or consumes has a **declared
+JSON-Schema** under `contracts/` and carries `contract_version` (const `1`):
+`done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`,
+`resolver-output.schema.json`, `base-dod.schema.json`. Machine producers
+**stamp** the version; consumers **assert** it by validating before trusting a
+field. `install.sh` copies `contracts/` → `.claude/contracts/`; the library
+resolves it into `HC_CONTRACTS_DIR`.
+
+**Why versioned + fail-closed.** The gate already refuses to trust what the agent
+*says* about outcomes (Step 8); the contracts extend that distrust to the
+*shape* of the artifacts themselves. A malformed done-state or a forged-but-invalid
+review-log must not slip through to the trust-bearing checks — so validation is a
+hard gate whose every failure mode (invalid instance, a missing schema file =
+broken install, or an unavailable validator = library didn't source) resolves
+**toward BLOCK/refuse**, never toward a silent allow. `contract_version` lets a
+consumer detect an artifact from an older shape rather than silently
+mis-interpret it, and lets `done-detect.sh` **auto-upgrade** a pre-v1 config in
+place.
+
+**Why a jq-only validator, not ajv.** `hc_validate <schema> <json>` (in
+`harness-common.sh`) implements a deliberately small JSON-Schema **subset** —
+`type` (incl. array-of-types unions and `integer`), `required`, `properties`,
+`items`, `enum`, `const`, `additionalProperties` — in pure `jq`. No
+`$ref`/`oneOf`/`anyOf`/`allOf`/`pattern`/`format`. The harness's only hard
+dependency is already `jq` (the gate degrades to allow when jq is absent); adding
+`node`+`ajv` would introduce a second runtime the shipped bundle can't assume on
+every dev machine or CI box. The subset covers exactly what these five schemas
+need, and the validator prints `OK`/returns 0 when valid and `ERR: <path>: <what>`
+(the first violation in document order)/returns 1 on any invalidity or error —
+fail-closed by construction (a jq crash → empty stdout + nonzero rc → treated as
+`ERR`).
+
+**Write-time config validation + auto-upgrade.** `done-detect.sh` never publishes
+an unvalidated config: it assembles the config in a tempfile, runs `hc_validate`
+against `done-config.schema.json`, and only `mv`s it into place if valid — so a
+detection bug can never overwrite a good config with a broken one. On an existing
+config it rewrites for **two** independent reasons: a changed source fingerprint
+(refresh the `detected` block) **or** a missing/mismatched `contract_version`
+(auto-upgrade to v1). Both go through the **same** seed-if-absent/preserve-if-present
+`jq` merge, so an upgrade seeds any newly-added keys while **preserving every
+human-owned field** (`overrides`, `max_fix_attempts`, `trunk`, `min_review_level`,
+…) — including a literal `false`. Upgrade-only runs stay minimal and idempotent.
+
+**Resolver → JSON.** `harness-resolve.sh` used to print `key=value` lines. It now
+emits a single JSON object conforming to `resolver-output.schema.json`
+(`contract_version`, `mode`, `task_key`, `base`, `trunk`, `branch`, `warn`) and
+**self-validates** it before printing — on failure it prints nothing and exits
+nonzero rather than emit a malformed object. `hc_resolve`'s internals are
+unchanged (it still sets the `HC_*` globals); only the wrapper's serialisation
+changed. The `/done` skill parses it with `jq` (Step 1), which is both more robust
+than grepping lines and self-documenting via the schema.
+
+**The ABI is itself a contract.** `contracts/shell-abi.json` declares each public
+`hc_*` function's globals, stdout shape, return codes, and sentinels. It is
+**test-enforced**: `harness-trial/test-abi.sh` fails if the real functions drift
+from the JSON (a new public function without an ABI entry fails), and
+`harness-trial/test-contracts.sh` covers `hc_validate` and the schemas. Both run
+under the repo's `run-tests.sh`.
+
+---
+
 ## Stop hook: `scripts/done-gate.sh`
 
 Fires on every main-agent turn exit. Logic in order:
@@ -238,6 +311,10 @@ Fires on every main-agent turn exit. Logic in order:
 2. Not a git repo (`git rev-parse HEAD` fails) → **exit 0** (no changeset baseline possible).
 3. `HEAD == baseline/<session_id>.sha` **AND working tree clean** → **exit 0** (nothing happened this session). A dirty tree here means uncommitted "done" — it must NOT pass, so it falls through to the checks below (independent-review finding).
 4. Read `.claude/.harness/done-state/<task_key>.json`. Missing → **BLOCK**.
+4b. **Validate the done-state against its contract** (`hc_validate` vs
+   `done-state.schema.json`) *before* any of its fields (`verified_sha`, the Step-8
+   outcomes) are trusted. Invalid, a missing schema file, or an unavailable
+   validator → **BLOCK** — fail closed on shape.
 5. `verified_sha != HEAD` → **BLOCK** ("changes committed since last /done — re-run it").
 6. **Working tree has INTRODUCED changes → BLOCK.** Not "any non-empty `git status
    --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks
@@ -255,7 +332,10 @@ Fires on every main-agent turn exit. Logic in order:
    - `tests.exit_code == 0`
    - `lint.exit_code == 0` **if `.lint` is recorded** (projects with no lint command skip this)
    - an **independent review-log exists for the current HEAD** —
-     `.claude/.harness/review-log/<HEAD>.json` — with **zero BLOCKING findings**.
+     `.claude/.harness/review-log/<HEAD>.json` — that **passes its contract**
+     (`hc_validate` vs `review-log.schema.json`; invalid / missing schema /
+     unavailable validator → BLOCK, *before* its fields are read) and has **zero
+     BLOCKING findings**.
      The blocking count is **computed structurally by the gate** (`hc_review_blocking`
      in `harness-common.sh`) from `findings[].severity` and the configured
      `min_review_level` (default `high`): a finding blocks iff
@@ -311,12 +391,17 @@ prevents a stale escalation from disarming the gate for the rest of the session
 
 `done-write-state.sh` mirrors step 8: it **refuses to write** a done-state unless (with no
 escalation) `tests.exit_code == 0`, `lint.exit_code == 0` when lint is configured, a
-review-log for the current HEAD exists with **zero blocking findings** (recomputed by the
-same `hc_review_blocking` from `findings[].severity` + `min_review_level`), and the log's
-`files_reviewed` **covers every changed file** in `<HC_BASE>..HEAD` (recomputed by the same
-`hc_review_coverage_gap` the gate uses; `SKIP` when no base is resolvable → no coverage
-refusal) — so the writer and the gate can never diverge and the agent gets the feedback at
-`/done` time rather than at stop time. Its dirty-tree refusal uses the **same
+review-log for the current HEAD exists — one that **passes `review-log.schema.json`** (a
+forged/malformed log is refused here, before `hc_review_blocking`/`hc_review_coverage_gap`
+run) — with **zero blocking findings** (recomputed by the same `hc_review_blocking` from
+`findings[].severity` + `min_review_level`), and the log's `files_reviewed` **covers every
+changed file** in `<HC_BASE>..HEAD` (recomputed by the same `hc_review_coverage_gap` the gate
+uses; `SKIP` when no base is resolvable → no coverage refusal). It **stamps
+`contract_version: 1`** into the assembled state and, **unconditionally**, validates it
+against `done-state.schema.json` before it reaches disk — escalation bypasses the green-OUTCOME
+refusals only, never the structural-validity gate; an invalid state is never written. So the
+writer and the gate can never diverge and the agent gets the feedback at `/done` time rather
+than at stop time. Its dirty-tree refusal uses the **same
 `hc_tree_status` classifier** as the gate: it refuses **iff introduced blockers exist**
 (the changeset's own uncommitted work), writes when only pre-existing warnings remain, and
 sets `tree_clean` to reflect "no blockers" (not "no dirt at all"). The gate remains the
@@ -415,7 +500,9 @@ Resolve the session id first (env var → `current-session` marker → `ls -t`
 heuristic; see *Session-id resolution*), reuse it downstream so it can't drift
 from the gate's, then `git diff <baseline_sha> HEAD --stat` (or merge-base diff on
 a feature branch). Everything downstream is scoped to **this changeset**, never
-the whole repo.
+the whole repo. The base/`task_key` come from `harness-resolve.sh`, which now
+prints a **single self-validated JSON object** (`resolver-output` contract);
+parse it with `jq` (`.base`, `.task_key`), not by grepping `key=value` lines.
 
 ### Step 2 — Tests (with before/after checkpoint)
 
@@ -475,9 +562,13 @@ a summary:** give it the resolved Step-1 `<base>` SHA + the changed-file list an
 to run `git diff --name-only <base> HEAD` **itself** to get the authoritative changed-file
 list and review **every** file in the **full changeset**. Its deliverable **is
 the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the log itself:
-`{ "reviewed_sha": "<HEAD>", "min_review_level": "high", "files_reviewed": [paths …],
-"findings": [ {severity, file, line, desc} … ], "open_findings": <n>, "advisory_findings":
-<n> }`. `files_reviewed` is the repo-relative paths (as `git diff --name-only` emits them)
+`{ "contract_version": 1, "reviewed_sha": "<HEAD>", "min_review_level": "high",
+"files_reviewed": [paths …], "findings": [ {severity, file, line, desc} … ],
+"open_findings": <n>, "advisory_findings": <n> }`. The log must carry
+`contract_version: 1` and conform to `review-log.schema.json`: the gate (Step 8)
+and the writer both `hc_validate` it and BLOCK/refuse on a malformed or
+version-less log *before* any severity/coverage reasoning runs, so the subagent
+must produce a well-shaped log. `files_reviewed` is the repo-relative paths (as `git diff --name-only` emits them)
 the reviewer attests it examined; the gate/writer require it to cover every changed file in
 `<base>..HEAD` **structurally** (a changed file not attested blocks), so the attestation
 must be complete and truthful. **Deterministic-first (prompt-level economy):** the reviewer
@@ -533,12 +624,15 @@ and **refuses to write** when the tree has **introduced blockers** (baseline-rel
 classifier as the gate — pre-existing entries are ignored), or when (absent an escalation)
 tests/lint aren't green or the review-log for HEAD has **blocking findings** (recomputed
 structurally from `findings[].severity` + `min_review_level`, same as the gate). No
-hand-written SHA strings.
+hand-written SHA strings. It **stamps `contract_version: 1`** and validates the assembled
+done-state against `done-state.schema.json` **before writing** (unconditional — escalation
+never bypasses structural validity); an invalid state is refused, never reaches disk.
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
 (Step 5), which the gate and the writer both read.
 
 ```json
 {
+  "contract_version": 1,
   "session_id": "<from hook>",
   "verified_sha": "<git rev-parse HEAD>",
   "tree_clean": true,
@@ -680,6 +774,7 @@ every escalation is echoed in the step-8 summary for the user to see.
 
 ```json
 {
+  "contract_version": 1,
   "source_fingerprint": "<hash of package.json scripts + lockfile>",
   "detected": {
     "package_manager": "pnpm",
@@ -710,7 +805,11 @@ every escalation is echoed in the step-8 summary for the user to see.
 `start_timeout`, `trunk`, `auto_branch`, `branch_prefix`, `untracked_policy`,
 `min_review_level` are human-owned and sticky; `detected` + `source_fingerprint`
 are auto-managed. The example matches exactly what `done-detect.sh` and
-`install.sh` seed.
+`install.sh` seed. `contract_version` (const `1`) stamps the config as conforming
+to `done-config.schema.json`; `done-detect.sh` validates the config against that
+schema **before writing** (a broken detection never overwrites a good config) and
+**auto-upgrades** a pre-v1 config in place — seeding any newly-added keys while
+preserving every human-owned field. See *Hard contracts*.
 
 `max_review_rounds` (default `2`) caps the Step-6 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the
@@ -773,7 +872,9 @@ global use.
 | File | Purpose |
 |---|---|
 | `completion-harness/scripts/done-gate.sh` | Stop hook gate |
-| `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) |
+| `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) + `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
+| `completion-harness/scripts/harness-resolve.sh` | `/done` Step 1: executable resolver wrapper — prints a self-validated JSON object (resolver-output contract), `jq`-parsed by the skill |
+| `completion-harness/contracts/*.json` | Hard-contract schema store: 5 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
 | `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
 | `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
 | `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
@@ -787,6 +888,7 @@ global use.
 
 **Installed into a target project** (by `install.sh`):
 `.claude/scripts/`, `.claude/skills/done/`, `.claude/dod/base-dod.md`,
+`.claude/contracts/` (the schema store `hc_validate` reads),
 `.claude/done-config.json`; hooks appended to `.claude/settings.local.json` (machine-local,
 opt-in per machine); `.claude/.harness/` (baselines + done-state) gitignored.
 

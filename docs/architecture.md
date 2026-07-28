@@ -34,6 +34,22 @@ from a shared classifier — never hand-written); **(2) never make the gate easi
 to pass** (every ambiguous/degraded path fails *toward* BLOCK, never toward a
 silent allow).
 
+**Hard contracts (versioned + fail-closed).** Every JSON artifact the harness
+produces or consumes carries a `contract_version` (const **`1`**) and has a
+declared JSON-Schema in `contracts/` (done-state, review-log, done-config,
+resolver-output, base-dod). Machine producers **stamp** the version
+(`done-write-state.sh`, `done-detect.sh`, `harness-resolve.sh` all write
+`contract_version: 1`); consumers **assert** it by validating against the schema
+via `hc_validate` before trusting a single field. This is invariant (2) applied
+to *shape*: a schema failure (malformed artifact, a missing required field, or
+even a missing schema file / absent validator = broken install) fails **toward
+BLOCK/refuse**, never toward a silent allow. `hc_validate` is a jq-only
+JSON-Schema-**subset** validator (no node/ajv runtime); it prints `OK`/returns 0
+when valid, prints `ERR: …`/returns 1 on any invalidity or error. The
+shell-function ABI is itself a declared, **test-enforced** contract
+(`contracts/shell-abi.json` + `harness-trial/test-abi.sh`); the validator and
+schemas are covered by `harness-trial/test-contracts.sh`.
+
 ---
 
 ## 2. C4 Level 1 — System Context
@@ -96,12 +112,13 @@ C4Container
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
     Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, task_checks, review, fix loop, write-state, report")
-    Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier)")
-    Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as key=value")
+    Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_validate (jq-only schema validator, sets HC_CONTRACTS_DIR)")
+    Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as a self-validated JSON object (resolver-output contract)")
     Container(detect, "Config detector", "done-detect.sh", "Probe toolchain + fingerprint; seed/preserve done-config.json")
     Container(write, "State writer", "done-write-state.sh", "Inject live git facts; refuse dirty/non-green/dead session-id; write done-state")
     Container(pf, "Preflight", "done-preflight.sh", "Prove the gate is winnable before work (missing tree baseline = HARD block)")
-    ContainerDb(cfg, "Config", "done-config.json", "Effective commands + knobs (human-owned + auto-detected)")
+    ContainerDb(cfg, "Config", "done-config.json", "Effective commands + knobs (human-owned + auto-detected); contract_version 1")
+    ContainerDb(schemas, "Schema store", "contracts/*.json", "Shipped config: 5 JSON-Schemas + base-dod.json + shell-abi.json; the hard contracts hc_validate asserts")
     ContainerDb(state, "State store", ".claude/.harness/*", "baselines, current-session, task-base, tree-base, done-state, review-log")
   }
   System_Ext(git, "Git repo")
@@ -126,7 +143,11 @@ C4Container
   Rel(start, state, "writes baselines/tree-base/task-base")
   Rel(pre, state, "writes tree-base")
   Rel(write, state, "writes done-state")
-  Rel(detect, cfg, "seed/refresh")
+  Rel(detect, cfg, "seed/refresh + write-time validate")
+  Rel(gate, schemas, "hc_validate done-state + review-log")
+  Rel(write, schemas, "hc_validate review-log + done-state (pre-write)")
+  Rel(detect, schemas, "hc_validate done-config (pre-write)")
+  Rel(wrap, schemas, "hc_validate resolver-output (self)")
   Rel(lib, git, "branch/merge-base/porcelain")
   Rel(start, tool, "background test snapshot")
   Rel(skill, tool, "tests/lint/start")
@@ -138,16 +159,24 @@ C4Container
   before *every* Write/Edit (cheap off-trunk fast-path). Stop fires on *every*
   turn exit — the structurally unavoidable enforcement point.
 - **Sourced, not shelled:** the gate/writer/preflight `. harness-common.sh` and
-  call `hc_resolve`/`hc_tree_status` as shell functions. The skill instead runs
-  `harness-resolve.sh` (an executable wrapper) because a skill can only shell
-  out, not source.
+  call `hc_resolve`/`hc_tree_status`/`hc_validate` as shell functions. The skill
+  instead runs `harness-resolve.sh` (an executable wrapper) because a skill can
+  only shell out, not source — and the wrapper now emits a self-validated JSON
+  object (parse with `jq`), no longer `key=value`.
+- **Schema store (`contracts/`) is shipped config, not runtime state.** It is
+  copied into the target (`install.sh` copies `contracts/` → `.claude/contracts/`);
+  `harness-common.sh` resolves it into `HC_CONTRACTS_DIR` (default: sibling of
+  `scripts/`). `hc_validate <schema> <json>` is the one shared validator every
+  producer/consumer calls, so the gate, the writer, and the detector can never
+  disagree on what "valid" means.
 - **Two distribution modes (same files):**
   - **Plugin** (`hooks/hooks.json`, `.claude-plugin/plugin.json`): hook commands
     resolve scripts via `${CLAUDE_PLUGIN_ROOT}/scripts/...`; the `/done` skill
     reads `base-dod.md` and helper scripts under `${CLAUDE_PLUGIN_ROOT}`. Enabling
     the plugin *is* the install.
-  - **`install.sh` mirror**: copies the bundle into the target's `.claude/`,
-    wires the three hooks into `settings.local.json` via a `jq` merge, and
+  - **`install.sh` mirror**: copies the bundle into the target's `.claude/`
+    (including `contracts/` → `.claude/contracts/`, the schema store `hc_validate`
+    reads), wires the three hooks into `settings.local.json` via a `jq` merge, and
     `sed`-rewrites `${CLAUDE_PLUGIN_ROOT}` → `$CLAUDE_PROJECT_DIR/.claude` in the
     copied `SKILL.md`. State refs (`$CLAUDE_PROJECT_DIR/.claude/.harness/...`) are
     untouched. `install.sh` copies `dod/base-dod.md` → **`.claude/dod/base-dod.md`**
@@ -169,7 +198,7 @@ flowchart TD
   S0PF["Step 0 Preflight<br/>done-preflight.sh → gate winnable?"] -->|HARD problem, exit 1| STOP["stop & fix/surface"]
   S0PF -->|winnable| S0["Step 0 Config detect<br/>done-detect.sh → effective config"]
   S0 --> S05["Step 0.5 Assemble effective DoD<br/>base-dod.md ⊕ agent instrs ⊕ task ⊕ user"]
-  S05 --> S1["Step 1 Scope<br/>harness-resolve.sh → base,task_key<br/>git diff base..HEAD"]
+  S05 --> S1["Step 1 Scope<br/>harness-resolve.sh → JSON (jq-parsed) base,task_key<br/>git diff base..HEAD"]
   S1 --> S2["Step 2 Tests + before/after<br/>run effective test/lint<br/>vs baselines/&lt;sha&gt;.tests.json"]
   S2 --> S3["Step 3 App startup<br/>start_check_cmd OR start bounded by start_timeout"]
   S3 --> S4["Step 4 task_checks<br/>run every entry"]
@@ -182,7 +211,7 @@ flowchart TD
   CAP -->|no| S6
   CAP -->|yes| ESC["escalate → user (AskUserQuestion, Cat C)"]
   ESC --> S7
-  S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean"] --> S8["Step 8 Report + EFFORT line"]
+  S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean; stamps contract_version:1<br/>hc_validate done-state schema BEFORE write → refuse if invalid"] --> S8["Step 8 Report + EFFORT line"]
 
   classDef script fill:#e8f0ff,stroke:#4472c4;
   class S0PF,S0,S1,S7 script;
@@ -190,7 +219,11 @@ flowchart TD
 
 **How to read this.** Boxes tinted blue delegate mechanical work to scripts
 (`done-preflight.sh`, `done-detect.sh`, `harness-resolve.sh`,
-`done-write-state.sh`); the rest is agent judgment. Any failing step means "fix
+`done-write-state.sh`); the rest is agent judgment. Two of these now enforce the
+hard contracts: `harness-resolve.sh` emits a **self-validated JSON** resolver
+object (Step 1 parses it with `jq`, not `key=value`), and `done-write-state.sh`
+**stamps** `contract_version: 1` and **validates the assembled done-state against
+its schema before writing** — an invalid state is refused, never reaches disk. Any failing step means "fix
 it, return to Step 2, re-verify" (SKILL global rule). Steps 2/3/5 have no data
 dependency and may run **concurrently** (lint ∥ tests; app-probe ∥ review); the
 Step-4 task_checks confirm the task is **complete and working** before the final
@@ -201,21 +234,28 @@ common path: a clean changeset costs exactly **one** review.
 
 ```mermaid
 flowchart TD
-  IN["stdin hook JSON<br/>session_id, stop_hook_active"] --> SRC[". harness-common.sh"]
+  IN["stdin hook JSON<br/>session_id, stop_hook_active"] --> SRC[". harness-common.sh<br/>(sets HC_CONTRACTS_DIR)"]
   SRC --> R["hc_resolve(session_id)<br/>→ HC_MODE, HC_TASK_KEY, HC_BASE, HC_TREE_BASE_FILE"]
   R --> KEY["DONE_STATE_FILE =<br/>.harness/done-state/&lt;HC_TASK_KEY&gt;.json"]
   R --> T["hc_tree_status(session_id)<br/>→ HC_TREE_BLOCKERS / HC_TREE_WARNINGS"]
-  KEY --> DEC["gate decision logic (Steps 1-9, see §6)"]
+  KEY --> V1["hc_validate(done-state.schema, DONE_STATE_FILE)<br/>Step 4b: invalid/absent-schema/no-validator → BLOCK"]
+  V1 --> DEC["gate decision logic (Steps 1-9, see §6)"]
   T --> DEC
-  DEC --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)<br/>hc_review_coverage_gap(files_reviewed, HC_BASE..HEAD)"]
+  DEC --> V2["hc_validate(review-log.schema, review-log/&lt;HEAD&gt;.json)<br/>Step 8: invalid/absent-schema/no-validator → BLOCK"]
+  V2 --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)<br/>hc_review_coverage_gap(files_reviewed, HC_BASE..HEAD)"]
 ```
 
 **How to read this.** The gate itself contains no identity or tree logic — it
-`source`s the library and calls two functions. `hc_resolve` decides *which*
+`source`s the library and calls its functions. `hc_resolve` decides *which*
 done-state file to read (keyed by `HC_TASK_KEY`); `hc_tree_status` decides
-whether the working tree carries the agent's own uncommitted work. That is why
-the writer and preflight, which source the same two functions, can never diverge
-from the gate.
+whether the working tree carries the agent's own uncommitted work; `hc_validate`
+asserts the two artifacts are structurally valid before any of their fields are
+trusted. That is why the writer and preflight, which source the same functions,
+can never diverge from the gate. **Contract gates:** the done-state is validated
+at **Step 4b** (right after "done-state exists", before the `verified_sha`/outcome
+fields are read) and the review-log at **Step 8** (right after "log exists",
+before the severity/coverage checks). Both fail closed — an invalid artifact, a
+missing schema file, or an unavailable validator all → BLOCK.
 
 ---
 
@@ -250,7 +290,7 @@ sequenceDiagram
   DN->>ST: Step 7 writes done-state/&lt;task_key&gt;.json (verified_sha=HEAD)
   AG-->>RT: ends turn
   RT->>ST: Stop (done-gate.sh) re-reads state + review-log
-  Note over RT,ST: verified_sha == HEAD, no tree blockers, all green
+  Note over RT,ST: hc_validate both artifacts (4b, 8); verified_sha == HEAD, no tree blockers, all green
   RT-->>AG: ALLOW (exit 0, empty stdout)
 ```
 
@@ -283,7 +323,9 @@ flowchart TD
   F -->|clean| ALLOW3["exit 0 (nothing happened)"]
   F -->|dirty| G["Step 4: done-state file exists?"]
   G -->|missing| BLK4["BLOCK: run /done"]
-  G -->|exists| H{"Step 5: verified_sha == HEAD?"}
+  G -->|exists| G4b{"Step 4b: hc_validate(done-state.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
+  G4b -->|invalid| BLK4b["BLOCK: done-state fails contract"]
+  G4b -->|valid| H{"Step 5: verified_sha == HEAD?"}
   H -->|no| BLK5["BLOCK: changes committed since /done"]
   H -->|yes| I{"Step 6: hc_tree_status<br/>HC_TREE_BLOCKERS non-empty?"}
   I -->|blockers| BLK6["BLOCK: uncommitted introduced changes"]
@@ -296,7 +338,9 @@ flowchart TD
   K2 -->|present & !=0| BLK8b["BLOCK: lint not green"]
   K2 -->|absent or 0| K3{"review-log/&lt;HEAD&gt;.json exists?"}
   K3 -->|no| BLK8c["BLOCK: no independent review for HEAD"]
-  K3 -->|yes| K4{"hc_review_blocking(log, min_review_level) == '0'?<br/>(structural: rank(severity) >= rank(min); default high;<br/>unknown/missing severity or jq-fail → block)"}
+  K3 -->|yes| K3v{"Step 8: hc_validate(review-log.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
+  K3v -->|invalid| BLK8v["BLOCK: review-log fails contract"]
+  K3v -->|valid| K4{"hc_review_blocking(log, min_review_level) == '0'?<br/>(structural: rank(severity) >= rank(min); default high;<br/>unknown/missing severity or jq-fail → block)"}
   K4 -->|no| BLK8d["BLOCK: N blocking (≥ min) findings"]
   K4 -->|yes| KC{"hc_review_coverage_gap(log, HC_BASE, HEAD) empty or 'SKIP'?<br/>(structural: files_reviewed ⊇ changed files in HC_BASE..HEAD;<br/>SKIP = no base → no coverage block; error w/ changeset → block)"}
   KC -->|no (gap)| BLK8cov["BLOCK: review did not cover changed files"]
@@ -306,7 +350,7 @@ flowchart TD
 
   classDef block fill:#ffe0e0,stroke:#c00;
   classDef allow fill:#e0ffe0,stroke:#0a0;
-  class BLK4,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8d,BLK8cov,BLK8e block;
+  class BLK4,BLK4b,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8v,BLK8d,BLK8cov,BLK8e block;
   class ALLOW0,ALLOW1,ALLOW2,ALLOW3,ALLOW7,ALLOW9 allow;
 ```
 
@@ -315,6 +359,13 @@ flowchart TD
   Exit 2 is deliberately *not* used — on exit 2 the runtime reads stderr and
   discards the stdout JSON reason. A stderr line is written too, but only as a
   human log.
+- **Contract gates fail closed.** Before any of a done-state's fields are read,
+  **Step 4b** runs `hc_validate(done-state.schema, DONE_STATE_FILE)`; before the
+  review-log's `findings[]`/`files_reviewed` are read, **Step 8** runs
+  `hc_validate(review-log.schema, review-log/<HEAD>.json)`. A schema failure, a
+  missing schema file (broken install), or an unavailable `hc_validate` (library
+  didn't source) all → BLOCK. This is the shape-level tier of invariant (2): a
+  malformed or forged-but-invalid artifact can't reach the trust-bearing checks.
 - **Ordering is load-bearing.** SHA (5) and tree (6) checks run **before**
   escalation (7). So an escalation disarms *only* the exact committed changeset
   it was recorded against — any new commit moves HEAD, Step 5 blocks first, and
@@ -361,6 +412,15 @@ flowchart TD
 or to the **session**, and pins the changeset base + tree baseline accordingly.
 It is offline and conservative — it never consults `origin/HEAD` (repos may have
 no remote) and degrades to session mode on any doubt.
+
+**Output format (changed).** `hc_resolve` internals are unchanged (it still sets
+`HC_*` globals). What changed is the **wrapper**: `harness-resolve.sh` now
+serialises those globals into a single JSON object conforming to
+`contracts/resolver-output.schema.json` (`contract_version`, `mode`, `task_key`,
+`base`, `trunk`, `branch`, `warn`) and **self-validates** it with `hc_validate`
+before printing — on validation failure it prints nothing and exits nonzero
+rather than emit a malformed object. The skill parses this with `jq`, not the old
+`key=value` grep.
 
 ```mermaid
 flowchart TD
@@ -527,7 +587,8 @@ flowchart LR
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | age-**excluded**; **terminal reap** on merge/gone |
 | `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | age 14d; `br-*` keys also **terminal reap** on merge/gone |
 | `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-5 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD |
-| `../done-config.json` | effective commands + knobs | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change | n/a (outside `.harness/`) |
+| `../done-config.json` | effective commands + knobs (`contract_version` 1) | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change; auto-upgraded to v1 in place | n/a (outside `.harness/`) |
+| `../contracts/*.json` | the 5 JSON-Schemas + `base-dod.json` + `shell-abi.json` | **artifact** (one schema per artifact) | install / plugin (shipped) | ship-time; **not runtime state** | n/a (shipped config, never reaped) |
 
 **How to read this / key decisions.** Three cleanups run at SessionStart, all guarded, honouring
 the **HARD SAFETY INVARIANT: never delete in-progress-task state, the current HEAD's review-log,
@@ -543,7 +604,10 @@ branch is always kept; collision-safe; **skipped when trunk unconfident**). (3) 
 hygiene** — a `review-log/<sha>.json` is kept only if `<sha>` is a live branch tip or the current
 HEAD (keep-set via `hc_live_review_shas`); the current HEAD's log is never deleted. Done-state is
 keyed by **task_key**, not session id, which is what lets a resumed session on the same branch
-inherit the prior verification.
+inherit the prior verification. **`contracts/` is shipped config, not runtime state** — it
+lives *outside* `.harness/`, is keyed by artifact (one schema per artifact), is copied in at
+install time (or provided by the plugin), and is never reaped; `hc_validate` reads it via
+`HC_CONTRACTS_DIR`.
 
 ---
 
@@ -651,20 +715,40 @@ and told to be exhaustive (fixing the trickle). `open_findings`/`advisory_findin
 in the log are informational; old-style logs (no `findings[]`) fall back to
 `open_findings`. Design (§Step 5/6, Config, Stop-hook Step 8) and code are in sync.
 
+**Hard contracts (added 2026-07-28).** Every JSON artifact now carries
+`contract_version` (const `1`) and has a JSON-Schema under `contracts/`
+(done-state, review-log, done-config, resolver-output, base-dod). A new jq-only
+validator `hc_validate <schema> <json>` (in `harness-common.sh`; sets
+`HC_CONTRACTS_DIR`) enforces a keyword subset (`type`/`required`/`properties`/
+`items`/`enum`/`const`/`additionalProperties`) and **fails closed** (invalid,
+missing schema, or unavailable validator → nonzero). Producers stamp the version
+and validate before writing: `done-write-state.sh` (done-state, refuse-on-invalid),
+`done-detect.sh` (config; stamps + **auto-upgrades** old configs in place, never
+destroying existing fields), `harness-resolve.sh` (emits self-validated JSON, no
+longer `key=value`). Consumers assert it: `done-gate.sh` validates the done-state
+at **Step 4b** and the review-log at **Step 8** before trusting their fields — both
+BLOCK on failure. `install.sh` copies `contracts/` → `.claude/contracts/`. The
+shell-function ABI is itself a declared, **test-enforced** contract
+(`contracts/shell-abi.json` + `harness-trial/test-abi.sh`); the validator + schemas
+are covered by `harness-trial/test-contracts.sh` (both run by the repo's
+`run-tests.sh`). Design (§Mechanism, Step 1/5/7, Stop-hook, Config, Files) and code
+are in sync.
+
 ---
 
 ## Appendix — file → responsibility index
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (coverage check), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set) |
-| `scripts/harness-resolve.sh` | Executable wrapper — prints resolver output as key=value (for the skill) |
-| `scripts/done-gate.sh` | Stop hook — the gate (Steps 1-9) |
+| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (coverage check), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set), `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
+| `scripts/harness-resolve.sh` | Executable wrapper — sources lib, prints resolver output as a **self-validated JSON object** (resolver-output contract), `jq`-parsed by the skill (no longer key=value) |
+| `contracts/*.json` | Hard-contract schema store: `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`, `resolver-output.schema.json`, `base-dod.schema.json` (the 5 JSON-Schemas `hc_validate` asserts), plus `base-dod.json` (the seed DoD) and `shell-abi.json` (the declared, test-enforced shell-function ABI) |
+| `scripts/done-gate.sh` | Stop hook — the gate (Steps 1-9); `hc_validate`s done-state (4b) + review-log (8) before trusting fields |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |
 | `scripts/auto-branch.sh` | PreToolUse(Write\|Edit) — trunk→task branch, pin task tree-base |
-| `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint |
+| `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint; stamps `contract_version:1`, auto-upgrades old configs, validates before writing |
 | `scripts/done-preflight.sh` | `/done` Step 0 — prove the gate is winnable |
-| `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts, refuse dirty/non-green, write done-state |
+| `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts, stamp `contract_version:1`, refuse dirty/non-green, validate done-state (+ review-log) against schema before writing (refuse if invalid) |
 | `skills/done/SKILL.md` | `/done` judgment steps 0-8 + escalation rules |
 | `dod/base-dod.md` | Base DoD folded into the effective DoD (Step 0.5) |
 | `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) |
