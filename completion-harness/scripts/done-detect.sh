@@ -172,7 +172,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
       deploy_check_cmd: null,
       trunk: null,
       auto_branch: true,
-      branch_prefix: "task/"
+      branch_prefix: "task/",
+      untracked_policy: "baseline"
     }
   ' > "$CONFIG_FILE" 2>/dev/null
 
@@ -193,6 +194,7 @@ elif [ "$STORED_FP" != "$NEW_FP" ]; then
       | (if has("trunk") then . else .trunk = null end)
       | (if has("auto_branch") then . else .auto_branch = true end)
       | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
+      | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
     ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
   fi

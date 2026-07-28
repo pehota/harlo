@@ -41,6 +41,7 @@ cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
 cp "$SCRIPT_DIR/scripts/baseline-snapshot.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh"
 cp "$SCRIPT_DIR/scripts/done-detect.sh"       "$CLAUDE_DIR/scripts/done-detect.sh"
 cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-state.sh"
+cp "$SCRIPT_DIR/scripts/done-preflight.sh"    "$CLAUDE_DIR/scripts/done-preflight.sh"
 # Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
 # harness-resolve.sh is the executable wrapper; auto-branch.sh is the
 # PreToolUse hook.
@@ -63,6 +64,7 @@ sed 's#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g' \
 cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/dod/base-dod.md"
 chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
          "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
+         "$CLAUDE_DIR/scripts/done-preflight.sh" \
          "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
@@ -79,7 +81,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "deploy_check_cmd": null,
   "trunk": null,
   "auto_branch": true,
-  "branch_prefix": "task/"
+  "branch_prefix": "task/",
+  "untracked_policy": "baseline"
 }
 JSON
   echo "  created starter done-config.json"
