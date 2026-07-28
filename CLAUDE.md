@@ -18,4 +18,6 @@ disagree, trust the code and re-sync the doc.
 
 ## Principles
 
-- dogfooding the completion-harness
+- yagni
+- kiss
+- dry
