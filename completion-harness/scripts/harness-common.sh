@@ -416,6 +416,100 @@ hc_review_coverage_gap() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc_live_task_keys [proj] [trunk] [current_branch]
+#
+# Prints the KEEP-set of task keys for the terminal reap — one `br-<sanitized>`
+# key per local branch that is an IN-PROGRESS task, newline-separated. The pure
+# decision logic for "which task state is load-bearing" lives here so it can be
+# unit-tested without any deletion (baseline-snapshot.sh does the rm).
+#
+# A local branch's task state is LIVE (KEEP) iff ALL hold:
+#   - the branch is NOT the trunk itself, AND
+#   - the branch is NOT merged into trunk
+#     (`! git merge-base --is-ancestor <branch> <trunk>`).
+# A merged branch's changeset is integrated → its task state is dead → NOT in
+# the keep-set → reapable. A branch that is GONE contributes no key at all →
+# its stale key is likewise absent from the keep-set → reapable.
+#
+# SAFETY: if trunk is EMPTY/UNCONFIDENT, integration cannot be judged, so this
+# prints NOTHING and the caller MUST skip the terminal reap entirely (never
+# guess "merged"). Callers detect skip via the trunk being empty, not via empty
+# output (a repo with only a merged trunk also yields empty output but that is a
+# confident-trunk state — the caller checks trunk emptiness itself before reap).
+#
+# Args: [proj] defaults to PROJECT_DIR/CLAUDE_PROJECT_DIR/PWD; [trunk] defaults
+# to hc__detect_trunk; [current_branch] should be the branch hc_resolve already
+# resolved (HC_BRANCH) — passing it avoids a second, racy `symbolic-ref` here
+# (a HEAD that detaches between hc_resolve's pin and this call would otherwise
+# drop the just-pinned current-task key from the keep-set). Falls back to a live
+# `symbolic-ref` only when the arg is omitted. Guarded; always returns 0.
+hc_live_task_keys() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local trunk="${2:-}"
+  local cur_arg="${3-__UNSET__}"
+  # Resolve trunk lazily against `proj` if not supplied.
+  if [ -z "$trunk" ]; then
+    local _saved_proj="$PROJECT_DIR"
+    PROJECT_DIR="$proj"
+    trunk=$(hc__detect_trunk)
+    PROJECT_DIR="$_saved_proj"
+  fi
+  # Unconfident trunk → cannot judge integration → keep-set is undefined; the
+  # caller skips reap. Emit nothing.
+  [ -z "$trunk" ] && return 0
+
+  # The CURRENT branch is the active in-progress task — ALWAYS live, regardless
+  # of merge status. A freshly-forked branch with no divergent commits yet is an
+  # ancestor of trunk (would look "merged"), but its task is just beginning and
+  # its state is load-bearing. Reaping it mid-task violates the hard invariant.
+  # Prefer the caller-supplied branch (hc_resolve's HC_BRANCH); fall back to a
+  # live symbolic-ref only when no arg was passed.
+  local cur
+  if [ "$cur_arg" = "__UNSET__" ]; then
+    cur=$(git -C "$proj" symbolic-ref --short -q HEAD 2>/dev/null)
+  else
+    cur="$cur_arg"
+  fi
+
+  local br
+  while IFS= read -r br; do
+    [ -z "$br" ] && continue
+    [ "$br" = "$trunk" ] && continue
+    if [ -n "$cur" ] && [ "$br" = "$cur" ]; then
+      printf 'br-%s\n' "$(hc__sanitize "$br")"
+      continue
+    fi
+    # Merged into trunk → integrated → NOT live (skip). Unmerged → live (keep).
+    if git -C "$proj" merge-base --is-ancestor "$br" "$trunk" 2>/dev/null; then
+      continue
+    fi
+    printf 'br-%s\n' "$(hc__sanitize "$br")"
+  done <<EOF
+$(git -C "$proj" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null)
+EOF
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# hc_live_review_shas [proj]
+#
+# Prints the KEEP-set of review-log SHAs — one per line — for review-log
+# hygiene. A `review-log/<sha>.json` is load-bearing ONLY if <sha> is a commit
+# the gate might still check: the tip of some local branch, or the current HEAD.
+# Everything else is superseded fix-churn and is reapable.
+#
+# The pure "is this sha a live tip / current HEAD" decision lives here; the
+# deletion stays in baseline-snapshot.sh. Guarded; always returns 0.
+hc_live_review_shas() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  # Current HEAD (empty in a non-git / unborn-branch repo).
+  git -C "$proj" rev-parse HEAD 2>/dev/null
+  # Every local branch tip.
+  git -C "$proj" for-each-ref --format='%(objectname)' refs/heads/ 2>/dev/null
+  return 0
+}
+
 # hc_tree_remediation — build the exact remediation text from the globals set by
 # the most recent hc_tree_status call. Names ONLY the blocking (introduced)
 # files. Pre-existing (warned-only) entries are intentionally NOT surfaced —

@@ -14,11 +14,26 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 HOOK_INPUT=$(cat 2>/dev/null)
 
 SESSION_ID=""
+SOURCE=""
 if command -v jq >/dev/null 2>&1; then
   SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
+  # SessionStart source: startup | resume | clear | compact | fork (top-level).
+  # Fires on /compact AND on AUTO-compaction — mid-task, with a DIRTY tree.
+  SOURCE=$(printf '%s' "$HOOK_INPUT" | jq -r '.source // ""' 2>/dev/null)
 fi
 # Fallback session id so we always have a stable filename.
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
+
+# Source-aware baseline guard. On a compact (manual /compact or auto-compaction)
+# the task is CONTINUING mid-flight with the agent's own uncommitted work in the
+# tree; re-snapshotting the baseline from that dirty tree would capture the
+# agent's work as "pre-existing" (whitelisting it) and lose the task's real
+# baseline. So on source == "compact" we PRESERVE an existing baseline and only
+# write it when ABSENT (first sight). For every other source
+# (startup|resume|clear|fork) or an empty/unknown source (older CLI), we
+# capture/refresh as before — a new-ish task context.
+IS_COMPACT=0
+[ "$SOURCE" = "compact" ] && IS_COMPACT=1
 
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
@@ -62,7 +77,13 @@ if [ -z "$HEAD_SHA" ]; then
   printf 'no-git\n' > "$BASELINE_DIR/${SESSION_ID}.sha" 2>/dev/null
   exit 0
 fi
-printf '%s\n' "$HEAD_SHA" > "$BASELINE_DIR/${SESSION_ID}.sha" 2>/dev/null
+# Compact preserves an existing session baseline (mid-task continuation); it must
+# not be re-snapshotted from the dirty mid-task HEAD. Write only if absent.
+if [ "$IS_COMPACT" -eq 1 ] && [ -f "$BASELINE_DIR/${SESSION_ID}.sha" ]; then
+  : # keep the existing session baseline
+else
+  printf '%s\n' "$HEAD_SHA" > "$BASELINE_DIR/${SESSION_ID}.sha" 2>/dev/null
+fi
 
 # --- resolve identity (lazily pins the task base in task mode) --------------
 # Source the shared resolver and resolve. In task mode this pins the fork base
@@ -74,6 +95,75 @@ if [ -f "$(dirname "$0")/harness-common.sh" ]; then
 fi
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "$SESSION_ID" 2>/dev/null
+fi
+
+# --- terminal reap: clean a task's state once it is INTEGRATED --------------
+# "Done is done": a task's changeset is truly finished when its branch is merged
+# into trunk or the branch is gone. Only then is its task-keyed state dead.
+#
+# HARD SAFETY: an IN-PROGRESS task's state is load-bearing (the gate re-reads it
+# every turn). We reap ONLY br-* task keys whose branch is merged/gone, computed
+# via the testable hc_live_task_keys keep-set. We NEVER reap:
+#   - a key any live (unmerged) local branch maps to (collision-safe: the key is
+#     in the keep-set, so it is kept even if a lossy sanitization collides);
+#   - SESSION-mode state (session-<id> done-states, baselines/*) — no branch to
+#     test integration against; that stays on the 14-day age reap.
+# If trunk is EMPTY/UNCONFIDENT we SKIP terminal reap entirely (never guess
+# "merged"). Fully guarded; never fails the hook.
+if command -v hc_live_task_keys >/dev/null 2>&1 || type hc_live_task_keys >/dev/null 2>&1; then
+  REAP_TRUNK=""
+  if command -v hc__detect_trunk >/dev/null 2>&1 || type hc__detect_trunk >/dev/null 2>&1; then
+    REAP_TRUNK=$(hc__detect_trunk 2>/dev/null)
+  fi
+  if [ -n "$REAP_TRUNK" ] && [ -d "$HARNESS_DIR" ]; then
+    # Keep-set: br-* keys of in-progress (unmerged, non-trunk) local branches.
+    # Pass HC_BRANCH (already resolved by hc_resolve above) so the current-task
+    # key can never be dropped by a HEAD that detaches after the pin (the reap
+    # would otherwise re-derive the branch and, if detached, treat a
+    # freshly-forked current branch as "merged" → reap its just-pinned state).
+    LIVE_KEYS=$(hc_live_task_keys "$PROJECT_DIR" "$REAP_TRUNK" "$HC_BRANCH" 2>/dev/null)
+    # is_live_key <key> → 0 iff <key> is in the keep-set (exact whole-line match).
+    is_live_key() { printf '%s\n' "$LIVE_KEYS" | grep -Fxq -- "$1" 2>/dev/null; }
+    # For every task-keyed state file whose key is a br-* key, reap it unless the
+    # key is live. task-base/*.sha, tree-base/*.dirty, done-state/*.json.
+    for d in task-base tree-base done-state; do
+      [ -d "$HARNESS_DIR/$d" ] || continue
+      for f in "$HARNESS_DIR/$d"/*; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f")
+        # Strip the single known extension to recover the <key>.
+        key="${b%.sha}"; key="${key%.dirty}"; key="${key%.json}"
+        case "$key" in
+          br-*) ;;                 # a task key — subject to terminal reap
+          *) continue ;;           # session-* or other — NOT terminal-reapable
+        esac
+        if ! is_live_key "$key"; then
+          rm -f "$f" 2>/dev/null || true
+        fi
+      done
+    done
+  fi
+fi
+
+# --- review-log hygiene: prune superseded fix-churn logs --------------------
+# review-log/<HEAD>.json accumulates one per fix commit. A log is load-bearing
+# ONLY if its <HEAD> is a commit the gate might check — the tip of some local
+# branch or the current HEAD. Prune the rest (superseded fix-churn).
+# SAFETY: never delete the current HEAD's review-log (it IS in the keep-set).
+if [ -d "$HARNESS_DIR/review-log" ] \
+   && { command -v hc_live_review_shas >/dev/null 2>&1 || type hc_live_review_shas >/dev/null 2>&1; }; then
+  LIVE_SHAS=$(hc_live_review_shas "$PROJECT_DIR" 2>/dev/null)
+  # Only prune when we could compute a keep-set (git ok). Empty keep-set in a git
+  # repo means no branches AND no HEAD — treat as "cannot judge" → keep all.
+  if [ -n "$LIVE_SHAS" ]; then
+    for f in "$HARNESS_DIR/review-log"/*.json; do
+      [ -e "$f" ] || continue
+      sha=$(basename "$f" .json)
+      if ! printf '%s\n' "$LIVE_SHAS" | grep -Fxq -- "$sha" 2>/dev/null; then
+        rm -f "$f" 2>/dev/null || true
+      fi
+    done
+  fi
 fi
 
 # --- pin the tree baseline (for the classifier) -----------------------------
@@ -107,12 +197,19 @@ if [ -z "$HC_TREE_BASE_FILE" ]; then
   HC_TREE_BASE_FILE="$BASELINE_DIR/${SESSION_ID}.dirty"
 fi
 if [ -n "$HC_TREE_BASE_FILE" ]; then
+  # Task mode is ALREADY pin-once (never re-seeded), so it is inherently safe on
+  # compact. The source guard's job is to protect SESSION-mode
+  # baselines/<sid>.dirty, which is normally rewritten every SessionStart: on a
+  # compact the tree is dirty with the agent's OWN work, so an existing session
+  # tree-base must be preserved (write only if ABSENT), exactly like the .sha.
   if [ "$HC_MODE" = "task" ]; then
     if [ ! -f "$HC_TREE_BASE_FILE" ]; then
       mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
       git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
         || : > "$HC_TREE_BASE_FILE" 2>/dev/null
     fi
+  elif [ "$IS_COMPACT" -eq 1 ] && [ -f "$HC_TREE_BASE_FILE" ]; then
+    : # compact: preserve the existing session tree baseline (do not re-seed)
   else
     mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
     git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
