@@ -6,3 +6,6 @@ harness-trial/
 
 # Private grading rubrics for harness testing — never commit
 test-expectations/
+
+# Harness runtime state (plugin active — machine-local, seeded at runtime)
+.claude/.harness/

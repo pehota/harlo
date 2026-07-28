@@ -1,0 +1,16 @@
+{
+  "source_fingerprint": null,
+  "detected": {},
+  "overrides": { "test": "bash run-tests.sh" },
+  "max_fix_attempts": 3,
+  "max_review_rounds": 2,
+  "baseline_snapshot": true,
+  "deploy_check_cmd": null,
+  "start_check_cmd": null,
+  "start_timeout": 30,
+  "trunk": "main",
+  "auto_branch": false,
+  "branch_prefix": "task/",
+  "untracked_policy": "baseline",
+  "min_review_level": "high"
+}
