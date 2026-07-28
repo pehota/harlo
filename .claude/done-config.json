@@ -1,7 +1,9 @@
 {
-  "source_fingerprint": null,
+  "source_fingerprint": "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe",
   "detected": {},
-  "overrides": { "test": "bash run-tests.sh" },
+  "overrides": {
+    "test": "bash run-tests.sh"
+  },
   "max_fix_attempts": 3,
   "max_review_rounds": 2,
   "baseline_snapshot": true,
@@ -12,5 +14,6 @@
   "auto_branch": false,
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
-  "min_review_level": "high"
+  "min_review_level": "high",
+  "contract_version": 1
 }
