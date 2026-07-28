@@ -31,7 +31,7 @@ Flow:
         ↓
 [agent invokes /done]
         ↓
-[detect/refresh config → tests → app start → code review → task_checks
+[detect/refresh config → tests → app start → task_checks → code review
  → address findings (batched; ≤ max_review_rounds) → re-verify]
         ↓
 [write done-state/<task_key>.json with verified SHA]
@@ -389,7 +389,7 @@ the user to restart the session so SessionStart pins it.
 
 **Prerequisite — capture `task_checks` at task start.** Task-stated verifications drift
 out of focus like standing instructions; the agent records them into done-state `task_checks` when the
-task begins, not at `/done` time. (Executed in Step 6.)
+task begins, not at `/done` time. (Executed in Step 4.)
 
 ### Step 0 — Config: detect / refresh (script: `done-detect.sh`)
 
@@ -407,7 +407,7 @@ deduped checklist. External/user instructions augment and, on conflict, **overri
 harness defaults (the user's rules win). Record the effective DoD verbatim into done-state
 `dod` — every task then carries proof of the exact standard it was held to. Each item in the
 effective DoD is a blocking check enforced by the steps below; an item with no matching
-built-in step becomes a task_check (step 6).
+built-in step becomes a task_check (step 4).
 
 ### Step 1 — Changeset scope
 
@@ -454,10 +454,21 @@ wait-forever option. A server that can't be meaningfully smoke-tested → **stat
 coverage** (Category A if it truly can't run). Docker/systemd/k8s targets that can't be
 exercised locally → the agent must **state the target explicitly and whether it was
 exercised** ("started the binary; real target is a Docker container, container not
-smoke-tested"). The app/start probe is independent of the Step-4 review — they may run
+smoke-tested"). The app/start probe is independent of the Step-5 review — they may run
 concurrently. Failure → fix → return to step 2.
 
-### Step 4 — Code review (independent subagent writes the review-log)
+### Step 4 — Task-specific checks
+
+Execute every entry in done-state `task_checks` (captured at task start — see Prerequisite).
+Automatable (e.g. an API call, a CLI run) → run it. Visual/UI → `/verify` or browser
+tooling, verified against the **real target medium and an independent source of truth**
+(design/spec), never against the agent's own render. Unreachable → Category C user-ask.
+**Never silently skipped.** This step confirms the task is **complete and working** (tests,
+app, task_checks) *before* the final code-solidity review (Step 5); if a Step-6 code-review
+fix changes behavior, any affected `task_checks` are re-verified so this earlier pass isn't
+silently invalidated.
+
+### Step 5 — Code review (independent subagent writes the review-log)
 
 Spawn a **fresh, independent, Write-capable** review subagent. **Hand it the REAL diff, not
 a summary:** give it the resolved Step-1 `<base>` SHA + the changed-file list and instruct it
@@ -493,7 +504,7 @@ count structurally** from `findings[].severity` + the config `min_review_level` 
 accurately. Findings below `min_review_level` are advisory (still listed). The gate later
 checks the log for the current HEAD has **zero blocking findings**.
 
-### Step 5 — Address findings (bounded loop, capped)
+### Step 6 — Address findings (bounded loop, capped)
 
 **Only findings at/above `min_review_level` gate.** Below-threshold (advisory) findings are
 recorded/reported (Step 8) but never force a round; a trivial advisory fix may be swept into
@@ -504,7 +515,7 @@ does not move, the existing review-log satisfies the gate, and there is **no sec
 (advisory findings may remain) — a clean changeset costs exactly one review.
 
 Otherwise: **batch** ALL blocking findings into **one** fix pass and **commit once** (HEAD
-moves once, not once per finding), then run **one** confirming pass (round 2) — a fresh Step-4
+moves once, not once per finding), then run **one** confirming pass (round 2) — a fresh Step-5
 review **scoped to the fix diff** (cheaper, and where regressions hide), which writes a new
 review-log for the new HEAD. The loop is capped by `max_review_rounds` (default 2): if round 2
 still has blocking findings, **do not loop again — STOP and escalate via AskUserQuestion**
@@ -512,14 +523,6 @@ still has blocking findings, **do not loop again — STOP and escalate via AskUs
 user's decision in `escalation`. Per-item, an unfixable finding still gets `max_fix_attempts`
 tries. A won't-fix finding that doesn't move HEAD must be escalated, never silently waived. If a
 round-1 fix caused a round-2 finding, that is surfaced in the Step-8 report.
-
-### Step 6 — Task-specific checks
-
-Execute every entry in done-state `task_checks` (captured at task start — see Prerequisite).
-Automatable (e.g. an API call, a CLI run) → run it. Visual/UI → `/verify` or browser
-tooling, verified against the **real target medium and an independent source of truth**
-(design/spec), never against the agent's own render. Unreachable → Category C user-ask.
-**Never silently skipped.**
 
 ### Step 7 — Write done-state (script: `done-write-state.sh`)
 
@@ -532,7 +535,7 @@ tests/lint aren't green or the review-log for HEAD has **blocking findings** (re
 structurally from `findings[].severity` + `min_review_level`, same as the gate). No
 hand-written SHA strings.
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
-(Step 4), which the gate and the writer both read.
+(Step 5), which the gate and the writer both read.
 
 ```json
 {
@@ -553,12 +556,12 @@ The `review` outcome is **not** a payload field — it is the separate review-lo
 ```
 
 `review_rounds` (integer, optional) is an **informational** judgment field — how many
-review rounds were used (Step 5). Neither the writer nor the gate enforces it (no new
+review rounds were used (Step 6). Neither the writer nor the gate enforces it (no new
 structural state); it only captures effort in done-state.
 
 Review evidence lives beside it: `.claude/.harness/review-log/<HEAD>.json` with **zero
 blocking findings** (recomputed by the gate/writer from `findings[].severity` +
-`min_review_level`), written by the Step-4 review subagent.
+`min_review_level`), written by the Step-5 review subagent.
 
 ### Step 8 — Report
 
@@ -578,7 +581,7 @@ the agent's standing instructions do** — so they are captured at **task start*
 
 - At task start (or first `/done`), the agent extracts explicit verification
   requirements from the task and writes them into done-state `task_checks`.
-- `/done` step 6 executes them alongside the built-ins, blocking equally.
+- `/done` step 4 executes them alongside the built-ins, blocking equally.
 - The harness thus reliably runs both the built-in checklist **and** whatever the
   task itself demanded.
 
@@ -709,7 +712,7 @@ every escalation is echoed in the step-8 summary for the user to see.
 are auto-managed. The example matches exactly what `done-detect.sh` and
 `install.sh` seed.
 
-`max_review_rounds` (default `2`) caps the Step-5 fix → re-review loop: round 1 is
+`max_review_rounds` (default `2`) caps the Step-6 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the
 fix diff. It is a **prompt-level** cap the `/done` agent obeys — exactly like
 `max_fix_attempts` — with no gate/writer counter behind it; a clean changeset
@@ -861,14 +864,14 @@ relying on them, and never run the harness under `--bare`.
 | 1. Code-read not exercised | Step 3 startup; `/verify` in task_checks |
 | 2. Verification needs sudo | Step 3 states it; escalation type A |
 | 3. Docker/sysfs not tested | `deploy_check_cmd` + explicit statement (step 3) |
-| 4. No code review | Step 4 (mandatory before done-state) |
+| 4. No code review | Step 5 (mandatory before done-state) |
 | 5. Review scope = whole repo | Step 1 changeset scope |
-| 6. Findings not acted on | Step 5 loop |
-| 7. No re-verify after fix | Step 5 → step 2 loop |
+| 6. Findings not acted on | Step 6 loop |
+| 7. No re-verify after fix | Step 6 → step 2 loop |
 | 8. Tests not run | Step 2 (mandatory, before/after checkpoint) |
-| 9. New coverage not checked | Step 4 review |
+| 9. New coverage not checked | Step 5 review |
 | 10. App startup | Step 3 |
-| (new) Task-stated checks forgotten | `task_checks` captured at start, step 6 |
+| (new) Task-stated checks forgotten | `task_checks` captured at start, step 4 |
 
 ---
 

@@ -2,7 +2,7 @@
 
 > A navigable, graphical map of the bash "completion harness": Claude Code hooks
 > + a `/done` skill that force an AI agent to actually **verify** a task (tests,
-> app start, independent code review, task-specific checks) before it may declare
+> app start, task-specific checks, independent code review) before it may declare
 > the task "done".
 >
 > **Source of truth is the CODE.** Every diagram below was derived by reading the
@@ -23,7 +23,7 @@ it read once and forgot. The mechanism has three parts, none sufficient alone:
 (a) a **Stop hook** (`done-gate.sh`) that fires on *every* turn exit and blocks
 the stop unless a valid, green, HEAD-matching done-state exists; (b) the
 **`/done` skill** that does the judgment work a hook cannot — run tests, boot the
-app, spawn a fresh independent reviewer, run task checks, then write the
+app, run task checks, spawn a fresh independent reviewer, then write the
 done-state; and (c) **config + state** (`done-config.json` + `.claude/.harness/*`)
 that make it portable and let a task's verification survive across sessions,
 keyed to the git branch. The gate trusts only deterministic evidence: command
@@ -95,7 +95,7 @@ C4Container
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
-    Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, review, fix loop, task_checks, write-state, report")
+    Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, task_checks, review, fix loop, write-state, report")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier)")
     Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as key=value")
     Container(detect, "Config detector", "done-detect.sh", "Probe toolchain + fingerprint; seed/preserve done-config.json")
@@ -172,17 +172,17 @@ flowchart TD
   S05 --> S1["Step 1 Scope<br/>harness-resolve.sh → base,task_key<br/>git diff base..HEAD"]
   S1 --> S2["Step 2 Tests + before/after<br/>run effective test/lint<br/>vs baselines/&lt;sha&gt;.tests.json"]
   S2 --> S3["Step 3 App startup<br/>start_check_cmd OR start bounded by start_timeout"]
-  S2 -.concurrent.-> S4["Step 4 Code review<br/>spawn FRESH Write-capable subagent<br/>writes review-log/&lt;HEAD&gt;.json"]
-  S3 --> S5
-  S4 --> S5{"Step 5 Fix loop<br/>zero BLOCKING findings?<br/>(≥ min_review_level)"}
-  S5 -->|yes, round 1| S6["Step 6 task_checks<br/>run every entry"]
-  S5 -->|no| FIX["batch-fix ALL findings<br/>commit ONCE (HEAD moves)<br/>confirming review scoped to fix diff"]
+  S3 --> S4["Step 4 task_checks<br/>run every entry"]
+  S2 -.concurrent.-> S5["Step 5 Code review<br/>spawn FRESH Write-capable subagent<br/>writes review-log/&lt;HEAD&gt;.json"]
+  S4 --> S6
+  S5 --> S6{"Step 6 Fix loop<br/>zero BLOCKING findings?<br/>(≥ min_review_level)"}
+  S6 -->|yes, round 1| S7
+  S6 -->|no| FIX["batch-fix ALL findings<br/>commit ONCE (HEAD moves)<br/>confirming review scoped to fix diff<br/>re-verify affected task_checks"]
   FIX --> CAP{"round == max_review_rounds (2)<br/>& still open?"}
-  CAP -->|no| S5
+  CAP -->|no| S6
   CAP -->|yes| ESC["escalate → user (AskUserQuestion, Cat C)"]
-  ESC --> S6
-  S6 --> S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean"]
-  S7 --> S8["Step 8 Report + EFFORT line"]
+  ESC --> S7
+  S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean"] --> S8["Step 8 Report + EFFORT line"]
 
   classDef script fill:#e8f0ff,stroke:#4472c4;
   class S0PF,S0,S1,S7 script;
@@ -191,10 +191,11 @@ flowchart TD
 **How to read this.** Boxes tinted blue delegate mechanical work to scripts
 (`done-preflight.sh`, `done-detect.sh`, `harness-resolve.sh`,
 `done-write-state.sh`); the rest is agent judgment. Any failing step means "fix
-it, return to Step 2, re-verify" (SKILL global rule). Steps 2/3/4 have no data
-dependency and may run **concurrently** (lint ∥ tests; app-probe ∥ review). The
-**zero-findings short-circuit** at Step 5 is the common path: a clean changeset
-costs exactly **one** review.
+it, return to Step 2, re-verify" (SKILL global rule). Steps 2/3/5 have no data
+dependency and may run **concurrently** (lint ∥ tests; app-probe ∥ review); the
+Step-4 task_checks confirm the task is **complete and working** before the final
+code-solidity review (Step 5). The **zero-findings short-circuit** at Step 6 is the
+common path: a clean changeset costs exactly **one** review.
 
 ### 4b. Inside the Stop gate (`done-gate.sh`) — the shared predicates it sources
 
@@ -244,7 +245,7 @@ sequenceDiagram
   RT-->>AG: BLOCK "Run /done"
   AG->>DN: invokes /done
   DN->>GIT: diff base..HEAD; run tests/app
-  DN->>ST: Step 4 subagent writes review-log/&lt;HEAD&gt;.json (open_findings 0)
+  DN->>ST: Step 5 subagent writes review-log/&lt;HEAD&gt;.json (open_findings 0)
   DN->>GIT: rev-parse HEAD, status --porcelain (live facts)
   DN->>ST: Step 7 writes done-state/&lt;task_key&gt;.json (verified_sha=HEAD)
   AG-->>RT: ends turn
@@ -453,9 +454,9 @@ never surfaced (⚠ doc drift — design shows them surfaced; §14).
 
 ---
 
-## 9. The review loop (SKILL Steps 4-5)
+## 9. The review loop (SKILL Steps 5-6)
 
-Step 4 spawns a fresh, **Write-capable**, independent subagent handed the **real
+Step 5 spawns a fresh, **Write-capable**, independent subagent handed the **real
 diff** (it runs `git diff --name-only <base> HEAD` itself for the authoritative
 changed-file list, then reviews the **full changeset**), instructed to be
 **exhaustive**, tag every finding with a `severity`, and record the files it
@@ -466,13 +467,13 @@ via `hc_review_blocking`) and **coverage** (`files_reviewed ⊇ changed files` v
 The reviewer is also told **deterministic-first**: don't re-report what Step-2
 tests/lint/type-check already catch (formatting, style, unused vars, type errors);
 spend judgment on logic, blast-radius, missing test coverage, invariants, security —
-prompt-level economy that keeps each review cheap. Step 5 is a bounded fix loop that
+prompt-level economy that keeps each review cheap. Step 6 is a bounded fix loop that
 exploits the HEAD-keying to make re-review free, and gates only on findings
 **at/above `min_review_level`**.
 
 ```mermaid
 flowchart TD
-  S4["Step 4: spawn FRESH Write-capable reviewer<br/>(general-purpose / claude — NOT a review-only type w/o Write)<br/>hand REAL diff (base SHA + file list); run git diff itself<br/>EXHAUSTIVE, tag severity; answer blast-radius Q-set<br/>write review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
+  S4["Step 5: spawn FRESH Write-capable reviewer<br/>(general-purpose / claude — NOT a review-only type w/o Write)<br/>hand REAL diff (base SHA + file list); run git diff itself<br/>EXHAUSTIVE, tag severity; answer blast-radius Q-set<br/>write review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
   R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate<br/>(advisory findings may remain)"]
   R1 -->|no| BATCH["batch ALL blocking findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)<br/>trivial advisory fixes only in the SAME commit"]
   BATCH --> COMMIT["commit ONCE → HEAD moves once<br/>old log (prev HEAD) now stale"]
@@ -525,7 +526,7 @@ flowchart LR
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | age-**excluded**; **terminal reap** on merge/gone |
 | `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | age 14d; `br-*` keys also **terminal reap** on merge/gone |
-| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD |
+| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-5 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD |
 | `../done-config.json` | effective commands + knobs | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change | n/a (outside `.harness/`) |
 
 **How to read this / key decisions.** Three cleanups run at SessionStart, all guarded, honouring
@@ -648,7 +649,7 @@ findings are `severity`-tagged and the gate/writer compute the blocking count vi
 advisory and never gate. Round-1 review is handed the real `git diff <base> HEAD`
 and told to be exhaustive (fixing the trickle). `open_findings`/`advisory_findings`
 in the log are informational; old-style logs (no `findings[]`) fall back to
-`open_findings`. Design (§Step 4/5, Config, Stop-hook Step 8) and code are in sync.
+`open_findings`. Design (§Step 5/6, Config, Stop-hook Step 8) and code are in sync.
 
 ---
 

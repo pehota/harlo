@@ -1,6 +1,6 @@
 ---
 name: done
-description: "Completion harness executor. Runs the Definition-of-Done checklist in order — config detect, tests with before/after checkpoint, app startup, changeset-scoped code review, task-specific checks — then writes the per-session done-state that clears the Stop gate. Invoke when finishing a task or when the Stop hook blocks with 'Run /done'."
+description: "Completion harness executor. Runs the Definition-of-Done checklist in order — config detect, tests with before/after checkpoint, app startup, task-specific checks, changeset-scoped code review — then writes the per-session done-state that clears the Stop gate. Invoke when finishing a task or when the Stop hook blocks with 'Run /done'."
 user-invocable: true
 argument-hint: '(no args) — verifies the current changeset and writes done-state'
 ---
@@ -35,7 +35,7 @@ Task-stated verifications ("visually verify the button", "confirm the endpoint
 returns 200") drift out of focus by the end, just like your standing instructions
 do. So at **task start** — not at `/done` time — extract the explicit verification
 requirements from the task statement and record them into done-state
-`task_checks`. Step 6 only *runs* them.
+`task_checks`. Step 4 only *runs* them.
 
 ## Step 0 (Preflight) — prove the gate is winnable
 
@@ -78,12 +78,12 @@ a lower one on conflict — the user's rules win):
    **setup-agnostic**: it adapts to whatever instructions you actually run under,
    not to a hardcoded path.
 3. **Task-stated verifications** in the task itself (→ these also become
-   `task_checks`, Step 6).
+   `task_checks`, Step 4).
 4. **Explicit user instructions this session.**
 
 **Merge** every completion-affecting instruction into **one deduped effective
 checklist.** **Never silently drop a folded item:** each is a blocking check that
-maps to a step below or becomes a `task_check` (Step 6); if genuinely
+maps to a step below or becomes a `task_check` (Step 4); if genuinely
 unenforceable, surface an escalation (A/B/C) with a reason — do not drop it.
 **Record the effective DoD verbatim** into done-state `dod` (Step 7) — proof of the
 exact standard the changeset was held to.
@@ -194,14 +194,33 @@ binary; real target is a Docker container, container not smoke-tested".
 If `deploy_check_cmd` is set, run it and check the exit code. If absent, **state**
 the deploy target and whether it was exercised — never claim false coverage.
 
-This step (app/start probe) is independent of the Step-4 review subagent — the two
+This step (app/start probe) is independent of the Step-5 review subagent — the two
 may run **concurrently**.
 
-## Step 4 — Code review (independent subagent writes the review-log)
+## Step 4 — Task-specific checks
+
+Execute **every** entry in done-state `task_checks` (captured at task start — see
+Prerequisite).
+
+- Automatable (API call, CLI run) → run it.
+- Visual / UI → use `/verify` or browser tooling, verified against the **real
+  target medium and an independent source of truth** (design / spec), never
+  against your own render.
+- Unreachable → **Category C user-ask**.
+
+**Never silently skip a task check.**
+
+This step confirms the task is **complete and working** (tests, app, task_checks
+all pass) *before* the final gate — code-solidity review (Step 5). If a
+code-review fix (Step 6) changes behavior, **re-verify any affected `task_checks`**
+so this earlier pass is not silently invalidated.
+
+## Step 5 — Code review (independent subagent writes the review-log)
 
 Spawn a **fresh, independent, Write-capable** review subagent (Task tool) scoped
 to the **Step-1 changeset diff**. This review is independent of the Step-3 app/start
-probe — you may launch it to run **concurrently** with Step 3. Its deliverable **is a file it writes itself** —
+probe and the Step-4 task_checks — you may launch it to run **concurrently** with
+Step 3. Its deliverable **is a file it writes itself** —
 you do **not** transcribe a count from your own context (that is self-review; the
 harness requires an independent reviewer — don't grade your own homework).
 
@@ -265,7 +284,7 @@ every "yes":
    the existing ones — or can a failure fall through to a success path?
 4. Does the change silently broaden a type, scope, capability, or lifetime beyond
    what the task required?
-5. **(Confirming pass only — Step 5)** does a fix in this diff introduce a NEW
+5. **(Confirming pass only — Step 6)** does a fix in this diff introduce a NEW
    issue elsewhere?
 
 Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
@@ -296,14 +315,14 @@ count STRUCTURALLY from `findings[].severity` and the config `min_review_level`*
 BLOCKING — safe direction). So the reviewer **cannot dodge the gate by miscounting
 `open_findings`** — it must tag severities accurately. Because the log is keyed to
 the reviewed SHA, fixing a finding (which moves HEAD) automatically invalidates the
-old log — re-review is forced for free (Step 5).
+old log — re-review is forced for free (Step 6).
 
-## Step 5 — Address findings (bounded loop)
+## Step 6 — Address findings (bounded loop)
 
 The fix → re-review loop is **bounded** by `max_review_rounds` (from Step-0
 config, default 2). This is a **prompt-level** cap you obey — exactly like
 `max_fix_attempts` — not a counter tracked by any script. **Round 1** is the
-initial full-changeset review of Step 4; **round 2** is the confirming pass below.
+initial full-changeset review of Step 5; **round 2** is the confirming pass below.
 
 **Only findings at/above `min_review_level` must be fixed.** Below-threshold
 (advisory) findings do **not** gate — record and report them in Step 8. You MAY
@@ -328,7 +347,7 @@ Otherwise (round 1 has blocking findings):
 2. **Commit ONCE.** Commit the whole batch as a single commit so **HEAD moves
    once**, not once per finding. The old review-log (keyed to the previous HEAD)
    is now stale — re-review is forced for free.
-3. **Confirming pass (round 2), scoped to the fix diff.** Re-run Step 4, but
+3. **Confirming pass (round 2), scoped to the fix diff.** Re-run Step 5, but
    scope the fresh review to the **diff the fix commit introduced** (`git diff
    <HEAD before the fix commit> HEAD`), not the whole changeset again — it is
    cheaper and it is where regressions hide. Include the confirming-pass question
@@ -348,19 +367,6 @@ recomputes the blocking count structurally from `findings[].severity` +
 appear in the round-2 confirming pass, call that out explicitly in the Step 8
 report.
 
-## Step 6 — Task-specific checks
-
-Execute **every** entry in done-state `task_checks` (captured at task start — see
-Prerequisite).
-
-- Automatable (API call, CLI run) → run it.
-- Visual / UI → use `/verify` or browser tooling, verified against the **real
-  target medium and an independent source of truth** (design / spec), never
-  against your own render.
-- Unreachable → **Category C user-ask**.
-
-**Never silently skip a task check.**
-
 ## Step 7 — Write done-state (script)
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-write-state.sh "$SESSION_ID"` —
@@ -369,7 +375,7 @@ never disagree — supplying the
 **judgment fields** as a JSON payload on **stdin** (`dod`, `tests` summary,
 optional `lint` summary, `app_started`, `task_checks`, `escalation`). **`review`
 is NOT a payload field** — the review evidence is the separate HEAD-keyed
-review-log the Step-4 subagent wrote. The script **injects the git facts live** —
+review-log the Step-5 subagent wrote. The script **injects the git facts live** —
 `verified_sha` from `git rev-parse HEAD`, `tree_clean` from `git status
 --porcelain` — **refuses to write over a dirty tree** (commit first), and (absent
 an escalation) refuses unless tests are green, lint is green when configured, and
@@ -406,12 +412,12 @@ Payload shape (facts are injected, not supplied):
 
 `lint` is included only when a lint command is configured (Step 2); omit it
 otherwise. `review_rounds` (integer, **optional**) is your judgment record of how
-many review rounds you used (Step 5). It is **informational only** — neither the
+many review rounds you used (Step 6). It is **informational only** — neither the
 writer nor the gate enforces it (no new structural state); it exists so the effort
 is captured in done-state alongside the Step-8 report. `dod` records the effective DoD from Step 0.5 verbatim — `sources`
 lists the inputs folded in, `items` is the deduped checklist. The script writes
 `session_id`, `verified_sha`, `tree_clean` itself and prints the path written.
-The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 4) lives beside
+The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 5) lives beside
 the done-state; both the writer and the gate read it.
 
 ## Step 8 — Report
