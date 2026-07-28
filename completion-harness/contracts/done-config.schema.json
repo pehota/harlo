@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "required": [
+    "contract_version",
+    "detected",
+    "overrides",
+    "max_fix_attempts",
+    "max_review_rounds",
+    "baseline_snapshot",
+    "start_timeout",
+    "untracked_policy",
+    "min_review_level",
+    "auto_branch",
+    "branch_prefix"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "source_fingerprint": { "type": "string" },
+    "detected": {
+      "type": "object",
+      "properties": {
+        "package_manager": { "type": ["string", "null"] },
+        "test": { "type": ["string", "null"] },
+        "build": { "type": ["string", "null"] },
+        "start": { "type": ["string", "null"] },
+        "lint": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "overrides": { "type": "object", "additionalProperties": true },
+    "max_fix_attempts": { "type": "integer" },
+    "max_review_rounds": { "type": "integer" },
+    "baseline_snapshot": { "type": "boolean" },
+    "deploy_check_cmd": { "type": ["string", "null"] },
+    "start_check_cmd": { "type": ["string", "null"] },
+    "start_timeout": { "type": "integer" },
+    "trunk": { "type": ["string", "null"] },
+    "untracked_policy": { "enum": ["baseline", "strict"] },
+    "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
+    "auto_branch": { "type": "boolean" },
+    "branch_prefix": { "type": "string" }
+  },
+  "additionalProperties": true
+}

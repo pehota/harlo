@@ -1,0 +1,14 @@
+{
+  "contract_version": 1,
+  "items": [
+    { "id": "tests-green", "text": "Tests green (before/after checkpoint)", "blocking": true },
+    { "id": "lint-green", "text": "Lint green (if configured)", "blocking": false },
+    { "id": "app-starts", "text": "App starts", "blocking": true },
+    { "id": "changeset-review", "text": "Changeset-scoped independent (fresh-agent) review", "blocking": true },
+    { "id": "no-open-findings", "text": "No open review findings", "blocking": true },
+    { "id": "reverified-after-fixes", "text": "Re-verified after fixes", "blocking": true },
+    { "id": "verification-real", "text": "Verification real (exercised), not synthetic (diff-read)", "blocking": true },
+    { "id": "deploy-target-stated", "text": "Deploy target stated", "blocking": true },
+    { "id": "task-checks-executed", "text": "`task_checks` executed", "blocking": true }
+  ]
+}

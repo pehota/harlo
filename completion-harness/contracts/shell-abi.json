@@ -1,0 +1,71 @@
+{
+  "contract_version": 1,
+  "functions": [
+    {
+      "name": "hc_resolve",
+      "globals": [
+        "PROJECT_DIR",
+        "HARNESS_DIR",
+        "HC_BRANCH",
+        "HC_TRUNK",
+        "HC_MODE",
+        "HC_TASK_KEY",
+        "HC_BASE",
+        "HC_WARN",
+        "HC_TREE_BASE_FILE"
+      ],
+      "stdout": "none (sets globals; HC_MODE is task or session)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_tree_status",
+      "globals": ["HC_TREE_BLOCKERS", "HC_TREE_WARNINGS"],
+      "stdout": "none (sets globals)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_tree_remediation",
+      "globals": [],
+      "stdout": "remediation message naming only blockers",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_review_blocking",
+      "globals": [],
+      "stdout": "integer count of blocking findings, or ERR",
+      "return_codes": "always 0",
+      "sentinels": ["ERR"]
+    },
+    {
+      "name": "hc_review_coverage_gap",
+      "globals": [],
+      "stdout": "newline-separated uncovered files, empty=full coverage, or SKIP",
+      "return_codes": "always 0",
+      "sentinels": ["SKIP"]
+    },
+    {
+      "name": "hc_live_task_keys",
+      "globals": [],
+      "stdout": "newline-separated br-<key> keep-set",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_live_review_shas",
+      "globals": [],
+      "stdout": "newline-separated keep-set SHAs",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_validate",
+      "globals": [],
+      "stdout": "OK on success, or ERR: <path>: <what>",
+      "return_codes": "0 valid, 1 invalid/error",
+      "sentinels": ["OK", "ERR"]
+    }
+  ]
+}

@@ -13,6 +13,14 @@
 #
 # Idempotent: calling repeatedly returns the same pinned base.
 
+# Resolve the contracts dir relative to THIS script's own location so callers
+# never hardcode it. Works whether this file lives in completion-harness/scripts/
+# (sibling completion-harness/contracts/) or .claude/scripts/ (sibling
+# .claude/contracts/).
+if [ -z "${HC_CONTRACTS_DIR:-}" ]; then
+  HC_CONTRACTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../contracts" 2>/dev/null && pwd)"
+fi
+
 # Sanitize a string for use in a filename / key: every char NOT in the safe
 # set [A-Za-z0-9_.-] becomes '-'.
 hc__sanitize() {
@@ -520,4 +528,145 @@ hc_tree_remediation() {
     msg="commit or stash these changes you introduced: $(printf '%s' "$HC_TREE_BLOCKERS" | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g')"
   fi
   printf '%s' "$msg"
+}
+
+# ---------------------------------------------------------------------------
+# hc_validate <schema_file> <json_file>
+#
+# Hard-contract validator. Validates a JSON instance against a JSON-Schema
+# subset using ONLY jq — no node/ajv/new runtime. This is a SECURITY GATE:
+# every ambiguity fails toward `return 1` (reject).
+#
+# Supported keyword subset (exactly these — NO $ref/oneOf/anyOf/allOf/
+# pattern/format): type (string OR array-of-strings union), required (array),
+# properties (object name→subschema), items (subschema applied to every array
+# element), enum (array of allowed scalars), const (exact required scalar),
+# additionalProperties (boolean, default true). Nullable is expressed as a type
+# union, e.g. ["string","null"].
+#
+# Contract: prints "OK" and returns 0 when the instance is valid; prints
+# "ERR: <path>: <what>" (the FIRST violation in document order) and returns 1
+# on any invalidity or error. Fail-closed: jq missing, unreadable/unparseable
+# schema or instance, or a jq runtime error → "ERR: ..." + return 1.
+hc_validate() {
+  local schema_file="$1" json_file="$2"
+
+  # jq is mandatory — without it we cannot reason about JSON at all → reject.
+  command -v jq >/dev/null 2>&1 || { printf 'ERR: jq unavailable\n'; return 1; }
+
+  # Schema and instance must both be present, readable, and parseable JSON.
+  [ -f "$schema_file" ] && [ -r "$schema_file" ] || { printf 'ERR: %s: schema missing or unreadable\n' "$schema_file"; return 1; }
+  [ -f "$json_file" ]   && [ -r "$json_file" ]   || { printf 'ERR: %s: instance missing or unreadable\n' "$json_file"; return 1; }
+  jq . "$schema_file" >/dev/null 2>&1 || { printf 'ERR: %s: schema not valid JSON\n' "$schema_file"; return 1; }
+  jq . "$json_file"   >/dev/null 2>&1 || { printf 'ERR: %s: instance not valid JSON\n' "$json_file"; return 1; }
+
+  # The recursive validator `v($schema; $path)` RETURNS a flat array of
+  # "path: why" error strings (empty array = valid), collected depth-first in
+  # document order. In bash we take `.[0]` — the FIRST error. Keyword order per
+  # node: type → const → enum → (object) required → additionalProperties →
+  # properties(recurse) → (array) items(recurse). Every keyword and every
+  # recursion is guarded on the INSTANCE's actual type so a union type or an
+  # absent keyword never crashes jq (a crash → empty stdout + nonzero rc →
+  # handled as fail-closed below). The schema arrives via --slurpfile, which
+  # wraps it in a one-element array, so the root schema is `$schema[0]`.
+  local errs rc
+  errs=$(jq -r --slurpfile schema "$schema_file" '
+    # jq type name of the instance mapped to a schema type name. Objects,
+    # arrays, strings, booleans and null map straight through; numbers map to
+    # "number" (schema "integer" is checked separately below).
+    def jtype:
+      (. | type) as $t
+      | if $t == "number" then "number" else $t end ;
+
+    # Does the instance satisfy a single schema type name $want?
+    #  - "integer": instance is a number equal to its own floor (no fractional
+    #    part). We use (. == (.|floor)) rather than (. % 1 == 0) because the jq
+    #    % operator truncates both operands first, so 3.5 % 1 == 3 % 1 == 0
+    #    would wrongly accept 3.5 as an integer.
+    #  - "number":  any number.
+    #  - anything else: exact jq-type-name match.
+    def type_ok($want):
+      if $want == "integer" then
+        ((. | type) == "number") and (. == (. | floor))
+      elif $want == "number" then
+        ((. | type) == "number")
+      else
+        (jtype == $want)
+      end ;
+
+    # Recursive validator. Returns [] when valid, else an array of error
+    # strings. $schema is the (sub)schema node; $path is a jq-path string used
+    # only for human-readable error messages.
+    def v($schema; $path):
+      # --- type: single string OR array-of-strings union (pass if ANY match).
+      ( if ($schema | type) == "object" and ($schema | has("type")) then
+            ($schema.type) as $ty
+            | ( if ($ty | type) == "array"
+                then ( . as $inst
+                       | if any($ty[]; . as $w | ($inst | type_ok($w)))
+                         then [] else [ ($path + ": expected type " + ($ty|tostring) + ", got " + jtype) ] end )
+                else ( . as $inst
+                       | if ($inst | type_ok($ty))
+                         then [] else [ ($path + ": expected type " + ($ty|tostring) + ", got " + jtype) ] end )
+                end )
+          else [] end ) as $type_errs
+
+      # --- const: exact equality.
+      | ( if ($schema | type) == "object" and ($schema | has("const")) then
+            ( if . == $schema.const then []
+              else [ ($path + ": expected const " + ($schema.const|tostring)) ] end )
+          else [] end ) as $const_errs
+
+      # --- enum: membership.
+      | ( if ($schema | type) == "object" and ($schema | has("enum")) then
+            ( . as $inst
+              | if any($schema.enum[]; . == $inst) then []
+                else [ ($path + ": not in enum " + ($schema.enum|tostring)) ] end )
+          else [] end ) as $enum_errs
+
+      # --- object keywords (only when the INSTANCE is an object).
+      | ( if (. | type) == "object" and ($schema | type) == "object" then
+            . as $inst
+            # required: each listed name must exist on the instance.
+            | ( if ($schema | has("required")) then
+                  [ $schema.required[] | . as $rk
+                    | select(($inst | has($rk)) | not)
+                    | ($path + ": missing required: " + $rk) ]
+                else [] end ) as $req_errs
+            # additionalProperties==false: no instance key outside properties.
+            | ( ($schema.properties // {} | keys) as $allowed
+                | if ($schema.additionalProperties == false) then
+                    [ $inst | keys[] | select( . as $k | ($allowed | any(. == $k)) | not )
+                      | ($path + ": additional property: " + .) ]
+                  else [] end ) as $addl_errs
+            # properties: recurse into each declared key the instance HAS,
+            # in stable key order for determinism.
+            | ( [ ($schema.properties // {} | keys[])
+                  | . as $k
+                  | select($inst | has($k))
+                  | ($inst[$k] | v($schema.properties[$k]; $path + "." + $k)) ]
+                | add // [] ) as $prop_errs
+            | ($req_errs + $addl_errs + $prop_errs)
+          else [] end ) as $obj_errs
+
+      # --- array keyword (only when the INSTANCE is an array and items given).
+      | ( if (. | type) == "array" and ($schema | type) == "object" and ($schema | has("items")) then
+            . as $arr
+            | ( [ range(0; ($arr | length)) as $i
+                  | ($arr[$i] | v($schema.items; $path + "[" + ($i|tostring) + "]")) ]
+                | add // [] )
+          else [] end ) as $items_errs
+
+      # Concatenate in the documented order; caller takes the first.
+      | ( $type_errs + $const_errs + $enum_errs + $obj_errs + $items_errs ) ;
+
+    v($schema[0]; "$") | .[0] // empty
+  ' "$json_file" 2>/dev/null)
+  rc=$?
+
+  # A jq runtime error (malformed program/data) → nonzero rc → fail-closed.
+  if [ "$rc" -ne 0 ]; then printf 'ERR: validator failure\n'; return 1; fi
+  # A non-empty first-error string → invalid.
+  if [ -n "$errs" ]; then printf 'ERR: %s\n' "$errs"; return 1; fi
+  printf 'OK\n'; return 0
 }

@@ -34,7 +34,7 @@ fi
 echo "Installing completion harness into: $TARGET_DIR"
 
 CLAUDE_DIR="$TARGET_DIR/.claude"
-mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod"
+mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod" "$CLAUDE_DIR/contracts"
 
 # --- copy bundle files ------------------------------------------------------
 cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
@@ -62,6 +62,10 @@ sed 's#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g' \
 # it. DOD.md (the harness project's own meta DoD) is intentionally NOT copied —
 # it stays in the bundle.
 cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/dod/base-dod.md"
+# Contracts: JSON-Schema files + base-dod.json + shell-abi.json. Copied whole so
+# harness-common.sh resolves them at .claude/contracts/ (sibling of scripts/).
+cp "$SCRIPT_DIR/contracts/"*.json "$CLAUDE_DIR/contracts/"
+echo "  copied contracts/"
 chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
          "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
          "$CLAUDE_DIR/scripts/done-preflight.sh" \
@@ -73,7 +77,8 @@ CONFIG_FILE="$CLAUDE_DIR/done-config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
   cat > "$CONFIG_FILE" <<'JSON'
 {
-  "source_fingerprint": null,
+  "contract_version": 1,
+  "source_fingerprint": "none",
   "detected": {},
   "overrides": {},
   "max_fix_attempts": 3,

@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": [
+    "contract_version",
+    "mode",
+    "task_key",
+    "base",
+    "trunk",
+    "branch",
+    "warn"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "mode": { "enum": ["task", "session"] },
+    "task_key": { "type": "string" },
+    "base": { "type": "string" },
+    "trunk": { "type": "string" },
+    "branch": { "type": "string" },
+    "warn": { "type": "string" }
+  },
+  "additionalProperties": true
+}

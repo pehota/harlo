@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "required": [
+    "contract_version",
+    "session_id",
+    "verified_sha",
+    "tree_clean",
+    "dod",
+    "tests",
+    "task_checks"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "session_id": { "type": "string" },
+    "verified_sha": { "type": "string" },
+    "tree_clean": { "type": "boolean" },
+    "dod": {
+      "type": "object",
+      "required": ["sources", "items"],
+      "properties": {
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "items": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "tests": {
+      "type": "object",
+      "required": ["exit_code"],
+      "properties": {
+        "exit_code": { "type": "integer" },
+        "newly_red": { "type": "array", "items": { "type": "string" } },
+        "pre_existing_red": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "lint": {
+      "type": "object",
+      "required": ["exit_code"],
+      "properties": {
+        "exit_code": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "app_started": { "type": "boolean" },
+    "review_rounds": { "type": "integer" },
+    "task_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["desc", "status"],
+        "properties": {
+          "desc": { "type": "string" },
+          "status": { "enum": ["passed", "failed", "skipped", "unreachable"] },
+          "how": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "escalation": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

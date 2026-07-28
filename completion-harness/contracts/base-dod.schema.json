@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": ["contract_version", "items"],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "blocking"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "blocking": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
