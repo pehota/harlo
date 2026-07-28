@@ -1,0 +1,23 @@
+#!/bin/bash
+#
+# pre-push hook — run the completion-harness test suites before allowing a push.
+# A non-zero exit aborts the push.
+#
+# Tracked here (.githooks/) so it is shared and reviewable. It is NOT active
+# until installed into this clone's hook path. To enable (does not disturb the
+# repo's existing .git/hooks/* — installs alongside them):
+#
+#     cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+#
+# (core.hooksPath is intentionally NOT used, because it would override the
+# repo's other hooks such as pre-commit.)
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+echo "pre-push: running harness test suites…"
+if ! bash run-tests.sh; then
+  echo "pre-push: tests FAILED — push aborted. (bypass with 'git push --no-verify' if you must.)" >&2
+  exit 1
+fi
+echo "pre-push: tests passed — allowing push."
+exit 0

@@ -40,6 +40,23 @@ claude --plugin-dir completion-harness
   - [`design.md`](docs/design.md) — full design and rationale.
   - [`design-brief.md`](docs/design-brief.md) — the original design prompt (historical).
 
+## Tests
+
+```
+bash run-tests.sh
+```
+
+Installs the bundle into the `harness-trial/` fixture and runs all suites (exits
+non-zero if any fail). Run a single suite with `bash harness-trial/test-<name>.sh`.
+
+**Run tests on push:** enable the tracked `pre-push` hook (installs alongside the
+repo's existing hooks; `core.hooksPath` is deliberately not used so those keep
+working):
+
+```
+cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
 ## Status
 
 Early. Validated in supervised (interactive) use; autonomous / headless runs are
