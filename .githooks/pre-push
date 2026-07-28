@@ -1,7 +1,14 @@
 #!/bin/bash
 #
-# pre-push hook — run the completion-harness test suites before allowing a push.
-# A non-zero exit aborts the push.
+# pre-push hook — enforce semantic versioning, then run the test suites before
+# allowing a push. A non-zero exit aborts the push.
+#
+# Order:
+#   1. Determine the pushed range from the hook's stdin.
+#   2. check-version.sh: if the range needs a higher version than plugin.json
+#      declares, AUTO-BUMP (bump-version.sh writes + commits the bump) and then
+#      ABORT so the release-bump commit gets included on the next push.
+#   3. run-tests.sh: run the harness test suites.
 #
 # Tracked here (.githooks/) so it is shared and reviewable. It is NOT active
 # until installed into this clone's hook path. To enable (does not disturb the
@@ -11,9 +18,61 @@
 #
 # (core.hooksPath is intentionally NOT used, because it would override the
 # repo's other hooks such as pre-commit.)
+#
+# Bypass everything with `git push --no-verify`.
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+ZERO="0000000000000000000000000000000000000000"
+
+# --- 1. resolve the pushed range from stdin ---------------------------------
+# stdin lines: <local_ref> <local_sha> <remote_ref> <remote_sha>
+# Pick the first non-delete ref; for a new branch (remote all-zeros) base off
+# the merge-base with origin/main (fall back to the root commit).
+BASE=""
+HEAD=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_sha:-}" ] && continue
+  # Skip branch deletions (local sha all zeros).
+  [ "$local_sha" = "$ZERO" ] && continue
+
+  HEAD="$local_sha"
+  if [ "$remote_sha" = "$ZERO" ] || [ -z "$remote_sha" ]; then
+    # New remote branch: base on divergence from origin/main.
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      BASE="$(git merge-base "$local_sha" origin/main 2>/dev/null)"
+    fi
+    [ -z "$BASE" ] && BASE="$(git rev-list --max-parents=0 "$local_sha" | tail -1)"
+  else
+    BASE="$remote_sha"
+  fi
+  break
+done
+
+if [ -z "$HEAD" ] || [ -z "$BASE" ]; then
+  # Nothing pushable determined (e.g. only deletes) — let git proceed.
+  echo "pre-push: no pushable range determined — skipping version check."
+else
+  # --- 2. version enforcement -----------------------------------------------
+  echo "pre-push: checking version for $BASE..$HEAD …"
+  bash check-version.sh "$BASE" "$HEAD"
+  rc=$?
+  if [ "$rc" -eq 3 ]; then
+    echo "pre-push: version under-bumped — auto-bumping…" >&2
+    if ! bash bump-version.sh "$BASE" "$HEAD"; then
+      echo "pre-push: auto-bump FAILED — push aborted." >&2
+      exit 1
+    fi
+    echo "pre-push: auto-bumped and committed — run your push again to include it." >&2
+    exit 1
+  elif [ "$rc" -ne 0 ]; then
+    echo "pre-push: version check errored (rc=$rc) — push aborted. (bypass: git push --no-verify)" >&2
+    exit 1
+  fi
+  echo "pre-push: version OK."
+fi
+
+# --- 3. tests ---------------------------------------------------------------
 echo "pre-push: running harness test suites…"
 if ! bash run-tests.sh; then
   echo "pre-push: tests FAILED — push aborted. (bypass with 'git push --no-verify' if you must.)" >&2

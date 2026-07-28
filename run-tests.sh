@@ -18,7 +18,10 @@ fi
 
 fail=0
 total=0
-for t in harness-trial/test-*.sh; do
+
+# Root-level suites (no fixture needed) plus the fixture suites.
+for t in test-version.sh harness-trial/test-*.sh; do
+  [ -f "$t" ] || continue
   total=$((total + 1))
   if bash "$t" >/dev/null 2>&1; then
     echo "PASS  $(basename "$t")"
