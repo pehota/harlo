@@ -66,12 +66,25 @@ if [ -z "$VERIFIED_SHA" ]; then
   exit 1
 fi
 
-GIT_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
-if [ -n "$GIT_STATUS" ]; then
-  echo "error: working tree dirty — commit before recording done-state" >&2
-  exit 1
-fi
+# Baseline-relative tree check via the shared classifier (same predicate the
+# gate uses). Refuse iff there are INTRODUCED blockers (the changeset's own
+# uncommitted work); pre-existing entries are ignored (never surfaced). tree_clean reflects
+# "no blockers". Keeps the word "dirty" in the refusal for parity/clarity.
 TREE_CLEAN=true
+if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+  hc_tree_status "$SESSION_ID" 2>/dev/null
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    echo "error: working tree dirty — $(hc_tree_remediation); commit before recording done-state" >&2
+    exit 1
+  fi
+else
+  # Classifier unavailable: fall back to the strict live check (never weaken).
+  GIT_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+  if [ -n "$GIT_STATUS" ]; then
+    echo "error: working tree dirty — commit before recording done-state" >&2
+    exit 1
+  fi
+fi
 
 # --- mirror the gate's step 8: refuse a non-green payload ---------------------
 # Give the agent the feedback at /done time rather than at stop time. If an

@@ -110,11 +110,25 @@ if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
   block "changes committed since last /done (HEAD: ${HEAD_SHA:0:7}) — re-run /done to re-verify the current changeset."
 fi
 
-# --- Step 6: working tree dirty -> BLOCK ------------------------------------
-# Re-check tree cleanliness live at gate time. Also enforced before escalation.
-TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
-if [ -n "$TREE_STATUS" ]; then
-  block "uncommitted changes in the working tree — commit or stash them, then re-run /done."
+# --- Step 6: working tree has INTRODUCED changes -> BLOCK -------------------
+# Re-check the tree live at gate time via the shared baseline-relative
+# classifier (hc_tree_status). Only changes INTRODUCED this session (not present
+# at the SessionStart baseline) block; pre-existing entries are ignored, not
+# blocked (and never surfaced) — this is what breaks the pre-existing-untracked deadlock without
+# weakening the gate (the changeset's own uncommitted work still blocks). Also
+# enforced before escalation (Step 7).
+if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+  hc_tree_status "$SESSION_ID" 2>/dev/null
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    block "uncommitted changes in the working tree — $(hc_tree_remediation) — then re-run /done."
+  fi
+else
+  # Classifier unavailable (source failed): fall back to the strict live check
+  # so the gate never weakens toward allow.
+  TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+  if [ -n "$TREE_STATUS" ]; then
+    block "uncommitted changes in the working tree — commit or stash them, then re-run /done."
+  fi
 fi
 
 # --- Step 7: valid escalation present -> exit 0 -----------------------------
