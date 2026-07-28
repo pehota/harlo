@@ -27,7 +27,7 @@ fi
 # --- read + validate the LLM payload ----------------------------------------
 PAYLOAD=$(cat 2>/dev/null)
 if [ -z "$PAYLOAD" ]; then
-  echo "error: no JSON payload on stdin (supply dod/review/task_checks/tests/... )" >&2
+  echo "error: no JSON payload on stdin (supply dod/task_checks/tests/... )" >&2
   exit 1
 fi
 if ! printf '%s' "$PAYLOAD" | jq empty >/dev/null 2>&1; then
