@@ -319,14 +319,28 @@ treating every red as pre-existing.
 
 Any failure → fix, then **return to step 2** (re-verify). Do not proceed with red tests.
 If a `lint` command is configured, run it too and record `lint.exit_code`; non-zero → fix
-(or escalate), same as tests.
+(or escalate), same as tests. Independent checks (lint ∥ tests) may run concurrently.
+
+**Coverage confirmation:** confirm the effective check structurally exercises the Step-1
+changed files. A check that cannot cover the changeset (scoped runner excluding the changed
+package, suite not touching the new path) yields **false coverage** — state the gap and
+escalate (Category C), never report green.
 
 ### Step 3 — App startup
 
-Run `effective.start` (or detected startup probe). Docker/systemd/k8s targets that
-can't be exercised locally → the agent must **state the target explicitly and whether
-it was exercised** ("started the binary; real target is a Docker container, container
-not smoke-tested"). Failure → fix → return to step 2.
+**Never block indefinitely** — a `start`/`dev` script for a server or whole-stack app can
+boot the whole stack and never return. Two safe paths: if `start_check_cmd` (config, default
+`null`) is set, run **it** (an explicit readiness probe, parallel to `deploy_check_cmd`) and
+check its exit code; otherwise run the effective `start` **bounded by `start_timeout`
+(config, default `30`s), backgrounded, then terminated** — success = came up / stayed up
+without crashing within the timeout. The whole-stack operator either sets `start_check_cmd`
+to a lightweight probe or accepts the timeout-boot-then-kill smoke test; there is no
+wait-forever option. A server that can't be meaningfully smoke-tested → **state reduced
+coverage** (Category A if it truly can't run). Docker/systemd/k8s targets that can't be
+exercised locally → the agent must **state the target explicitly and whether it was
+exercised** ("started the binary; real target is a Docker container, container not
+smoke-tested"). The app/start probe is independent of the Step-4 review — they may run
+concurrently. Failure → fix → return to step 2.
 
 ### Step 4 — Code review (independent subagent writes the review-log)
 
@@ -392,9 +406,14 @@ The `review` outcome is **not** a payload field — it is the separate review-lo
   "lint": {"exit_code": 0},
   "app_started": true,
   "task_checks": [{"desc": "visually verify button", "status": "passed", "how": "browser screenshot vs Figma"}],
+  "review_rounds": 1,
   "escalation": null
 }
 ```
+
+`review_rounds` (integer, optional) is an **informational** judgment field — how many
+review rounds were used (Step 5). Neither the writer nor the gate enforces it (no new
+structural state); it only captures effort in done-state.
 
 Review evidence lives beside it: `.claude/.harness/review-log/<HEAD>.json` with
 `open_findings == 0`, written by the Step-4 review subagent.
@@ -403,7 +422,10 @@ Review evidence lives beside it: `.claude/.harness/review-log/<HEAD>.json` with
 
 One paragraph: changeset stat, what passed (test counts, app startup, review outcome,
 task-check outcomes), anything escalated and why. Escalations are surfaced on the same
-turn — no silent passes.
+turn — no silent passes. It also carries an **EFFORT line**: review rounds used (of
+`max_review_rounds`), fix attempts made, and wall-clock elapsed if readily available.
+**Token/dollar cost is not measurable from the shell** — the reported proxies are
+rounds/attempts/elapsed, not estimated cost.
 
 ---
 
@@ -489,10 +511,22 @@ the *user's* decision plus the attempts made.
   "user_decision":"accept, tracked separately"}
 ```
 
+**`user_halt` — the user spontaneously stops the task mid-work.** Unlike A/B/C (each
+check-blocked), this records the user halting before the gate is green. It routes through
+the **same gate path** (non-null escalation → honored for the current HEAD only), routes to
+the **user** (never a silent self-waiver), requires an actual user statement in the
+transcript (like C), is echoed in step 8, and **disarms only the current changeset** — a
+later commit moves HEAD → the gate blocks again → `/done` re-runs.
+```json
+"escalation":{"type":"user_halt","step":"<where work stopped>",
+  "user_decision":"<verbatim what the user said>",
+  "completed":"<what IS done/verified>","remaining":"<what is NOT>"}
+```
+
 **Honest limitation.** A bash gate can't *prove* a user answered — some field is always
 written. Mitigation: A and B require captured command output (faking = fabricating an
-error string, visible in transcript); C requires an actual AskUserQuestion turn in the
-transcript (a `user_accepted` with no such exchange is a detectable lie in the record);
+error string, visible in transcript); C and `user_halt` require an actual user turn/statement
+in the transcript (an escalation with no such exchange is a detectable lie in the record);
 every escalation is echoed in the step-8 summary for the user to see.
 
 ---
@@ -516,13 +550,20 @@ every escalation is echoed in the step-8 summary for the user to see.
   "max_review_rounds": 2,
   "baseline_snapshot": true,
   "deploy_check_cmd": null,
+  "start_check_cmd": null,
+  "start_timeout": 30,
+  "trunk": null,
+  "auto_branch": true,
+  "branch_prefix": "task/",
   "untracked_policy": "baseline"
 }
 ```
 
 `effective = overrides ?? detected`. `overrides`, `max_fix_attempts`,
-`max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`, `untracked_policy`
+`max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`, `start_check_cmd`,
+`start_timeout`, `trunk`, `auto_branch`, `branch_prefix`, `untracked_policy`
 are human-owned and sticky; `detected` + `source_fingerprint` are auto-managed.
+The example matches exactly what `done-detect.sh` and `install.sh` seed.
 
 `max_review_rounds` (default `2`) caps the Step-5 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the
@@ -530,6 +571,14 @@ fix diff. It is a **prompt-level** cap the `/done` agent obeys — exactly like
 `max_fix_attempts` — with no gate/writer counter behind it; a clean changeset
 (round-1 `open_findings == 0`) costs exactly one review. Seeded by `done-detect.sh`
 and `install.sh` and preserved thereafter.
+
+`start_check_cmd` (default `null`) and `start_timeout` (default `30`) bound Step 3's app
+startup so a server/whole-stack `start` script can never block `/done` forever. When
+`start_check_cmd` is set it is run as an explicit readiness probe (exit code checked, parallel
+to `deploy_check_cmd`); otherwise the effective `start` is run backgrounded, bounded by
+`start_timeout` seconds, then terminated (success = came up without crashing). Both default to
+the **safe/strict** behavior (no probe assumed; a bounded, never-unbounded run), are
+human-owned/sticky, and are seeded by `done-detect.sh` and `install.sh` and preserved thereafter.
 
 `untracked_policy` (default `"baseline"`, values `baseline` | `strict`) governs the
 `hc_tree_status` classifier: `"baseline"` applies the baseline-relative rule to **both**
@@ -546,6 +595,12 @@ Cannot be fully automated generically.
 - `deploy_check_cmd` set → run it, check exit code.
 - Absent → `/done` forces the agent to **state** the deploy target and whether it was
   exercised. Makes the gap visible instead of claiming false coverage.
+
+App startup (Step 3) has the parallel `start_check_cmd` / `start_timeout` pair: a
+long-running server never blocks the gate — either a lightweight `start_check_cmd` readiness
+probe is run, or the `start` script is run bounded by `start_timeout` and then terminated.
+Same principle: automate what can be, force an explicit statement of reduced coverage
+otherwise, never claim false coverage.
 
 ---
 
