@@ -162,6 +162,18 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
     echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} (.claude/.harness/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
     exit 1
   fi
+  # Hard contract: the review-log must be structurally valid before any severity
+  # or coverage reasoning trusts its fields. A malformed/forged log fails schema
+  # and is refused here, before hc_review_blocking/hc_review_coverage_gap run.
+  if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+    if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
+      echo "error: refusing to write — review-log fails contract (schema) for HEAD ${VERIFIED_SHA:0:7}; the log is malformed or missing required fields" >&2
+      exit 1
+    fi
+  else
+    echo "error: refusing to write — contract validator unavailable (broken install); cannot verify review-log integrity" >&2
+    exit 1
+  fi
   MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
   [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
   # Explicit availability guard (parity with the hc_tree_status fallback): if the
@@ -213,13 +225,35 @@ RESULT=$(printf '%s' "$PAYLOAD" | jq \
   --arg sid "$SESSION_ID" \
   --arg sha "$VERIFIED_SHA" \
   --argjson clean "$TREE_CLEAN" '
-  . * {session_id: $sid, verified_sha: $sha, tree_clean: $clean}
+  . * {contract_version: 1, session_id: $sid, verified_sha: $sha, tree_clean: $clean}
 ' 2>/dev/null)
 
 if [ -z "$RESULT" ]; then
   echo "error: failed to assemble done-state JSON" >&2
   exit 1
 fi
+
+# Hard contract: validate the assembled done-state BEFORE writing it. This is
+# UNCONDITIONAL — escalation bypasses green-OUTCOME refusals only, never
+# structural validity. A done-state that fails schema must never reach disk.
+VALIDATE_TMP=$(mktemp 2>/dev/null)
+if [ -z "$VALIDATE_TMP" ]; then
+  echo "error: failed to create temp file for contract validation" >&2
+  exit 1
+fi
+printf '%s\n' "$RESULT" > "$VALIDATE_TMP" 2>/dev/null
+if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+  if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$VALIDATE_TMP" >/dev/null 2>&1; then
+    rm -f "$VALIDATE_TMP" 2>/dev/null
+    echo "error: refusing to write — assembled done-state fails contract (schema); it is missing required fields or has an invalid shape" >&2
+    exit 1
+  fi
+else
+  rm -f "$VALIDATE_TMP" 2>/dev/null
+  echo "error: refusing to write — contract validator unavailable (broken install); cannot verify done-state integrity" >&2
+  exit 1
+fi
+rm -f "$VALIDATE_TMP" 2>/dev/null
 
 printf '%s\n' "$RESULT" > "$OUT_FILE" 2>/dev/null
 if [ ! -f "$OUT_FILE" ]; then

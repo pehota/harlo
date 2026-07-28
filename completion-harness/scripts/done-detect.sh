@@ -20,6 +20,13 @@ CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 have_jq=false
 command -v jq >/dev/null 2>&1 && have_jq=true
 
+# Source shared helpers for hc_validate + HC_CONTRACTS_DIR (write-time contract
+# validation). Guarded on the file's presence, same as sibling scripts.
+# shellcheck source=harness-common.sh
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
+
 # --- hashing helper (deterministic over stdin) ------------------------------
 hash_stdin() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -136,6 +143,31 @@ build_detected() {
 DETECTED_JSON=$(build_detected)
 [ -z "$DETECTED_JSON" ] && DETECTED_JSON="{}"
 
+# --- write-time contract validation -----------------------------------------
+# Validate an assembled config (in a tempfile) against the done-config schema
+# before it is allowed to touch disk. Producer-side fail-closed: on any contract
+# failure, print to stderr and return nonzero so the caller aborts the write and
+# leaves existing state untouched. Only meaningful on the jq-available path
+# (hc_validate itself requires jq); callers only invoke it there.
+CONTRACT_SCHEMA="${HC_CONTRACTS_DIR:-}/done-config.schema.json"
+
+validate_config_file() {
+  # $1 = path to assembled candidate config JSON.
+  local candidate="$1" out
+  # If the validator or schema is unavailable, we cannot enforce — treat as a
+  # hard failure so we never write an unvalidated config on the jq path.
+  if ! type hc_validate >/dev/null 2>&1; then
+    printf 'done-detect: hc_validate unavailable — cannot validate done-config against contract\n' >&2
+    return 1
+  fi
+  out=$(hc_validate "$CONTRACT_SCHEMA" "$candidate" 2>&1)
+  if [ $? -ne 0 ]; then
+    printf 'done-detect: done-config failed contract %s: %s\n' "$CONTRACT_SCHEMA" "$out" >&2
+    return 1
+  fi
+  return 0
+}
+
 # --- decide whether to (re)write the config ---------------------------------
 STORED_FP=""
 if [ -f "$CONFIG_FILE" ] && [ "$have_jq" = true ]; then
@@ -159,61 +191,99 @@ fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
   # Missing: seed the full starter shape (matches installer) with fresh detect.
+  # contract_version stamps the config as conforming to schema v1.
   mkdir -p "$(dirname "$CONFIG_FILE")" 2>/dev/null
-  jq -n \
-    --argjson detected "$DETECTED_JSON" \
-    --arg fp "$NEW_FP" '
-    {
-      source_fingerprint: $fp,
-      detected: $detected,
-      overrides: {},
-      max_fix_attempts: 3,
-      max_review_rounds: 2,
-      baseline_snapshot: true,
-      deploy_check_cmd: null,
-      start_check_cmd: null,
-      start_timeout: 30,
-      trunk: null,
-      auto_branch: true,
-      branch_prefix: "task/",
-      untracked_policy: "baseline",
-      min_review_level: "high"
-    }
-  ' > "$CONFIG_FILE" 2>/dev/null
-
-elif [ "$STORED_FP" != "$NEW_FP" ]; then
-  # Changed: targeted merge — replace only detected + fingerprint, preserve the
-  # human-owned sticky fields. The identity keys (trunk/auto_branch/
-  # branch_prefix) plus untracked_policy, max_review_rounds and min_review_level
-  # are sticky too:
-  # PRESERVE them when present, SEED defaults only when absent (an older config
-  # predating them). The `if has(...) then . else .k = default end` form supplies
-  # the seed without ever clobbering an existing value — including a literal
-  # `false` — because these are set with explicit assignment, not read through
-  # `//`. (max_fix_attempts / baseline_snapshot / deploy_check_cmd are preserved
-  # implicitly: this merge only ever touches .detected and .source_fingerprint.)
-  # start_check_cmd / start_timeout follow the same seed-if-absent, preserve-if-present
-  # rule as the other human-owned sticky keys.
   TMP=$(mktemp 2>/dev/null)
   if [ -n "$TMP" ]; then
-    jq \
+    jq -n \
       --argjson detected "$DETECTED_JSON" \
       --arg fp "$NEW_FP" '
-      .detected = $detected
-      | .source_fingerprint = $fp
-      | (if has("trunk") then . else .trunk = null end)
-      | (if has("auto_branch") then . else .auto_branch = true end)
-      | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
-      | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
-      | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
-      | (if has("min_review_level") then . else .min_review_level = "high" end)
-      | (if has("start_check_cmd") then . else .start_check_cmd = null end)
-      | (if has("start_timeout") then . else .start_timeout = 30 end)
-    ' "$CONFIG_FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$CONFIG_FILE" 2>/dev/null
+      {
+        contract_version: 1,
+        source_fingerprint: $fp,
+        detected: $detected,
+        overrides: {},
+        max_fix_attempts: 3,
+        max_review_rounds: 2,
+        baseline_snapshot: true,
+        deploy_check_cmd: null,
+        start_check_cmd: null,
+        start_timeout: 30,
+        trunk: null,
+        auto_branch: true,
+        branch_prefix: "task/",
+        untracked_policy: "baseline",
+        min_review_level: "high"
+      }
+    ' > "$TMP" 2>/dev/null
+    # Write-time gate: only publish a contract-valid config.
+    if validate_config_file "$TMP"; then
+      mv "$TMP" "$CONFIG_FILE" 2>/dev/null
+    else
+      rm -f "$TMP" 2>/dev/null
+      emit_effective
+      exit 1
+    fi
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
   fi
+
+else
+  # Config already exists. Two independent reasons to rewrite:
+  #   (a) the source fingerprint changed → refresh the detected block, OR
+  #   (b) the config predates contract v1 (missing/mismatched contract_version)
+  #       → auto-upgrade in place.
+  # Both are handled by the SAME targeted jq merge so that upgrade also seeds
+  # any keys added in later versions, while PRESERVING every human-owned field
+  # (overrides, max_fix_attempts, baseline_snapshot, deploy_check_cmd, trunk,
+  # identity + review keys). The merge only touches .detected/.source_fingerprint
+  # when the fingerprint actually changed; otherwise it re-uses the stored values
+  # so an upgrade-only run stays a minimal, idempotent change.
+  STORED_CV=$(jq -r '.contract_version // empty' "$CONFIG_FILE" 2>/dev/null)
+  NEEDS_UPGRADE=false
+  [ "$STORED_CV" != "1" ] && NEEDS_UPGRADE=true
+  NEEDS_REFRESH=false
+  [ "$STORED_FP" != "$NEW_FP" ] && NEEDS_REFRESH=true
+
+  if [ "$NEEDS_UPGRADE" = true ] || [ "$NEEDS_REFRESH" = true ]; then
+    # On a pure upgrade (no fingerprint change) keep the stored detected block and
+    # fingerprint intact; on a refresh, replace them with the freshly detected
+    # values. The seed-if-absent, preserve-if-present rule (via
+    # `if has(...) then . else .k = default end`) never clobbers an existing
+    # value — including a literal `false`.
+    TMP=$(mktemp 2>/dev/null)
+    if [ -n "$TMP" ]; then
+      jq \
+        --argjson detected "$DETECTED_JSON" \
+        --arg fp "$NEW_FP" \
+        --argjson refresh "$([ "$NEEDS_REFRESH" = true ] && echo true || echo false)" '
+        (if $refresh then (.detected = $detected | .source_fingerprint = $fp) else . end)
+        | .contract_version = 1
+        | (if has("overrides") then . else .overrides = {} end)
+        | (if has("max_fix_attempts") then . else .max_fix_attempts = 3 end)
+        | (if has("baseline_snapshot") then . else .baseline_snapshot = true end)
+        | (if has("trunk") then . else .trunk = null end)
+        | (if has("auto_branch") then . else .auto_branch = true end)
+        | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
+        | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
+        | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
+        | (if has("min_review_level") then . else .min_review_level = "high" end)
+        | (if has("start_check_cmd") then . else .start_check_cmd = null end)
+        | (if has("start_timeout") then . else .start_timeout = 30 end)
+      ' "$CONFIG_FILE" > "$TMP" 2>/dev/null
+      # Write-time gate: never overwrite existing valid state with an invalid one.
+      if validate_config_file "$TMP"; then
+        mv "$TMP" "$CONFIG_FILE" 2>/dev/null
+      else
+        rm -f "$TMP" 2>/dev/null
+        emit_effective
+        exit 1
+      fi
+      [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
+    fi
+  fi
+  # else: fingerprint unchanged AND already at contract v1 → leave the file
+  # exactly as-is (idempotent — a second run is byte-identical).
 fi
-# else: fingerprint unchanged → leave the file exactly as-is (idempotent).
 
 emit_effective
 exit 0

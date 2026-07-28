@@ -119,9 +119,19 @@ If the resolved id has no matching `baselines/<id>.sha`, the writer (Step 7) wil
 `current-session` marker if that happens.
 
 Then resolve the changeset base via the shared resolver — do **not** hand-pick a
-baseline. Run
-`bash "${CLAUDE_PLUGIN_ROOT}/scripts/harness-resolve.sh" "$SESSION_ID"` and
-read its printed `base=` and `task_key=` lines. Scope the changeset as
+baseline. The resolver prints a **single schema-validated JSON object** on stdout
+(`{"contract_version":1,"mode":…,"task_key":…,"base":…,"trunk":…,"branch":…,"warn":…}`);
+parse it with `jq`, not by grepping key=value lines. For example:
+
+```bash
+RESOLVED=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/harness-resolve.sh" "$SESSION_ID")
+BASE=$(printf '%s' "$RESOLVED" | jq -r '.base')
+TASK_KEY=$(printf '%s' "$RESOLVED" | jq -r '.task_key')
+```
+
+The resolver **self-validates** its output against `contracts/resolver-output.schema.json`
+before printing — if it exits non-zero it printed nothing valid; treat that as a hard
+failure and surface it. Scope the changeset as
 `git diff <base> HEAD` (add `--stat` for the summary). In task mode `<base>` is
 the **pinned task base** → the diff spans the whole feature across every session
 on this branch; on the trunk/session fallback `<base>` is this session's
@@ -289,10 +299,12 @@ every "yes":
 
 Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
 and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
-(where `<HEAD>` is the current `git rev-parse HEAD`) with this schema:
+(where `<HEAD>` is the current `git rev-parse HEAD`) with **EXACTLY** this shape —
+it must include `"contract_version": 1`:
 
 ```json
 {
+  "contract_version": 1,
   "reviewed_sha": "<HEAD>",
   "min_review_level": "high",
   "files_reviewed": ["src/a.ts", "src/b.ts"],
@@ -301,6 +313,14 @@ and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
   "advisory_findings": 0
 }
 ```
+
+**The gate now validates this file against `contracts/review-log.schema.json` and
+will BLOCK if it is missing `contract_version` or is otherwise malformed** — so the
+subagent MUST conform: `contract_version` (the integer `1`), `reviewed_sha`,
+`min_review_level`, `files_reviewed` (array of the changed paths it attests), and
+`findings` (array; each finding an object `{severity, file, line, desc}` with
+`severity` one of `critical | high | medium | low`, `line` an integer) are all
+required. Tell the subagent this plainly.
 
 `files_reviewed` is the repo-relative paths (exactly as `git diff --name-only`
 emits them) the reviewer attests it examined. The gate/writer require it to cover

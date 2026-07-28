@@ -101,6 +101,20 @@ if [ ! -f "$DONE_STATE_FILE" ]; then
   block "/done has not passed for the current changeset (HEAD: ${HEAD_SHA:0:7}). Run /done to verify tests, app start, code review, and task-specific checks before declaring done."
 fi
 
+# --- Step 4b: done-state must satisfy the hard contract (schema) -> BLOCK ----
+# The done-state exists; before trusting any of its fields (verified_sha, the
+# outcome checks in Step 8, ...) it must be structurally valid. A missing schema
+# file itself → hc_validate nonzero → BLOCK (broken install, safe direction). The
+# jq-missing degrade at the top of the gate already exited before this point, so
+# this never fires on a jq-less host.
+if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+  if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" >/dev/null 2>&1; then
+    block "done-state fails contract (schema) for HEAD ${HEAD_SHA:0:7} — the recorded state is malformed or missing required fields; re-run /done."
+  fi
+else
+  block "contract validator unavailable (broken install) — cannot verify done-state integrity for HEAD ${HEAD_SHA:0:7}."
+fi
+
 # --- Step 5: verified_sha != HEAD -> BLOCK ----------------------------------
 # Re-check live, do not trust any stored convenience flag. This is enforced
 # BEFORE any escalation is honoured, so a stale escalation cannot disarm the
@@ -183,6 +197,16 @@ fi
 REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
 if [ ! -f "$REVIEW_LOG" ]; then
   block "no independent code review recorded for HEAD ${HEAD_SHA:0:7} — run /done."
+fi
+# Hard contract: the review-log must be structurally valid before its
+# findings[]/files_reviewed are trusted by the severity + coverage checks below.
+# A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
+if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+  if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
+    block "review-log fails contract (schema) for HEAD ${HEAD_SHA:0:7} — the log is malformed or missing required fields; re-run /done."
+  fi
+else
+  block "contract validator unavailable (broken install) — cannot verify review-log integrity for HEAD ${HEAD_SHA:0:7}."
 fi
 MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
