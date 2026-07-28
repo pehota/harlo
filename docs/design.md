@@ -187,7 +187,19 @@ Fires on every main-agent turn exit. Logic in order:
    - `tests.exit_code == 0`
    - `lint.exit_code == 0` **if `.lint` is recorded** (projects with no lint command skip this)
    - an **independent review-log exists for the current HEAD** —
-     `.claude/.harness/review-log/<HEAD>.json` — with `open_findings == 0`
+     `.claude/.harness/review-log/<HEAD>.json` — with **zero BLOCKING findings**.
+     The blocking count is **computed structurally by the gate** (`hc_review_blocking`
+     in `harness-common.sh`) from `findings[].severity` and the configured
+     `min_review_level` (default `high`): a finding blocks iff
+     `rank(severity) >= rank(min_review_level)` (ranks `low=0 medium=1 high=2
+     critical=3`). Findings below the threshold are **advisory** and never gate.
+     An unknown/missing severity ranks as blocking (safe direction); a missing
+     log or a jq failure blocks. When the `findings` key is **present** it must be
+     an array — a present-but-non-array `findings` is treated as malformed and
+     blocks, and the self-reported `open_findings` is never consulted (anti-forgery);
+     an empty `findings: []` legitimately counts zero and allows. The
+     `open_findings` integer is a backward-compat fallback used **only when the
+     `findings` key is entirely absent** (old-style logs).
    - every `task_checks[]` status `passed`
 
    Otherwise block, naming the failed outcome.
@@ -217,8 +229,10 @@ prevents a stale escalation from disarming the gate for the rest of the session
 
 `done-write-state.sh` mirrors step 8: it **refuses to write** a done-state unless (with no
 escalation) `tests.exit_code == 0`, `lint.exit_code == 0` when lint is configured, and a
-review-log for the current HEAD exists with `open_findings == 0` — giving the agent the
-feedback at `/done` time rather than at stop time. Its dirty-tree refusal uses the **same
+review-log for the current HEAD exists with **zero blocking findings** (recomputed by the
+same `hc_review_blocking` from `findings[].severity` + `min_review_level`, so the writer and
+the gate can never diverge) — giving the agent the feedback at `/done` time rather than at
+stop time. Its dirty-tree refusal uses the **same
 `hc_tree_status` classifier** as the gate: it refuses **iff introduced blockers exist**
 (the changeset's own uncommitted work), writes when only pre-existing warnings remain, and
 sets `tree_clean` to reflect "no blockers" (not "no dirt at all"). The gate remains the
@@ -344,30 +358,46 @@ concurrently. Failure → fix → return to step 2.
 
 ### Step 4 — Code review (independent subagent writes the review-log)
 
-Spawn a **fresh, independent, Write-capable** review subagent scoped to the step-1 diff.
-Its deliverable **is the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the
-log itself: `{ "reviewed_sha": "<HEAD>", "findings": [ {severity, file, line, desc} … ],
-"open_findings": <n> }`. Because the deliverable is a *written* file, the agent type must
-have a Write tool (e.g. `general-purpose`); a review-only type that lacks Write (e.g.
-`feature-dev:code-reviewer`) cannot produce the log and must not be used. The main agent does
-**not** transcribe a count from its own context (that would be self-review — the harness
-requires an independent reviewer; don't grade your own homework). The subagent must *answer* a
-mandatory blast-radius question set — foremost **"does a widening of what is read/accepted
-also widen what is written, allowed, or executed?"**, plus invariant/contract changes,
-new-branch/error-path parity, and silent scope broadening — not merely scan the diff. The gate
-later checks the log for the current HEAD has `open_findings == 0`.
+Spawn a **fresh, independent, Write-capable** review subagent. **Hand it the REAL diff, not
+a summary:** give it the resolved Step-1 `<base>` SHA + the changed-file list and instruct it
+to run `git diff <base> HEAD` **itself** over the **full changeset**. Its deliverable **is
+the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the log itself:
+`{ "reviewed_sha": "<HEAD>", "min_review_level": "high", "findings": [ {severity, file, line,
+desc} … ], "open_findings": <n>, "advisory_findings": <n> }`. Because the deliverable is a
+*written* file, the agent type must have a Write tool (e.g. `general-purpose`); a review-only
+type that lacks Write (e.g. `feature-dev:code-reviewer`) cannot produce the log and must not
+be used. The main agent does **not** transcribe a count from its own context (that would be
+self-review — the harness requires an independent reviewer; don't grade your own homework).
+
+The reviewer must be **EXHAUSTIVE**: enumerate **every** issue prioritized by severity, not
+stop early, and if the diff is too large to fully cover, **say so explicitly** in the log —
+this up-front thoroughness is what prevents findings trickling out one round at a time. It
+must *answer* a mandatory blast-radius question set — foremost **"does a widening of what is
+read/accepted also widen what is written, allowed, or executed?"**, plus invariant/contract
+changes, new-branch/error-path parity, and silent scope broadening — not merely scan the diff.
+
+Each finding is tagged `severity` (`critical|high|medium|low`). `open_findings`/
+`advisory_findings` are **informational** — the gate and writer **recompute the blocking
+count structurally** from `findings[].severity` + the config `min_review_level` (default
+`high`), so the reviewer **cannot dodge the gate by miscounting**; it must tag severities
+accurately. Findings below `min_review_level` are advisory (still listed). The gate later
+checks the log for the current HEAD has **zero blocking findings**.
 
 ### Step 5 — Address findings (bounded loop, capped)
 
-**Zero findings → single review:** if round 1 returns `open_findings == 0`, HEAD does not
-move, the existing review-log satisfies the gate, and there is **no second review** — a clean
-changeset costs exactly one review.
+**Only findings at/above `min_review_level` gate.** Below-threshold (advisory) findings are
+recorded/reported (Step 8) but never force a round; a trivial advisory fix may be swept into
+the **same batch commit** (one HEAD move) but must never trigger an extra required round.
 
-Otherwise: **batch** ALL findings into **one** fix pass and **commit once** (HEAD moves once,
-not once per finding), then run **one** confirming pass (round 2) — a fresh Step-4 review
-**scoped to the fix diff** (cheaper, and where regressions hide), which writes a new
+**Zero BLOCKING findings → single review:** if round 1 returns zero blocking findings, HEAD
+does not move, the existing review-log satisfies the gate, and there is **no second review**
+(advisory findings may remain) — a clean changeset costs exactly one review.
+
+Otherwise: **batch** ALL blocking findings into **one** fix pass and **commit once** (HEAD
+moves once, not once per finding), then run **one** confirming pass (round 2) — a fresh Step-4
+review **scoped to the fix diff** (cheaper, and where regressions hide), which writes a new
 review-log for the new HEAD. The loop is capped by `max_review_rounds` (default 2): if round 2
-still has open findings, **do not loop again — STOP and escalate via AskUserQuestion**
+still has blocking findings, **do not loop again — STOP and escalate via AskUserQuestion**
 (Category C) with the remaining findings ("fix further, or accept and proceed?"), recording the
 user's decision in `escalation`. Per-item, an unfixable finding still gets `max_fix_attempts`
 tries. A won't-fix finding that doesn't move HEAD must be escalated, never silently waived. If a
@@ -388,7 +418,8 @@ The LLM supplies only the judgment fields (`dod`, `task_checks`, `escalation`, `
 `verified_sha = git rev-parse HEAD`, `tree_clean` from the `hc_tree_status` classifier —
 and **refuses to write** when the tree has **introduced blockers** (baseline-relative, same
 classifier as the gate — pre-existing entries are ignored), or when (absent an escalation)
-tests/lint aren't green or no `open_findings == 0` review-log exists for HEAD. No
+tests/lint aren't green or the review-log for HEAD has **blocking findings** (recomputed
+structurally from `findings[].severity` + `min_review_level`, same as the gate). No
 hand-written SHA strings.
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
 (Step 4), which the gate and the writer both read.
@@ -415,8 +446,9 @@ The `review` outcome is **not** a payload field — it is the separate review-lo
 review rounds were used (Step 5). Neither the writer nor the gate enforces it (no new
 structural state); it only captures effort in done-state.
 
-Review evidence lives beside it: `.claude/.harness/review-log/<HEAD>.json` with
-`open_findings == 0`, written by the Step-4 review subagent.
+Review evidence lives beside it: `.claude/.harness/review-log/<HEAD>.json` with **zero
+blocking findings** (recomputed by the gate/writer from `findings[].severity` +
+`min_review_level`), written by the Step-4 review subagent.
 
 ### Step 8 — Report
 
@@ -555,21 +587,23 @@ every escalation is echoed in the step-8 summary for the user to see.
   "trunk": null,
   "auto_branch": true,
   "branch_prefix": "task/",
-  "untracked_policy": "baseline"
+  "untracked_policy": "baseline",
+  "min_review_level": "high"
 }
 ```
 
 `effective = overrides ?? detected`. `overrides`, `max_fix_attempts`,
 `max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`, `start_check_cmd`,
-`start_timeout`, `trunk`, `auto_branch`, `branch_prefix`, `untracked_policy`
-are human-owned and sticky; `detected` + `source_fingerprint` are auto-managed.
-The example matches exactly what `done-detect.sh` and `install.sh` seed.
+`start_timeout`, `trunk`, `auto_branch`, `branch_prefix`, `untracked_policy`,
+`min_review_level` are human-owned and sticky; `detected` + `source_fingerprint`
+are auto-managed. The example matches exactly what `done-detect.sh` and
+`install.sh` seed.
 
 `max_review_rounds` (default `2`) caps the Step-5 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the
 fix diff. It is a **prompt-level** cap the `/done` agent obeys — exactly like
 `max_fix_attempts` — with no gate/writer counter behind it; a clean changeset
-(round-1 `open_findings == 0`) costs exactly one review. Seeded by `done-detect.sh`
+(round-1 zero blocking findings) costs exactly one review. Seeded by `done-detect.sh`
 and `install.sh` and preserved thereafter.
 
 `start_check_cmd` (default `null`) and `start_timeout` (default `30`) bound Step 3's app
@@ -586,6 +620,18 @@ untracked and tracked-modified lines (a line blocks iff it is not in the pinned 
 baseline); `"strict"` makes **every** untracked (`??`) line a blocker regardless of the
 baseline, while tracked-modified lines stay baseline-relative. `untracked_policy: "baseline"`
 is seeded by `done-detect.sh` and `install.sh` and preserved thereafter.
+
+`min_review_level` (default `"high"`, values `low` | `medium` | `high` | `critical`) is the
+**"good enough" threshold** for code-review findings. Every review finding is tagged
+`severity`; the gate and writer compute the BLOCKING count structurally via
+`hc_review_blocking` (in `harness-common.sh`): a finding blocks iff
+`rank(severity) >= rank(min_review_level)` (ranks `low=0 medium=1 high=2 critical=3`). So the
+default `high` blocks only high+critical findings — medium/low are **advisory** (recorded,
+never gating), which is what stops nits/style findings causing endless fix→re-review churn.
+`min_review_level: "low"` is strictest (everything blocks). An unknown/missing severity ranks
+as blocking (safe direction); a missing/malformed log fails toward block; old-style logs with
+no `findings[]` fall back to the `open_findings` integer. It is human-owned/sticky, seeded by
+`done-detect.sh` and `install.sh` and preserved thereafter.
 
 ---
 

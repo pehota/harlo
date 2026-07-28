@@ -174,7 +174,7 @@ flowchart TD
   S2 --> S3["Step 3 App startup<br/>start_check_cmd OR start bounded by start_timeout"]
   S2 -.concurrent.-> S4["Step 4 Code review<br/>spawn FRESH Write-capable subagent<br/>writes review-log/&lt;HEAD&gt;.json"]
   S3 --> S5
-  S4 --> S5{"Step 5 Fix loop<br/>open_findings == 0?"}
+  S4 --> S5{"Step 5 Fix loop<br/>zero BLOCKING findings?<br/>(≥ min_review_level)"}
   S5 -->|yes, round 1| S6["Step 6 task_checks<br/>run every entry"]
   S5 -->|no| FIX["batch-fix ALL findings<br/>commit ONCE (HEAD moves)<br/>confirming review scoped to fix diff"]
   FIX --> CAP{"round == max_review_rounds (2)<br/>& still open?"}
@@ -206,7 +206,7 @@ flowchart TD
   R --> T["hc_tree_status(session_id)<br/>→ HC_TREE_BLOCKERS / HC_TREE_WARNINGS"]
   KEY --> DEC["gate decision logic (Steps 1-9, see §6)"]
   T --> DEC
-  DEC --> RL["review-log/&lt;HEAD&gt;.json (open_findings)"]
+  DEC --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)"]
 ```
 
 **How to read this.** The gate itself contains no identity or tree logic — it
@@ -295,8 +295,8 @@ flowchart TD
   K2 -->|present & !=0| BLK8b["BLOCK: lint not green"]
   K2 -->|absent or 0| K3{"review-log/&lt;HEAD&gt;.json exists?"}
   K3 -->|no| BLK8c["BLOCK: no independent review for HEAD"]
-  K3 -->|yes| K4{"open_findings == '0'?"}
-  K4 -->|no| BLK8d["BLOCK: N unresolved findings"]
+  K3 -->|yes| K4{"hc_review_blocking(log, min_review_level) == '0'?<br/>(structural: rank(severity) >= rank(min); default high;<br/>unknown/missing severity or jq-fail → block)"}
+  K4 -->|no| BLK8d["BLOCK: N blocking (≥ min) findings"]
   K4 -->|yes| K5{"task_checks: all status=='passed'?"}
   K5 -->|no| BLK8e["BLOCK: task_checks not all passed"]
   K5 -->|yes| ALLOW9["Step 9: exit 0 (ALLOW)"]
@@ -321,6 +321,22 @@ flowchart TD
   green → BLOCK**. All comparisons are *string* compares against a sentinel
   (`// "MISSING"`) so an empty `jq` result can never accidentally pass a numeric
   test. `.lint` is conditional: absent → skip; present-but-nonzero → block.
+- **The review check is severity-gated, computed structurally.** The gate does
+  **not** trust the log's self-reported `open_findings`; it calls the shared
+  `hc_review_blocking(log, min_review_level)` (in `harness-common.sh`), which
+  counts findings whose severity rank `>= rank(min_review_level)` (default
+  `high`; ranks `low=0 medium=1 high=2 critical=3`). Findings below the threshold
+  are **advisory** (never gate) — this is the "good enough" state that stops
+  nits/style findings causing endless fix→re-review churn. An unknown/missing
+  severity ranks as blocking, and a missing/malformed log or a jq failure returns
+  `ERR` → block (fail toward block). When the `findings` key is **present** it is
+  authoritative and must be an array — a present-but-non-array `findings` (object,
+  string, etc.) is treated as malformed and returns `ERR` → block, and the
+  self-reported `open_findings` is **never** consulted in that case (anti-forgery).
+  An **empty** `findings: []` legitimately counts zero → allow. The `open_findings`
+  integer is a backward-compat fallback used **only when the `findings` key is
+  entirely absent** (old-style logs; missing → 1 → block). `done-write-state.sh`
+  mirrors this exactly via the same function.
 
 ---
 
@@ -418,19 +434,21 @@ never surfaced (⚠ doc drift — design shows them surfaced; §14).
 
 ## 9. The review loop (SKILL Steps 4-5)
 
-Step 4 spawns a fresh, **Write-capable**, independent subagent scoped to the
-changeset diff; its deliverable *is* a file it writes: `review-log/<HEAD>.json`.
+Step 4 spawns a fresh, **Write-capable**, independent subagent handed the **real
+diff** (`git diff <base> HEAD`, run by the reviewer itself) over the **full
+changeset**, instructed to be **exhaustive** and tag every finding with a
+`severity`; its deliverable *is* a file it writes: `review-log/<HEAD>.json`.
 Step 5 is a bounded fix loop that exploits the HEAD-keying to make re-review
-free.
+free, and gates only on findings **at/above `min_review_level`**.
 
 ```mermaid
 flowchart TD
-  S4["Step 4: spawn FRESH Write-capable reviewer<br/>(general-purpose / claude — NOT a review-only type w/o Write)<br/>answer blast-radius Q-set; write review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: open_findings == 0?"}
-  R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate"]
-  R1 -->|no| BATCH["batch ALL findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)"]
+  S4["Step 4: spawn FRESH Write-capable reviewer<br/>(general-purpose / claude — NOT a review-only type w/o Write)<br/>hand REAL diff (base SHA + file list); run git diff itself<br/>EXHAUSTIVE, tag severity; answer blast-radius Q-set<br/>write review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
+  R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate<br/>(advisory findings may remain)"]
+  R1 -->|no| BATCH["batch ALL blocking findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)<br/>trivial advisory fixes only in the SAME commit"]
   BATCH --> COMMIT["commit ONCE → HEAD moves once<br/>old log (prev HEAD) now stale"]
   COMMIT --> R2["confirming review (round 2)<br/>scoped to the FIX diff only<br/>+ 'did a fix introduce a NEW issue?'<br/>writes review-log/&lt;new HEAD&gt;.json"]
-  R2 --> CAP{"still open findings?"}
+  R2 --> CAP{"still BLOCKING findings?"}
   CAP -->|no| DONE2["DONE — two reviews"]
   CAP -->|yes, round==max_review_rounds (2)| ESC["STOP — do NOT start round 3<br/>escalate via AskUserQuestion (Cat C)<br/>record user decision in escalation"]
 ```
@@ -439,8 +457,14 @@ flowchart TD
 **prompt-level** cap the agent obeys — no script counts rounds. The HEAD-keyed
 log is the whole trick: committing a fix moves HEAD, so the previous log no
 longer matches the gate's `review-log/<HEAD>.json` lookup → **re-review is forced
-for free**, with no `findings == addressed` bookkeeping to trust. `review_rounds`
-in done-state is informational only; neither the writer nor the gate enforces it.
+for free**, with no `findings == addressed` bookkeeping to trust. The **blocking
+count is recomputed structurally** by the gate/writer from `findings[].severity` +
+`min_review_level` (via `hc_review_blocking`), so a miscounted `open_findings`
+cannot dodge the gate; findings below the threshold are **advisory** and never
+force a round (the "good enough" state). Round-1 handing the reviewer the real
+diff + the exhaustiveness instruction is what prevents findings trickling out one
+round at a time. `open_findings`/`advisory_findings`/`review_rounds` are
+informational only; the gate trusts the structural recompute.
 
 ---
 
@@ -470,7 +494,7 @@ flowchart LR
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | **excluded** |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | **excluded** |
 | `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | yes |
-| `review-log/<HEAD>.json` | reviewed_sha, findings, open_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | yes |
+| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | yes |
 | `../done-config.json` | effective commands + knobs | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change | n/a (outside `.harness/`) |
 
 **How to read this / key decisions.** `task-base/` and `tree-base/` are
@@ -575,13 +599,22 @@ was removed; and the `~/.claude/...` prose paths were corrected to
 `$CLAUDE_PROJECT_DIR/.claude/...` / `${CLAUDE_PLUGIN_ROOT}`. Design and code are
 in sync as of that date. If they diverge again, trust the code and re-sync the doc.
 
+**Severity-gated review (added 2026-07-28).** The review check is now structural:
+findings are `severity`-tagged and the gate/writer compute the blocking count via
+`hc_review_blocking` (in `harness-common.sh`) from `findings[].severity` + the new
+`min_review_level` config key (default `high`); below-threshold findings are
+advisory and never gate. Round-1 review is handed the real `git diff <base> HEAD`
+and told to be exhaustive (fixing the trickle). `open_findings`/`advisory_findings`
+in the log are informational; old-style logs (no `findings[]`) fall back to
+`open_findings`. Design (§Step 4/5, Config, Stop-hook Step 8) and code are in sync.
+
 ---
 
 ## Appendix — file → responsibility index
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (classifier), `hc_tree_remediation` |
+| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count) |
 | `scripts/harness-resolve.sh` | Executable wrapper — prints resolver output as key=value (for the skill) |
 | `scripts/done-gate.sh` | Stop hook — the gate (Steps 1-9) |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |
