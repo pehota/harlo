@@ -57,6 +57,31 @@ working):
 cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 ```
 
+### Versioning
+
+The single source of truth for the plugin version is
+`completion-harness/.claude-plugin/plugin.json` (`"version"`). The version is
+**derived from conventional commits** and enforced on push.
+
+While the major is `0` (pre-1.0) we use a damped **0.x convention**: a
+breaking change bumps the **minor** (`0.1.0` → `0.2.0`); a `feat`, `fix`, or
+`perf` bumps the **patch** (`0.1.0` → `0.1.1`); `docs`/`chore`/`test`/`ci`/
+`style`/`build`/`refactor` do **not** bump. From `1.0.0` on, standard semver
+applies (breaking → major, feat → minor, fix/perf → patch).
+
+The `pre-push` hook enforces this: if the commits you're pushing require a
+higher version than `plugin.json` declares, it **auto-applies the bump**
+(commits `chore(release): bump completion-harness to X.Y.Z`) and aborts the
+push — run your push again to include the release commit. Bypass with
+`git push --no-verify`.
+
+Preview or apply the bump manually:
+
+```
+bash bump-version.sh --dry-run   # print the recommendation, change nothing
+bash bump-version.sh             # write plugin.json + commit the bump
+```
+
 ## Status
 
 Early. Validated in supervised (interactive) use; autonomous / headless runs are

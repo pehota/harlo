@@ -875,6 +875,23 @@ relying on them, and never run the harness under `--bare`.
 
 ---
 
+## Versioning
+
+Maintainer tooling, not part of the shipped bundle. The version single source of
+truth is `completion-harness/.claude-plugin/plugin.json` (`version`). It is
+**derived from the conventional commits** in a pushed range and enforced on push.
+
+- **0.x convention** (while major == 0): breaking → minor, `feat`/`fix`/`perf` →
+  patch, everything else → no bump. From `1.0.0`: standard semver.
+- The `pre-push` hook runs `check-version.sh <base> <head>`; if under-bumped it
+  runs `bump-version.sh` to write + commit `chore(release): bump …` and aborts,
+  so the release commit lands on the next push. Bypassable with `--no-verify`.
+- Pure version math lives in the sourceable, unit-tested `version-lib.sh`
+  (`test-version.sh`, run by `run-tests.sh`); `bump-version.sh --dry-run`
+  previews without touching anything.
+
+---
+
 ## Non-goals
 
 - No enforcement on conversational turns (SHA guard).
