@@ -37,6 +37,17 @@ do. So at **task start** — not at `/done` time — extract the explicit verifi
 requirements from the task statement and record them into done-state
 `task_checks`. Step 6 only *runs* them.
 
+## Step 0 (Preflight) — prove the gate is winnable
+
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-preflight.sh` **before** the config
+detect below — and ideally **at TASK START**, before you edit anything or spawn
+subagents. It calls the shared gate logic (`hc_resolve` + `hc_tree_status`) to
+report whether the gate is winnable. If it reports a **HARD problem** (non-zero
+exit — e.g. `baseline_snapshot` enabled but no test command, or a deadlock-risk
+tree state), **stop and fix or surface it** before proceeding; do not begin work
+against an unwinnable gate. Warnings (missing `.dirty`, `jq` absent) are
+non-blocking and are printed with exact remediation.
+
 ## Step 0 — Config: detect / refresh (script)
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/done-detect.sh` and consume its stdout —
@@ -104,6 +115,13 @@ Run the effective test command. Compare against the baseline snapshot at
 - **Already red** on baseline → genuinely pre-existing. **Boyscout default: fix
   it anyway.** Only after `max_fix_attempts` is exhausted does it become a
   Category C user decision.
+
+The before/after (newly-red vs pre-existing-red) discrimination **depends on the
+baseline snapshot**. If that snapshot is **`inert`** (marker `{"status":"inert"}`
+in the `.tests.json`) or **absent**, you have no baseline to diff against — you
+**must STATE that newly-red vs pre-existing-red discrimination is unavailable**
+for this changeset rather than silently proceeding as if every red were
+pre-existing.
 
 If a **lint command is configured** (effective `lint` from Step 0), run it too
 and record its exit code — you will include `lint: {"exit_code": N}` in the
@@ -183,6 +201,15 @@ review-log the Step-4 subagent wrote. The script **injects the git facts live** 
 --porcelain` — **refuses to write over a dirty tree** (commit first), and (absent
 an escalation) refuses unless tests are green, lint is green when configured, and
 the review-log for HEAD has `open_findings == 0`. You never hand-write a SHA.
+
+The "dirty tree" refusal is **baseline-relative**: only changes you *introduced*
+this session block; files already present at the SessionStart baseline are
+warned, not blocked (this is what stops a pre-existing untracked file from
+dead-locking the gate). Config `untracked_policy` controls this:
+`"baseline"` (default) applies the baseline-relative rule to both untracked and
+tracked-modified entries; `"strict"` makes **every** untracked file block
+regardless of the baseline (tracked-modified stays baseline-relative). Either
+way, the changeset's own new/uncommitted work must be committed before done.
 Payload shape (facts are injected, not supplied):
 
 ```json

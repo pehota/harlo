@@ -34,7 +34,7 @@ Flow:
 [detect/refresh config → tests → app start → code review → task_checks
  → address findings (≤ max_fix_attempts) → re-verify]
         ↓
-[write done-state/<session_id>.json with verified SHA]
+[write done-state/<task_key>.json with verified SHA]
         ↓
 [agent ends turn → Stop hook fires again → HEAD == verified_sha, tree clean]
         ↓
@@ -53,6 +53,19 @@ truth, sourced identically by `baseline-snapshot.sh`, `done-gate.sh`, and
 `done-write-state.sh` so they can never diverge. The `/done` skill reads it via
 `harness-resolve.sh`.
 
+`harness-common.sh` also houses `hc_tree_status` — the **single shared
+baseline-relative working-tree classifier** used by the gate (Step 6), the `/done`
+writer, and the preflight; **none of them reimplements it.** It classifies each
+`git status --porcelain` line relative to a pinned tree baseline (path in
+`HC_TREE_BASE_FILE`, set by `hc_resolve`): a line **introduced since the baseline**
+is a BLOCKER (`HC_TREE_BLOCKERS`), a line **already present at baseline** is a
+WARNING (`HC_TREE_WARNINGS`). A **missing** baseline file is treated as the empty
+set → every current change is "introduced" → blocks (safe direction — never a
+silent pass). `hc_tree_remediation` renders the exact "commit or stash these
+changes you introduced: … (pre-existing, only warned: …)" message from those
+globals. The `untracked_policy` knob (`done-config.json`, default `"baseline"` |
+`"strict"`) governs untracked lines — see the config section.
+
 **Resolution (offline, conservative):**
 - `branch = git symbolic-ref --short -q HEAD` (empty if detached).
 - `trunk` = config `.trunk` → else local `main` → else `master` (via `show-ref`; never
@@ -68,10 +81,23 @@ truth, sourced identically by `baseline-snapshot.sh`, `done-gate.sh`, and
 - Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
   mid-session, so SessionStart isn't the only place it must pin).
 
+**Tree baseline (the classifier's "pre-existing" set), pinned in parallel:**
+alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git status
+--porcelain` snapshot the `hc_tree_status` classifier diffs against.
+- TASK mode → `tree-base/<task_key>.dirty`, pinned **once** at the task's fork point
+  (by `baseline-snapshot.sh`, or by `auto-branch.sh` when the branch is created
+  mid-session) and **never re-seeded** — parallel to `task-base/<task_key>.sha`. This
+  is what stops a later session re-seeding "pre-existing" from live porcelain and
+  thereby whitelisting the agent's own uncommitted work.
+- SESSION mode → `baselines/<session_id>.dirty`, rewritten every SessionStart (in
+  session mode the changeset *is* the session).
+
 | State | Path | Keyed by |
 |---|---|---|
 | Task base (pinned) | `.claude/.harness/task-base/<task_key>.sha` | task (branch) |
+| Task tree-base (pinned) | `.claude/.harness/tree-base/<task_key>.dirty` | task (branch) — pinned ONCE at the fork; classifier's "pre-existing" set |
 | Session baseline | `.claude/.harness/baselines/<session_id>.sha` | session (fallback + test-snapshot anchor) |
+| Session tree-base | `.claude/.harness/baselines/<session_id>.dirty` | session — rewritten each SessionStart; classifier's "pre-existing" set |
 | Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |
 | Done-state | `.claude/.harness/done-state/<task_key>.json` | **task** — survives session end |
 | Review-log | `.claude/.harness/review-log/<HEAD>.json` | reviewed commit |
@@ -98,13 +124,38 @@ already off trunk (it fires on every edit), and on detached/mid-rebase/merge or 
 failure it **stays on trunk and never blocks the edit**. `auto_branch:false` → stays on trunk
 with the SessionStart warning. To *resume* an existing task, checkout its branch first.
 
+After creating the branch it **pins the task tree-base from THIS session's clean pre-edit
+SessionStart snapshot** (`baselines/<session_id>.dirty`) — this hook fires *before* the
+triggering edit, so that snapshot is still clean. When no such snapshot exists it pins an
+**empty** baseline (safe direction: everything blocks), **never live porcelain** (which could
+already contain this session's WIP and whitelist it).
+
+### SessionStart (`baseline-snapshot.sh`)
+
+Beyond recording the baseline SHA and the background test snapshot, SessionStart now:
+- **Records the tree baseline** (`HC_TREE_BASE_FILE`) — rewritten every session in session
+  mode; pinned **once and never overwritten** in task mode. The file is always created (even
+  when empty) so "missing" (→ strict) is distinguishable from "clean at baseline".
+- **Self-seeds config to avoid silent inertness:** when `baseline_snapshot` is enabled but no
+  test command is detected, it runs `done-detect.sh` first (fixing the chicken-and-egg where
+  a fresh project's empty `detected:{}` meant it never snapshotted).
+- **Fails loud, never silently inert:** if there is still no test command, it writes an
+  explicit `{"status":"inert",…}` marker to the `.tests.json` **and** surfaces a
+  `systemMessage` that the newly-red vs pre-existing-red discrimination is unavailable.
+- **Writes the test snapshot atomically** (temp file + `mv`) so a concurrent `/done` never
+  reads a half-written file.
+
 ### State lifecycle & cleanup
 
 `.claude/.harness/` state is **load-bearing during a session** — the gate re-reads
 `done-state/<task_key>.json` and `review-log/<HEAD>.json` on every turn-end — so it is
 never cleaned mid-session. Cleanup is **age-based, at SessionStart**: `baseline-snapshot.sh`
 reaps any file under `.claude/.harness/` older than **14 days** (`find -mtime +14 -delete`,
-guarded, never fails the hook). This is self-healing, needs no `SessionEnd` hook (which
+guarded, never fails the hook) — **excluding `task-base/*` and `tree-base/*`**, whose pins
+must live as long as the branch (reaping `tree-base/*` would let the next SessionStart
+re-seed the "pre-existing" set from live porcelain and whitelist the agent's own
+uncommitted work). Session-mode `baselines/<sid>.dirty` may still be reaped. This is
+self-healing, needs no `SessionEnd` hook (which
 wouldn't fire on a crash), and is parallel-safe — freshly written files from active sessions
 are far younger than the threshold. Durable progress lives in **git**, not in `.harness/`.
 
@@ -117,9 +168,19 @@ Fires on every main-agent turn exit. Logic in order:
 1. Read stdin JSON. If `stop_hook_active == true` → **exit 0** (loop guard — a block can never trap the agent forever; blocks are a one-time nudge per stop-continuation chain).
 2. Not a git repo (`git rev-parse HEAD` fails) → **exit 0** (no changeset baseline possible).
 3. `HEAD == baseline/<session_id>.sha` **AND working tree clean** → **exit 0** (nothing happened this session). A dirty tree here means uncommitted "done" — it must NOT pass, so it falls through to the checks below (independent-review finding).
-4. Read `.claude/done-state/<session_id>.json`. Missing → **BLOCK**.
+4. Read `.claude/.harness/done-state/<task_key>.json`. Missing → **BLOCK**.
 5. `verified_sha != HEAD` → **BLOCK** ("changes committed since last /done — re-run it").
-6. Working tree dirty → **BLOCK** ("uncommitted changes — commit or stash, then /done").
+6. **Working tree has INTRODUCED changes → BLOCK.** Not "any non-empty `git status
+   --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks
+   **iff `HC_TREE_BLOCKERS` is non-empty**, i.e. work introduced since the pinned tree
+   baseline. Pre-existing entries (present at baseline) are **warned, not blocked** —
+   this is what breaks the pre-existing-untracked deadlock **without weakening the gate:
+   the changeset's OWN uncommitted work still blocks** (an agent's introduced file is,
+   by construction, not in the baseline). The block message names the blockers and, if
+   any, the warned pre-existing entries (`hc_tree_remediation`). `untracked_policy`
+   (default `"baseline"`) tunes untracked handling; `"strict"` blocks every untracked
+   line regardless of baseline. If the classifier can't be sourced, the gate falls back
+   to the **strict** live check (block on any non-empty porcelain) — never toward allow.
 7. `escalation` present and valid → **exit 0** (escape hatch — see escalation rules).
 8. **Checklist outcomes not all green** → **BLOCK**. With no escalation, all must hold:
    - `tests.exit_code == 0`
@@ -156,8 +217,11 @@ prevents a stale escalation from disarming the gate for the rest of the session
 `done-write-state.sh` mirrors step 8: it **refuses to write** a done-state unless (with no
 escalation) `tests.exit_code == 0`, `lint.exit_code == 0` when lint is configured, and a
 review-log for the current HEAD exists with `open_findings == 0` — giving the agent the
-feedback at `/done` time rather than at stop time. The gate remains the structural backstop
-(it fires even if the file was hand-written).
+feedback at `/done` time rather than at stop time. Its dirty-tree refusal uses the **same
+`hc_tree_status` classifier** as the gate: it refuses **iff introduced blockers exist**
+(the changeset's own uncommitted work), writes when only pre-existing warnings remain, and
+sets `tree_clean` to reflect "no blockers" (not "no dirt at all"). The gate remains the
+structural backstop (it fires even if the file was hand-written).
 
 **Threat model — this defends against drift, not malice.** The harness's real adversary is
 the *drifting* agent that anchors on "implementation done" and silently omits steps. Against
@@ -198,6 +262,18 @@ is delegated to helper scripts so it is testable and can't be hallucinated. The 
 highest-risk targets are scripted: Step 0 (`done-detect.sh`) and Step 7
 (`done-write-state.sh`).
 
+### Step 0 (Preflight) — prove the gate is winnable (script: `done-preflight.sh`)
+
+Run at **task start**, before editing or spawning subagents. It calls the shared gate
+logic (`hc_resolve` + `hc_tree_status`) — it does **not** reimplement the gate — and
+reports whether the gate is winnable, with exact remediation. It **exits non-zero on a
+HARD problem** — notably `baseline_snapshot:true` but **no test command** (the
+before/after red-test discrimination would be inert) and **pre-existing blockers** in the
+tree — in which case the skill must stop and fix/surface before working. Warnings (missing
+`.dirty` baseline, `jq` absent) are non-blocking. It **never seeds a permissive baseline**
+when one is missing (it can run after edits, which would whitelist the agent's own work) —
+it reports the gap and tells the user to restart the session so SessionStart pins it.
+
 **Prerequisite — capture `task_checks` at task start.** Task-stated verifications drift
 out of focus like standing instructions; the agent records them into done-state `task_checks` when the
 task begins, not at `/done` time. (Executed in Step 6.)
@@ -234,6 +310,12 @@ Run the effective test command. Diff results against the baseline snapshot
 - **Newly red** (passed on baseline, fails now) → *you broke it* → must fix. No escape.
 - **Already red** on baseline → genuinely pre-existing. **Boyscout default: fix it anyway.**
   Only after `max_fix_attempts` exhausted does it become a Category C user decision.
+
+The before/after discrimination **depends on the baseline snapshot**. If the snapshot is
+**`inert`** (an explicit `{"status":"inert"}` marker in the `.tests.json`) or **absent**,
+there is no baseline to diff against — the agent **must STATE that newly-red vs
+pre-existing-red discrimination is unavailable** for this changeset rather than silently
+treating every red as pre-existing.
 
 Any failure → fix, then **return to step 2** (re-verify). Do not proceed with red tests.
 If a `lint` command is configured, run it too and record `lint.exit_code`; non-zero → fix
@@ -275,9 +357,11 @@ tooling, verified against the **real target medium and an independent source of 
 
 The LLM supplies only the judgment fields (`dod`, `task_checks`, `escalation`, `tests` and
 `lint` summaries) as a JSON payload. The script **injects the git facts live** —
-`verified_sha = git rev-parse HEAD`, `tree_clean` from `git status --porcelain` — and
-**refuses to write** over a dirty tree, or when (absent an escalation) tests/lint aren't
-green or no `open_findings == 0` review-log exists for HEAD. No hand-written SHA strings.
+`verified_sha = git rev-parse HEAD`, `tree_clean` from the `hc_tree_status` classifier —
+and **refuses to write** when the tree has **introduced blockers** (baseline-relative, same
+classifier as the gate — pre-existing entries only warn), or when (absent an escalation)
+tests/lint aren't green or no `open_findings == 0` review-log exists for HEAD. No
+hand-written SHA strings.
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
 (Step 4), which the gate and the writer both read.
 
@@ -416,13 +500,21 @@ every escalation is echoed in the step-8 summary for the user to see.
   },
   "max_fix_attempts": 3,
   "baseline_snapshot": true,
-  "deploy_check_cmd": null
+  "deploy_check_cmd": null,
+  "untracked_policy": "baseline"
 }
 ```
 
 `effective = overrides ?? detected`. `overrides`, `max_fix_attempts`, `baseline_snapshot`,
-`deploy_check_cmd` are human-owned and sticky; `detected` + `source_fingerprint` are
-auto-managed.
+`deploy_check_cmd`, `untracked_policy` are human-owned and sticky; `detected` +
+`source_fingerprint` are auto-managed.
+
+`untracked_policy` (default `"baseline"`, values `baseline` | `strict`) governs the
+`hc_tree_status` classifier: `"baseline"` applies the baseline-relative rule to **both**
+untracked and tracked-modified lines (a line blocks iff it is not in the pinned tree
+baseline); `"strict"` makes **every** untracked (`??`) line a blocker regardless of the
+baseline, while tracked-modified lines stay baseline-relative. `untracked_policy: "baseline"`
+is seeded by `done-detect.sh` and `install.sh` and preserved thereafter.
 
 ---
 
@@ -445,9 +537,12 @@ global use.
 | File | Purpose |
 |---|---|
 | `completion-harness/scripts/done-gate.sh` | Stop hook gate |
-| `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + background test snapshot |
-| `completion-harness/scripts/done-detect.sh` | `/done` Step 0: probe + fingerprint + write done-config.json |
-| `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses dirty tree) |
+| `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) |
+| `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
+| `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
+| `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
+| `completion-harness/scripts/done-detect.sh` | `/done` Step 0: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
+| `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses on introduced blockers) |
 | `completion-harness/skills/done/SKILL.md` | `/done` skill (judgment steps only) |
 | `completion-harness/dod/base-dod.md` | Base DoD (assembled into the effective DoD) |
 | `completion-harness/DOD.md` | The harness project's own DoD (meta) |
