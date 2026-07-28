@@ -32,7 +32,7 @@ Flow:
 [agent invokes /done]
         ↓
 [detect/refresh config → tests → app start → code review → task_checks
- → address findings (≤ max_fix_attempts) → re-verify]
+ → address findings (batched; ≤ max_review_rounds) → re-verify]
         ↓
 [write done-state/<task_key>.json with verified SHA]
         ↓
@@ -330,20 +330,34 @@ not smoke-tested"). Failure → fix → return to step 2.
 
 ### Step 4 — Code review (independent subagent writes the review-log)
 
-Spawn a **fresh review subagent** scoped to the step-1 diff. Its deliverable **is the file**
-`.claude/.harness/review-log/<HEAD>.json` — it writes the log itself:
-`{ "reviewed_sha": "<HEAD>", "findings": [ {severity, file, line, desc} … ], "open_findings": <n> }`.
-The main agent does **not** transcribe a count from its own context (that would be
-self-review — the harness requires an independent reviewer; don't grade your own homework).
-The gate later checks the log
-for the current HEAD has `open_findings == 0`.
+Spawn a **fresh, independent, Write-capable** review subagent scoped to the step-1 diff.
+Its deliverable **is the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the
+log itself: `{ "reviewed_sha": "<HEAD>", "findings": [ {severity, file, line, desc} … ],
+"open_findings": <n> }`. Because the deliverable is a *written* file, the agent type must
+have a Write tool (e.g. `general-purpose`); a review-only type that lacks Write (e.g.
+`feature-dev:code-reviewer`) cannot produce the log and must not be used. The main agent does
+**not** transcribe a count from its own context (that would be self-review — the harness
+requires an independent reviewer; don't grade your own homework). The subagent must *answer* a
+mandatory blast-radius question set — foremost **"does a widening of what is read/accepted
+also widen what is written, allowed, or executed?"**, plus invariant/contract changes,
+new-branch/error-path parity, and silent scope broadening — not merely scan the diff. The gate
+later checks the log for the current HEAD has `open_findings == 0`.
 
-### Step 5 — Address findings (bounded loop)
+### Step 5 — Address findings (bounded loop, capped)
 
-For each finding: fix, or genuinely can't → escalate (Category C, after `max_fix_attempts`,
-default 3). After fixing → commit (HEAD moves) and **re-run Step 4** so a fresh review-log is
-written for the new HEAD. Re-review-after-fix is thus forced by the HEAD-keyed log, not by
-trust. A won't-fix finding that doesn't move HEAD must be escalated, never silently waived.
+**Zero findings → single review:** if round 1 returns `open_findings == 0`, HEAD does not
+move, the existing review-log satisfies the gate, and there is **no second review** — a clean
+changeset costs exactly one review.
+
+Otherwise: **batch** ALL findings into **one** fix pass and **commit once** (HEAD moves once,
+not once per finding), then run **one** confirming pass (round 2) — a fresh Step-4 review
+**scoped to the fix diff** (cheaper, and where regressions hide), which writes a new
+review-log for the new HEAD. The loop is capped by `max_review_rounds` (default 2): if round 2
+still has open findings, **do not loop again — STOP and escalate via AskUserQuestion**
+(Category C) with the remaining findings ("fix further, or accept and proceed?"), recording the
+user's decision in `escalation`. Per-item, an unfixable finding still gets `max_fix_attempts`
+tries. A won't-fix finding that doesn't move HEAD must be escalated, never silently waived. If a
+round-1 fix caused a round-2 finding, that is surfaced in the Step-8 report.
 
 ### Step 6 — Task-specific checks
 
@@ -499,15 +513,23 @@ every escalation is echoed in the step-8 summary for the user to see.
     "start": "pnpm start:prod"
   },
   "max_fix_attempts": 3,
+  "max_review_rounds": 2,
   "baseline_snapshot": true,
   "deploy_check_cmd": null,
   "untracked_policy": "baseline"
 }
 ```
 
-`effective = overrides ?? detected`. `overrides`, `max_fix_attempts`, `baseline_snapshot`,
-`deploy_check_cmd`, `untracked_policy` are human-owned and sticky; `detected` +
-`source_fingerprint` are auto-managed.
+`effective = overrides ?? detected`. `overrides`, `max_fix_attempts`,
+`max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`, `untracked_policy`
+are human-owned and sticky; `detected` + `source_fingerprint` are auto-managed.
+
+`max_review_rounds` (default `2`) caps the Step-5 fix → re-review loop: round 1 is
+the initial full-changeset review, round 2 is the confirming pass scoped to the
+fix diff. It is a **prompt-level** cap the `/done` agent obeys — exactly like
+`max_fix_attempts` — with no gate/writer counter behind it; a clean changeset
+(round-1 `open_findings == 0`) costs exactly one review. Seeded by `done-detect.sh`
+and `install.sh` and preserved thereafter.
 
 `untracked_policy` (default `"baseline"`, values `baseline` | `strict`) governs the
 `hc_tree_status` classifier: `"baseline"` applies the baseline-relative rule to **both**
