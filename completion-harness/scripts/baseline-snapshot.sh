@@ -28,11 +28,18 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" 2>/dev/null
 # Reap stale harness state (older than 14 days). Fresh files (this session's
 # just-written baseline, active parallel sessions) are far younger, so safe.
 # Runs BEFORE any early return so non-git sessions get cleaned up too.
-# EXCLUDE task-base/ — a task's pinned base must live as long as its branch
-# (reaping it would re-pin at a later merge-base if trunk moved, silently
-# narrowing the changeset scope). Pins are tiny; orphaned ones are harmless.
+# EXCLUDE task-base/ AND tree-base/ — a task's pinned base (merge-base SHA) and
+# pinned tree baseline (fork-point porcelain) must live as long as its branch.
+# Reaping task-base/ would re-pin at a later merge-base if trunk moved; reaping
+# tree-base/ would let the next SessionStart re-seed the "pre-existing" set from
+# live porcelain and thereby whitelist the agent's own uncommitted work (the
+# very carryover bug this pinning fixes). Pins are tiny; orphaned ones harmless.
+# Session-mode baselines/<sid>.dirty MAY still be reaped — session state is
+# ephemeral (the changeset is the session).
 if [ -d "$HARNESS_DIR" ]; then
-  find "$HARNESS_DIR" -type f -not -path '*/task-base/*' -mtime +14 -delete 2>/dev/null || true
+  find "$HARNESS_DIR" -type f \
+    -not -path '*/task-base/*' -not -path '*/tree-base/*' \
+    -mtime +14 -delete 2>/dev/null || true
 fi
 
 # --- record baseline SHA ----------------------------------------------------
@@ -55,6 +62,44 @@ if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; the
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 
+# --- pin the tree baseline (for the classifier) -----------------------------
+# Whole `git status --porcelain` lines — the "pre-existing" set hc_tree_status
+# uses to distinguish pre-existing changes from ones the agent introduces. The
+# PATH is resolver-pinned (HC_TREE_BASE_FILE): task-scoped in task mode,
+# session-scoped otherwise.
+#
+# SessionStart is the one entry point that reliably runs BEFORE any edits, so
+# pinning here (never in a post-edit path like preflight) is safe.
+#
+#   SESSION mode → rewrite every SessionStart (fresh per session; the changeset
+#                  IS the session).
+#   TASK mode    → write ONLY IF it does not already exist — pin ONCE at the
+#                  first session on the branch and NEVER re-seed. Re-seeding
+#                  from a later session's live porcelain is exactly the bug that
+#                  whitelisted an earlier session's own uncommitted work.
+#
+# Always create the file (even when empty) so "missing" (→ strict) is
+# distinguishable from "clean at baseline". Fully guarded; never fails the hook.
+if [ -n "$HC_TREE_BASE_FILE" ]; then
+  if [ "$HC_MODE" = "task" ]; then
+    if [ ! -f "$HC_TREE_BASE_FILE" ]; then
+      mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
+      git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
+        || : > "$HC_TREE_BASE_FILE" 2>/dev/null
+    fi
+  else
+    mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
+    git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
+      || : > "$HC_TREE_BASE_FILE" 2>/dev/null
+  fi
+fi
+
+# SYS_MSG accumulates non-blocking guidance; emitted ONCE at the end as a single
+# {"systemMessage":...} object (two objects on stdout = invalid JSON).
+SYS_MSG=""
+append_msg() { SYS_MSG="${SYS_MSG:+$SYS_MSG
+}$1"; }
+
 if [ -n "$HC_WARN" ]; then
   # auto_branch default is TRUE when the key is absent, or the config/jq is
   # unavailable. NOTE: a plain `// true` jq default is WRONG here — jq's `//`
@@ -69,15 +114,9 @@ if [ -n "$HC_WARN" ]; then
   fi
 
   if [ "$AUTO_BRANCH" = "false" ]; then
-    MSG="⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
+    append_msg "⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
   else
-    MSG="on trunk $HC_TRUNK; a task branch will be auto-created on first edit (task continuity via branch)."
-  fi
-  # Surface as a non-blocking systemMessage on stdout (guarded); never fail.
-  if command -v jq >/dev/null 2>&1; then
-    jq -n --arg m "$MSG" '{"systemMessage":$m}' 2>/dev/null
-  else
-    printf '{"systemMessage":"%s"}\n' "$MSG"
+    append_msg "on trunk $HC_TRUNK; a task branch will be auto-created on first edit (task continuity via branch)."
   fi
 fi
 
@@ -90,30 +129,68 @@ fi
 
 TESTS_FILE="$BASELINE_DIR/${HEAD_SHA}.tests.json"
 
-# Only run if enabled AND we have not already snapshotted this SHA (amortise).
 if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
   # Resolve effective test command: override wins over detected.
   TEST_CMD=""
   if command -v jq >/dev/null 2>&1; then
     TEST_CMD=$(jq -r '(.overrides.test // .detected.test) // ""' "$CONFIG_FILE" 2>/dev/null)
   fi
-  if [ -n "$TEST_CMD" ]; then
+
+  # Chicken-and-egg fix: a fresh project has detected:{} so no test command is
+  # known yet. Run the (idempotent) detector to seed/refresh done-config.json,
+  # then re-read the effective test command. Guarded; never fails the hook.
+  if [ -z "$TEST_CMD" ]; then
+    if [ -x "$(dirname "$0")/done-detect.sh" ] || [ -f "$(dirname "$0")/done-detect.sh" ]; then
+      bash "$(dirname "$0")/done-detect.sh" >/dev/null 2>&1
+    fi
+    if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
+      TEST_CMD=$(jq -r '(.overrides.test // .detected.test) // ""' "$CONFIG_FILE" 2>/dev/null)
+    fi
+  fi
+
+  if [ -n "$TEST_CMD" ] && command -v jq >/dev/null 2>&1; then
+    # Real snapshot: run tests in the background. Atomic write via temp + mv so a
+    # concurrent /done never reads a half-written file. Keyed by SHA (amortised).
     (
       cd "$PROJECT_DIR" 2>/dev/null || exit 0
       OUTPUT=$(eval "$TEST_CMD" 2>&1)
       CODE=$?
-      if command -v jq >/dev/null 2>&1; then
-        jq -n \
-          --arg sha "$HEAD_SHA" \
-          --arg cmd "$TEST_CMD" \
-          --argjson code "$CODE" \
-          --arg out "$OUTPUT" \
-          '{sha:$sha, command:$cmd, exit_code:$code, output:$out}' \
-          > "$TESTS_FILE" 2>/dev/null
-      else
-        printf '{"sha":"%s","exit_code":%s}\n' "$HEAD_SHA" "$CODE" > "$TESTS_FILE" 2>/dev/null
-      fi
+      TMP_SNAP="${TESTS_FILE}.tmp.$$"
+      jq -n \
+        --arg sha "$HEAD_SHA" \
+        --arg cmd "$TEST_CMD" \
+        --argjson code "$CODE" \
+        --arg out "$OUTPUT" \
+        '{sha:$sha, command:$cmd, exit_code:$code, output:$out}' \
+        > "$TMP_SNAP" 2>/dev/null \
+        && mv -f "$TMP_SNAP" "$TESTS_FILE" 2>/dev/null
+      [ -f "$TMP_SNAP" ] && rm -f "$TMP_SNAP" 2>/dev/null
     ) &
+  else
+    # FAIL LOUD (never silently inert): snapshot is enabled but no test command
+    # is available even after detection (or jq is missing). Write an explicit
+    # inert marker (atomic) and surface it so the /done before/after red-test
+    # discrimination is known to be unavailable, not silently skipped.
+    if command -v jq >/dev/null 2>&1; then
+      TMP_SNAP="${TESTS_FILE}.tmp.$$"
+      jq -n --arg sha "$HEAD_SHA" \
+        '{sha:$sha, status:"inert", reason:"no test command detected"}' \
+        > "$TMP_SNAP" 2>/dev/null \
+        && mv -f "$TMP_SNAP" "$TESTS_FILE" 2>/dev/null
+      [ -f "$TMP_SNAP" ] && rm -f "$TMP_SNAP" 2>/dev/null
+    else
+      printf '{"sha":"%s","status":"inert","reason":"jq unavailable"}\n' "$HEAD_SHA" > "$TESTS_FILE" 2>/dev/null
+    fi
+    append_msg "⚠ baseline test snapshot could not run (no test command detected) — newly-red vs pre-existing-red discrimination is UNAVAILABLE for this session. Set a test command (overrides.test) or add a test script."
+  fi
+fi
+
+# --- emit accumulated guidance as a single systemMessage (guarded) ----------
+if [ -n "$SYS_MSG" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg m "$SYS_MSG" '{"systemMessage":$m}' 2>/dev/null
+  else
+    printf '{"systemMessage":"%s"}\n' "$SYS_MSG"
   fi
 fi
 

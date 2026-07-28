@@ -13,8 +13,14 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
-# Drain hook JSON from stdin (has session_id etc.); we do not need tool_input.
-cat >/dev/null 2>&1
+# Read hook JSON from stdin (has session_id etc.). We need session_id to pin the
+# task tree baseline from THIS session's clean pre-edit snapshot (see below); we
+# do not need tool_input.
+HOOK_INPUT=$(cat 2>/dev/null)
+SESSION_ID=""
+if command -v jq >/dev/null 2>&1; then
+  SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
+fi
 
 # --- fast no-op guards (allow, exit 0) --------------------------------------
 # Not a git repo → nothing to branch.
@@ -100,6 +106,35 @@ emit_msg() {
 }
 
 if git -C "$PROJECT_DIR" checkout -b "$BRANCH" >/dev/null 2>&1; then
+  # --- pin the task tree baseline from THIS session's clean snapshot ----------
+  # We just moved trunk→feature MID-session, so SessionStart already ran (in
+  # session mode) and will NOT re-fire. If we left the task tree-base unpinned,
+  # the NEXT session's first task-mode SessionStart would seed it from live
+  # porcelain — which by then includes this session's own uncommitted work —
+  # whitelisting it and violating Invariant 2 (the carryover bug's second path).
+  #
+  # Fix: pin tree-base/br-<branch>.dirty NOW, from the CLEAN pre-edit snapshot
+  # this session's SessionStart recorded at baselines/<session_id>.dirty. This
+  # is a PreToolUse hook firing BEFORE the triggering edit, so the tree is still
+  # at that clean baseline. Copying the SessionStart snapshot is strictly better
+  # than re-snapshotting live: it also blocks anything created via bash between
+  # SessionStart and this first edit. Everything guarded; never fail the hook.
+  if [ -n "$SESSION_ID" ] && (command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1); then
+    hc_resolve "$SESSION_ID" 2>/dev/null
+    if [ "$HC_MODE" = "task" ] && [ -n "$HC_TREE_BASE_FILE" ] && [ ! -f "$HC_TREE_BASE_FILE" ]; then
+      mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
+      SESSION_DIRTY="$HARNESS_DIR/baselines/${SESSION_ID}.dirty"
+      if [ -f "$SESSION_DIRTY" ]; then
+        cp "$SESSION_DIRTY" "$HC_TREE_BASE_FILE" 2>/dev/null
+      else
+        # No pre-edit SessionStart snapshot exists, so we have NO trustworthy
+        # "pre-existing" set. Live porcelain is NOT trustworthy here (it may
+        # already include this session's own WIP). Pin an EMPTY baseline →
+        # everything classifies as introduced → blocks (safe direction).
+        : > "$HC_TREE_BASE_FILE" 2>/dev/null
+      fi
+    fi
+  fi
   emit_msg "completion harness: created \`$BRANCH\` off \`$HC_TRUNK\` for task continuity — to resume an existing task, checkout its branch first."
 else
   emit_msg "completion harness: could not auto-create a task branch off \`$HC_TRUNK\` — staying on trunk (session fallback)."
