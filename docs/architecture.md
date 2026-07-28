@@ -6,10 +6,10 @@
 > the task "done".
 >
 > **Source of truth is the CODE.** Every diagram below was derived by reading the
-> scripts, not the prose design doc. Where the code diverges from
-> `completion-harness-design.md`, the diagram depicts the **code** and a
-> "⚠ doc drift" note flags the discrepancy. All discrepancies are collected in
-> §14.
+> scripts, not the prose design doc. The companion rationale/spec is
+> [`design.md`](design.md); the historical origin prompt is
+> [`design-brief.md`](design-brief.md). Design doc and code are in sync as of
+> 2026-07-28 (see §14); if they ever diverge, trust the code.
 
 ---
 
@@ -564,39 +564,16 @@ machinery changes that; malice is **out of scope by construction**.
 
 ---
 
-## 14. Code ↔ design-doc discrepancies (⚠ doc drift)
+## 14. Code ↔ design-doc reconciliation
 
-Depicted diagrams above follow the **code**. These are the points where
-`completion-harness-design.md` diverges and should be fixed:
-
-1. **`hc_tree_remediation` message shape.** Design (lines 64-66, 180) says the
-   remediation/block message names *both* introduced blockers **and** the
-   pre-existing/warned entries ("commit or stash these changes you introduced: …
-   (pre-existing, only warned: …)"). The **code** (`harness-common.sh`
-   `hc_tree_remediation`) emits **only** the blockers; pre-existing warnings are
-   intentionally never surfaced. `hc_tree_status` still *computes*
-   `HC_TREE_WARNINGS`, but no caller prints them (gate, writer, preflight all
-   suppress them explicitly).
-
-2. **Base-DoD install path.** Design (line 452 and the "Installed into a target
-   project" list, ~line 631) says `base-dod.md` is installed to
-   `.claude/harness/base-dod.md`.
-   The **code** (`install.sh`) copies it to **`.claude/dod/base-dod.md`**, and the
-   non-plugin `SKILL.md` rewrite reads it from `$CLAUDE_PROJECT_DIR/.claude/dod/base-dod.md`.
-   The design's own file table (line 624) also says `dod/base-dod.md` in the
-   bundle, so the "installed path" prose is the stale part.
-
-3. **`done-detect.sh` "build → build:server rename".** Design (line 287, Step 0)
-   claims `done-detect.sh` "Handles a `build` → `build:server` rename
-   automatically." The **code** has no such special-case; it only detects the
-   literal `build` script via `has_script build`. No rename logic exists.
-
-4. **`~`-based paths in the design prose.** Design headers reference
-   `~/.claude/scripts/done-gate.sh` (line 164), `~/.claude/skills/done/SKILL.md`
-   (line 253), and `~/.claude/baselines/<sha>.tests.json` (line 308). The **code**
-   uses `$CLAUDE_PROJECT_DIR/.claude/...` (or `${CLAUDE_PLUGIN_ROOT}` for plugin
-   scripts) exclusively — never `~`. Test snapshot lives at
-   `.claude/.harness/baselines/<sha>.tests.json`.
+Every diagram above follows the **code**, which is the source of truth. Four
+points where `design.md` had drifted from the code were reconciled in the design
+doc (2026-07-28): the `hc_tree_remediation` message no longer claims it surfaces
+pre-existing entries (blockers only); the base-DoD install path is
+`.claude/dod/base-dod.md`; the non-existent `build` → `build:server` rename claim
+was removed; and the `~/.claude/...` prose paths were corrected to
+`$CLAUDE_PROJECT_DIR/.claude/...` / `${CLAUDE_PLUGIN_ROOT}`. Design and code are
+in sync as of that date. If they diverge again, trust the code and re-sync the doc.
 
 ---
 

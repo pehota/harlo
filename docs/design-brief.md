@@ -1,5 +1,11 @@
 # Design prompt: completion harness for Claude Code
 
+> **Historical / archived.** This is the original prompt that kicked off the
+> project — kept for provenance (its ten original failures are referenced by the
+> "Checklist coverage" table in [`design.md`](design.md)). For the current design
+> see [`design.md`](design.md); for the architecture map see
+> [`architecture.md`](architecture.md).
+
 ## Problem
 
 CLAUDE.md has a Definition of Done section, but it does not fire reliably.

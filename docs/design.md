@@ -162,7 +162,7 @@ are far younger than the threshold. Durable progress lives in **git**, not in `.
 
 ---
 
-## Stop hook: `~/.claude/scripts/done-gate.sh`
+## Stop hook: `scripts/done-gate.sh`
 
 Fires on every main-agent turn exit. Logic in order:
 
@@ -251,7 +251,7 @@ Block output (stdout, exit 0):
 
 ---
 
-## `/done` skill: `~/.claude/skills/done/SKILL.md`
+## `/done` skill: `skills/done/SKILL.md`
 
 User-invocable. Steps run in order, blocking on each (stated once, globally — a failing
 step means fix and re-run from Step 2).
@@ -284,8 +284,7 @@ task begins, not at `/done` time. (Executed in Step 6.)
 Run `done-detect.sh`. It probes lockfiles + `package.json`/`Cargo.toml`/`go.mod`/
 `pyproject.toml`/`Makefile`, recomputes `source_fingerprint`, and — if missing or changed —
 rewrites `detected` while preserving `overrides` (`effective = override ?? detected`).
-Handles a `build` → `build:server` rename automatically. Emits the effective config to
-stdout. No LLM guessing of command names.
+Emits the effective config to stdout. No LLM guessing of command names.
 
 ### Step 0.5 — Assemble the effective DoD (fold in external instructions)
 
@@ -306,7 +305,7 @@ Everything downstream is scoped to **this changeset**, never the whole repo.
 ### Step 2 — Tests (with before/after checkpoint)
 
 Run the effective test command. Diff results against the baseline snapshot
-(`~/.claude/baselines/<sha>.tests.json`, captured at SessionStart):
+(`.claude/.harness/baselines/<sha>.tests.json`, captured at SessionStart):
 
 - **Newly red** (passed on baseline, fails now) → *you broke it* → must fix. No escape.
 - **Already red** on baseline → genuinely pre-existing. **Boyscout default: fix it anyway.**
@@ -451,7 +450,7 @@ skill. This has two faces.
 ### Runtime — the effective DoD (assembled per task)
 
 **Base DoD** — `completion-harness/dod/base-dod.md`, installed to
-`.claude/harness/base-dod.md` (portable, committed). The built-in checklist: tests green
+`.claude/dod/base-dod.md` (portable, committed). The built-in checklist: tests green
 (before/after checkpoint), app starts, changeset-scoped independent review, findings
 addressed, re-verified after fixes, verification real (exercised) not synthetic (diff
 read), deploy target stated, task_checks executed.
@@ -628,7 +627,7 @@ global use.
 | `completion-harness/README.md` | Install / use / uninstall / portability |
 
 **Installed into a target project** (by `install.sh`):
-`.claude/scripts/`, `.claude/skills/done/`, `.claude/harness/base-dod.md`,
+`.claude/scripts/`, `.claude/skills/done/`, `.claude/dod/base-dod.md`,
 `.claude/done-config.json`; hooks appended to `.claude/settings.local.json` (machine-local,
 opt-in per machine); `.claude/.harness/` (baselines + done-state) gitignored.
 

@@ -34,7 +34,11 @@ claude --plugin-dir completion-harness
 
 - **`completion-harness/`** — the plugin: scripts, the `/done` skill, hooks, base
   DoD. See its [README](completion-harness/README.md).
-- **`completion-harness-design.md`** — full design and rationale.
+- **`docs/`** — the docs:
+  - [`architecture.md`](docs/architecture.md) — navigable map (C4 diagrams, flows,
+    the Stop-gate decision tree, edge-case matrix). **Start here to understand the harness.**
+  - [`design.md`](docs/design.md) — full design and rationale.
+  - [`design-brief.md`](docs/design-brief.md) — the original design prompt (historical).
 
 ## Status
 
