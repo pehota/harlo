@@ -93,7 +93,7 @@ C4Container
 
   System_Boundary(h, "Completion Harness") {
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
-    Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (always, even empty) + current-session marker; self-seeds config; background test snapshot; reaps stale state")
+    Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
     Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, review, fix loop, task_checks, write-state, report")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier)")
@@ -233,7 +233,7 @@ sequenceDiagram
   participant GIT as Git
   participant ST as State store
 
-  RT->>ST: SessionStart (baseline-snapshot.sh)<br/>pin baselines/&lt;sid&gt;.sha + tree baseline + current-session marker; reap +14d
+  RT->>ST: SessionStart (baseline-snapshot.sh)<br/>pin baselines/&lt;sid&gt;.sha + tree baseline (compact-preserving) + current-session marker<br/>reap +14d; terminal reap merged/gone br-* tasks (skip if trunk unconfident); review-log hygiene
   Note over RT,ST: hc_resolve; if task mode pin task-base/tree-base
   AG->>GIT: edits code (Write/Edit)
   RT->>GIT: PreToolUse (auto-branch.sh)<br/>on trunk → checkout -b task/&lt;ts&gt;; pin tree-base
@@ -516,27 +516,33 @@ flowchart LR
   RL --> R1["&lt;HEAD&gt;.json"]
 ```
 
-| Dir / file | Holds | Keyed by | Written by | Pinned once vs rewritten | Reap (14d)? |
+| Dir / file | Holds | Keyed by | Written by | Pinned once vs rewritten | Cleanup |
 |---|---|---|---|---|---|
-| `baselines/<sid>.sha` | HEAD at SessionStart (session base) | **session id** | baseline-snapshot | rewritten each session | yes |
-| `current-session` | authoritative session id (from SessionStart hook stdin) | — (single file) | baseline-snapshot | rewritten each SessionStart | yes |
-| `baselines/<sid>.dirty` | fork-point porcelain (session mode tree baseline) | **session id** | baseline-snapshot | rewritten each session | yes |
-| `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | yes |
-| `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | **excluded** |
-| `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | **excluded** |
-| `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | yes |
-| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | yes |
+| `baselines/<sid>.sha` | HEAD at SessionStart (session base) | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present) | age 14d |
+| `current-session` | authoritative session id (from SessionStart hook stdin) | — (single file) | baseline-snapshot | rewritten each SessionStart (all sources incl. compact) | age 14d |
+| `baselines/<sid>.dirty` | fork-point porcelain (session mode tree baseline) | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present) | age 14d |
+| `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | age 14d |
+| `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
+| `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | age-**excluded**; **terminal reap** on merge/gone |
+| `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | age 14d; `br-*` keys also **terminal reap** on merge/gone |
+| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-4 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD |
 | `../done-config.json` | effective commands + knobs | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change | n/a (outside `.harness/`) |
 
-**How to read this / key decisions.** `task-base/` and `tree-base/` are
-**excluded from the 14-day reap** because their pins must live as long as the
-branch: reaping `task-base` would silently re-pin at a *later* merge-base if
-trunk moved; reaping `tree-base` would let the next SessionStart re-seed the
-"pre-existing" set from live porcelain and thereby whitelist the agent's own
-uncommitted work — the exact carryover bug the pinning fixes. Session-scoped
-`baselines/*` are ephemeral (the changeset *is* the session) and may be reaped.
-Done-state is keyed by **task_key**, not session id, which is what lets a
-resumed session on the same branch inherit the prior verification.
+**How to read this / key decisions.** Three cleanups run at SessionStart, all guarded, honouring
+the **HARD SAFETY INVARIANT: never delete in-progress-task state, the current HEAD's review-log,
+or a live task's done-state/pins; when in doubt KEEP; skip terminal reap when trunk is unconfident.**
+(1) **Age reap (14d)** — `task-base/` and `tree-base/` are **age-excluded** because their pins
+must live as long as the branch (reaping `task-base` would silently re-pin at a *later*
+merge-base if trunk moved; reaping `tree-base` would re-seed "pre-existing" from live porcelain
+and whitelist the agent's own uncommitted work). Session-scoped `baselines/*` are ephemeral and
+may be age-reaped — this is the ONLY reap that touches SESSION-mode state. (2) **Terminal reap** —
+for `br-*` task keys only, once the branch is **merged into trunk** or **gone**, its
+`task-base`/`tree-base`/`done-state` are reaped (keep-set via `hc_live_task_keys`; the current
+branch is always kept; collision-safe; **skipped when trunk unconfident**). (3) **Review-log
+hygiene** — a `review-log/<sha>.json` is kept only if `<sha>` is a live branch tip or the current
+HEAD (keep-set via `hc_live_review_shas`); the current HEAD's log is never deleted. Done-state is
+keyed by **task_key**, not session id, which is what lets a resumed session on the same branch
+inherit the prior verification.
 
 ---
 
@@ -583,6 +589,9 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Auto-branch fallback (empty pin)** | Branch created but no clean SessionStart `.dirty` snapshot → pin **empty** tree-base → everything blocks (safe) | `auto-branch.sh` `: > HC_TREE_BASE_FILE` |
 | **Mid-rebase/merge** | Auto-branch no-ops (MERGE_HEAD / rebase-apply / rebase-merge present) | `auto-branch.sh` git-dir guard |
 | **14-day reap** | SessionStart deletes `.harness/*` files older than 14d, **excluding** `task-base/*` and `tree-base/*` | `baseline-snapshot.sh` `find -mtime +14 -delete -not -path` |
+| **Mid-task compact** | `source=="compact"` (manual `/compact` or auto-compaction) fires mid-task with a dirty tree. SessionStart **preserves** an existing `baselines/<sid>.{sha,dirty}` (writes only if absent) so the agent's own WIP is not captured as "pre-existing"; `current-session` marker still written. Other sources (startup/resume/clear/fork/empty) refresh as before | `baseline-snapshot.sh` `IS_COMPACT` guard on the `.sha` write and the session-mode `.dirty` write |
+| **Merged/gone task (terminal reap)** | A `br-*` task whose branch is merged into trunk or gone → its `task-base`/`tree-base`/`done-state` reaped; an **unmerged (in-progress)** branch's state is KEPT; the **current branch is always kept**; **skipped entirely when trunk is unconfident** (never guess "merged") | `baseline-snapshot.sh` terminal-reap block; `hc_live_task_keys` keep-set + `hc__detect_trunk` |
+| **Superseded review-log** | `review-log/<sha>.json` deleted when `<sha>` is neither a local branch tip nor the current HEAD; **current HEAD's log never deleted**; all kept if keep-set uncomputable | `baseline-snapshot.sh` review-log hygiene block; `hc_live_review_shas` |
 | **Headless / CI** | Plugins load from `enabledPlugins` in `-p` mode; **`--bare` skips hook/skill discovery entirely** → harness inert. PreToolUse firing + block-honouring in `-p` are undocumented → verify empirically | distribution (design §"Headless/CI"); no code path — runtime behaviour |
 
 ---
@@ -647,7 +656,7 @@ in the log are informational; old-style logs (no `findings[]`) fall back to
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count) |
+| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (coverage check), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set) |
 | `scripts/harness-resolve.sh` | Executable wrapper — prints resolver output as key=value (for the skill) |
 | `scripts/done-gate.sh` | Stop hook — the gate (Steps 1-9) |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |

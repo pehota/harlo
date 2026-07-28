@@ -15,3 +15,7 @@ disagree, trust the code and re-sync the doc.
 ## Conventions
 
 - use conventional commits
+
+## Principles
+
+- dogfooding the completion-harness

@@ -157,7 +157,19 @@ Beyond recording the baseline SHA and the background test snapshot, SessionStart
 - **Writes the authoritative `current-session` marker** — the real `session_id` from its own
   hook stdin, overwritten each SessionStart (see *Session-id resolution* above). This is the
   id the `/done` skill and writer prefer over the `ls -t` heuristic, so they cannot key a
-  done-state to an id the gate never reads.
+  done-state to an id the gate never reads. The marker is written on **every** source,
+  including `compact`.
+- **Is source-aware (baseline guard).** SessionStart fires with a top-level `source`
+  (`startup | resume | clear | compact | fork`). It fires on `/compact` **and** on
+  auto-compaction — **mid-task, with a dirty tree holding the agent's own uncommitted work**.
+  On `source == "compact"` SessionStart **preserves an existing** session baseline —
+  `baselines/<sid>.sha` **and** the resolved session tree-base `baselines/<sid>.dirty` — and
+  writes them **only if absent** (first sight). This stops a mid-task compact from
+  re-snapshotting the baseline off the dirty tree, which would capture the agent's own work
+  as "pre-existing" (whitelisting it via Invariant-2) and lose the task's real baseline. On
+  any other source (`startup|resume|clear|fork`) or an **empty/unknown** source (older CLI)
+  it captures/refreshes as before. Task-mode `tree-base/<key>.dirty` is already pin-once
+  (never re-seeded), so the guard chiefly protects the SESSION-mode `baselines/<sid>.{sha,dirty}`.
 - **Records the tree baseline** (`HC_TREE_BASE_FILE`) **unconditionally, every SessionStart,
   before any edit, even when the tree is clean** — rewritten every session in session mode;
   pinned **once and never overwritten** in task mode. The file is always created (even when
@@ -176,17 +188,45 @@ Beyond recording the baseline SHA and the background test snapshot, SessionStart
 
 ### State lifecycle & cleanup
 
-`.claude/.harness/` state is **load-bearing during a session** — the gate re-reads
+`.claude/.harness/` state is **load-bearing during an in-progress task** — the gate re-reads
 `done-state/<task_key>.json` and `review-log/<HEAD>.json` on every turn-end — so it is
-never cleaned mid-session. Cleanup is **age-based, at SessionStart**: `baseline-snapshot.sh`
-reaps any file under `.claude/.harness/` older than **14 days** (`find -mtime +14 -delete`,
-guarded, never fails the hook) — **excluding `task-base/*` and `tree-base/*`**, whose pins
-must live as long as the branch (reaping `tree-base/*` would let the next SessionStart
-re-seed the "pre-existing" set from live porcelain and whitelist the agent's own
-uncommitted work). Session-mode `baselines/<sid>.dirty` may still be reaped. This is
-self-healing, needs no `SessionEnd` hook (which
-wouldn't fire on a crash), and is parallel-safe — freshly written files from active sessions
-are far younger than the threshold. Durable progress lives in **git**, not in `.harness/`.
+never cleaned mid-task. **HARD SAFETY INVARIANT: cleanup must never delete state for a task
+that is still in progress, and must never delete the current HEAD's review-log or a live
+task's done-state/pins. When in doubt, KEEP. If trunk cannot be confidently determined, the
+terminal reap is SKIPPED entirely (never guess "merged").** All cleanup runs at SessionStart,
+fully guarded, and never fails the hook.
+
+**1. Age reap (14 days).** `baseline-snapshot.sh` reaps any file under `.claude/.harness/`
+older than **14 days** (`find -mtime +14 -delete`) — **excluding `task-base/*` and
+`tree-base/*`**, whose pins must live as long as the branch (reaping `tree-base/*` would let
+the next SessionStart re-seed the "pre-existing" set from live porcelain and whitelist the
+agent's own uncommitted work). Session-mode `baselines/<sid>.dirty` may still be reaped. This
+is the ONLY reap that touches SESSION-mode state (`session-<id>` done-states, `baselines/*`) —
+there is no branch to test integration against.
+
+**2. Terminal reap (integrated task — "done is done").** After the age reap, for **`br-*` task
+keys only**, a task's state is dead once its branch is **merged into trunk**
+(`git merge-base --is-ancestor <branch> <trunk>`) or the **branch is gone**. The keep-set of
+**LIVE** task keys is computed by the testable helper **`hc_live_task_keys`** in
+`harness-common.sh`: for every local branch that exists, is **not** trunk, and is **not**
+merged into trunk → `br-$(hc__sanitize <branch>)`. The **current branch is always live**
+(the active task, even a freshly-forked branch that is technically an ancestor of trunk).
+Any `task-base/<key>.sha`, `tree-base/<key>.dirty`, or `done-state/<key>.json` whose `br-*`
+key is **not** in the keep-set (merged or gone) is reaped. Collisions from lossy
+sanitization are safe: a key any live branch maps to is in the keep-set → kept. Trunk is
+resolved via `hc__detect_trunk`; if it is **empty/unconfident the terminal reap is SKIPPED**.
+Session-mode keys are never terminal-reaped.
+
+**3. Review-log hygiene (superseded fix-churn).** `review-log/<HEAD>.json` accumulates one per
+fix commit; a log is load-bearing only if `<HEAD>` is a commit the gate might still check — a
+local **branch tip** or the **current HEAD** (keep-set from the testable helper
+**`hc_live_review_shas`**). Any `review-log/<sha>.json` whose `<sha>` is neither is deleted.
+**The current HEAD's log is never deleted** (it is in the keep-set); when the keep-set cannot
+be computed (empty — no HEAD and no branches) all logs are kept.
+
+Cleanup is self-healing, needs no `SessionEnd` hook (which wouldn't fire on a crash), and is
+parallel-safe — freshly written files from active sessions are far younger than the age
+threshold. Durable progress lives in **git**, not in `.harness/`.
 
 ---
 
