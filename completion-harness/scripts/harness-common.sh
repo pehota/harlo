@@ -232,6 +232,20 @@ hc_tree_status() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
 
+    # Harness-managed config exemption. done-detect rewrites
+    # .claude/done-config.json DURING /done itself (e.g. the contract_version
+    # auto-upgrade, or a fingerprint refresh), which would otherwise be
+    # classified as introduced work and force a needless commit → new HEAD →
+    # full re-review cascade. It is never the changeset's own task work, so it
+    # is never a blocker under any policy — recorded as a warning (surfaced,
+    # not gated). The porcelain path is everything after the "XY " prefix.
+    case "${line:3}" in
+      '.claude/done-config.json')
+        HC_TREE_WARNINGS="${HC_TREE_WARNINGS:+$HC_TREE_WARNINGS
+}$line"
+        continue ;;
+    esac
+
     # First two chars are the porcelain status; "??" == untracked.
     is_untracked=0
     case "$line" in
