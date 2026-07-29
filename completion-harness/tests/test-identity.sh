@@ -206,6 +206,79 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Chunk A (P0-a): session-mode base advances past FOREIGN commits.
+# These drive hc__resolve_session_base directly (session mode = on trunk, no
+# feature branch). We source harness-common.sh (already sourced above) and set a
+# per-session baseline .sha at a chosen fork point, then assert HC_BASE.
+#
+# Helper: write the session baseline .sha at $1 (sha) with mtime $2 (epoch), so
+# the committer-date >= baseline-mtime signal is controllable.
+seed_baseline() {
+  local sha="$1" mtime_epoch="$2"
+  mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+  printf '%s\n' "$sha" > "$REPO/.claude/.harness/baselines/${SID}.sha"
+  # Set mtime deterministically (touch -d @epoch is GNU; -t fallback).
+  touch -d "@$mtime_epoch" "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null \
+    || touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
+}
+
+# Run hc_resolve in-process against $REPO for session $SID; sets HC_BASE etc.
+resolve_inproc() { CLAUDE_PROJECT_DIR="$REPO" hc_resolve "$SID" 2>/dev/null; }
+
+printf '== Case 7 (P0-a): different-email commit → base advances past it ==\n'
+new_repo; CLEANUP+=("$REPO"); SID="A7"
+commit_file base.txt                                   # c0 (orig base)
+C0=$(git -C "$REPO" rev-parse HEAD)
+# Foreign commit: different committer identity, dated in the past.
+GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
+  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
+  bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+CF=$(git -C "$REPO" rev-parse HEAD)
+# Baseline pinned at c0, mtime NOW (so foreign's past date is < mtime anyway).
+seed_baseline "$C0" "$(date +%s)"
+resolve_inproc
+eq "case7 mode session" "session" "$HC_MODE"
+eq "case7 base advanced past foreign commit" "$CF" "$HC_BASE"
+eq "case7 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
+
+printf '== Case 8 (P0-a): session-email post-mtime commit → base stops there ==\n'
+new_repo; CLEANUP+=("$REPO"); SID="A8"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+# Baseline mtime in the PAST so the upcoming session commit is post-mtime.
+seed_baseline "$C0" "$(( $(date +%s) - 3600 ))"
+commit_file mine.txt                                   # session identity (test@example.com), now
+resolve_inproc
+eq "case8 base unchanged (stops at first authored)" "$C0" "$HC_BASE"
+
+printf '== Case 9 (P0-a): leading-foreign-then-authored → base at first authored ==\n'
+new_repo; CLEANUP+=("$REPO"); SID="A9"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$C0" "$(( $(date +%s) - 3600 ))"
+GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
+  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
+  bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+CF=$(git -C "$REPO" rev-parse HEAD)
+commit_file mine.txt                                   # session-authored, after foreign
+resolve_inproc
+eq "case9 base lands just below first authored (= foreign sha)" "$CF" "$HC_BASE"
+eq "case9 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
+
+printf '== Case 10 (P0-a): unset user.email → base UNCHANGED (full range) ==\n'
+new_repo; CLEANUP+=("$REPO"); SID="A10"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$C0" "$(date +%s)"
+GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
+  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
+  bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+git -C "$REPO" config --unset user.email 2>/dev/null                 # no identity → cannot attribute
+resolve_inproc
+eq "case10 base UNCHANGED with empty user.email (full range)" "$C0" "$HC_BASE"
+git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1   # restore
+
+# ---------------------------------------------------------------------------
 printf '\n== Summary: %d passed, %d failed ==\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

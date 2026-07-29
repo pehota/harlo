@@ -78,8 +78,18 @@ HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
 HDIR="$PROJECT_DIR/.claude/.harness"
 mkdir -p "$HDIR/baselines" "$HDIR/done-state" "$HDIR/review-log"
 
-# helper to set the baseline file for a session (still keyed by raw session id)
-set_baseline() { printf '%s\n' "$2" > "$HDIR/baselines/$1.sha"; }
+# helper to set the baseline file for a session (still keyed by raw session id).
+# Backdate the .sha mtime to BEFORE the session commits (as SessionStart does in
+# reality — it writes the baseline at session start, before the agent commits),
+# so the P0-a session-authorship attribution (committer_date >= baseline mtime)
+# sees the session commits (email t@t, dated now) as SESSION-AUTHORED and does
+# NOT advance the base past them. Without this backdate the .sha is touched at
+# test-run time (mtime "now", after the commits), which would wrongly classify
+# the session's own commits as pre-baseline foreign and advance the base to HEAD.
+set_baseline() {
+  printf '%s\n' "$2" > "$HDIR/baselines/$1.sha"
+  touch -d "@$(( $(date +%s) - 86400 ))" "$HDIR/baselines/$1.sha" 2>/dev/null || true
+}
 # Done-state is now keyed by HC_TASK_KEY. These fixtures run on `main` (the
 # repo's trunk) → session mode → task_key = "session-<session_id>". So the
 # done-state path for session id $1 is done-state/session-$1.json.
