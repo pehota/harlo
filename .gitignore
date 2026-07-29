@@ -1,6 +1,3 @@
-# Throwaway trial fixture — its own nested git repo, disposable
-harness-trial/
-
 # Machine-local Claude Code settings
 .claude/settings.local.json
 

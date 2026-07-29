@@ -46,8 +46,10 @@ claude --plugin-dir completion-harness
 bash run-tests.sh
 ```
 
-Installs the bundle into the `harness-trial/` fixture and runs all suites (exits
-non-zero if any fail). Run a single suite with `bash harness-trial/test-<name>.sh`.
+Runs all suites (exits non-zero if any fail). The suites are self-contained,
+tracked files under `completion-harness/tests/` that source the real bundle
+scripts directly, so no install step is needed. Run a single suite with `bash
+completion-harness/tests/test-<name>.sh`.
 
 **Run tests on push:** enable the tracked `pre-push` hook (installs alongside the
 repo's existing hooks; `core.hooksPath` is deliberately not used so those keep

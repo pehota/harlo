@@ -47,8 +47,8 @@ BLOCK/refuse**, never toward a silent allow. `hc_validate` is a jq-only
 JSON-Schema-**subset** validator (no node/ajv runtime); it prints `OK`/returns 0
 when valid, prints `ERR: …`/returns 1 on any invalidity or error. The
 shell-function ABI is itself a declared, **test-enforced** contract
-(`contracts/shell-abi.json` + `harness-trial/test-abi.sh`); the validator and
-schemas are covered by `harness-trial/test-contracts.sh`.
+(`contracts/shell-abi.json` + `completion-harness/tests/test-abi.sh`); the validator and
+schemas are covered by `completion-harness/tests/test-contracts.sh`.
 
 ---
 
@@ -729,8 +729,8 @@ longer `key=value`). Consumers assert it: `done-gate.sh` validates the done-stat
 at **Step 4b** and the review-log at **Step 8** before trusting their fields — both
 BLOCK on failure. `install.sh` copies `contracts/` → `.claude/contracts/`. The
 shell-function ABI is itself a declared, **test-enforced** contract
-(`contracts/shell-abi.json` + `harness-trial/test-abi.sh`); the validator + schemas
-are covered by `harness-trial/test-contracts.sh` (both run by the repo's
+(`contracts/shell-abi.json` + `completion-harness/tests/test-abi.sh`); the validator + schemas
+are covered by `completion-harness/tests/test-contracts.sh` (both run by the repo's
 `run-tests.sh`). Design (§Mechanism, Step 1/5/7, Stop-hook, Config, Files) and code
 are in sync.
 

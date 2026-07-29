@@ -296,9 +296,9 @@ than grepping lines and self-documenting via the schema.
 
 **The ABI is itself a contract.** `contracts/shell-abi.json` declares each public
 `hc_*` function's globals, stdout shape, return codes, and sentinels. It is
-**test-enforced**: `harness-trial/test-abi.sh` fails if the real functions drift
+**test-enforced**: `completion-harness/tests/test-abi.sh` fails if the real functions drift
 from the JSON (a new public function without an ABI entry fails), and
-`harness-trial/test-contracts.sh` covers `hc_validate` and the schemas. Both run
+`completion-harness/tests/test-contracts.sh` covers `hc_validate` and the schemas. Both run
 under the repo's `run-tests.sh`.
 
 ---
