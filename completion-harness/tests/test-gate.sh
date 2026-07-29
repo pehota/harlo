@@ -674,6 +674,41 @@ assert_no_deny "PB2 PreToolUse off trunk -> exit 0, no deny/decision" "$PBDIR"
 rm -rf "$PBDIR"
 
 # ============================================================================
+# Chunk B (P0-b, #6) — empty-changeset short-circuit (Step 3c).
+# base pinned AT HEAD → the commit-range diff base..HEAD is empty. With a clean
+# tree Step 3 already quiet-exits; these exercise the NEW Step 3c that allows an
+# empty range even when the tree has ONLY pre-existing dirt, while INTRODUCED
+# dirt still blocks first (Step 3b precedes Step 3c).
+# ----------------------------------------------------------------------------
+# EB1 — empty range + PRE-EXISTING dirt only → allow (Step 3c).
+# Baseline pinned at HEAD (empty range). Dirty a.txt, but record that exact
+# porcelain line in the session .dirty baseline so hc_tree_status classifies it
+# as pre-existing (a warning, not a blocker) → Step 3b does not block → Step 3c
+# sees the empty range and allows.
+SID=eb1; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
+printf 'preexisting\n' > "$PROJECT_DIR/a.txt"   # tree now dirty (tracked-modified)
+DIRTY_LINE=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+printf '%s\n' "$DIRTY_LINE" > "$HDIR/baselines/$SID.dirty"   # pre-existing at baseline
+run_case "EB1 empty range + pre-existing dirt only -> allow (Step 3c)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -f "$HDIR/baselines/$SID.dirty"; ensure_clean
+
+# EB2 — empty range + INTRODUCED dirt → still BLOCK (Step 3b precedes 3c).
+# Same empty range, but NO .dirty baseline (empty baseline set → the dirty line
+# is INTRODUCED) → Step 3b blocks with the S1 reason before Step 3c can allow.
+SID=eb2; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
+printf 'introduced\n' > "$PROJECT_DIR/a.txt"
+: > "$HDIR/baselines/$SID.dirty"   # empty baseline set → line is introduced
+run_case "EB2 empty range + INTRODUCED dirt -> still block" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -f "$HDIR/baselines/$SID.dirty"; ensure_clean
+
+# EB3 — empty range + clean tree → allow (existing Step 3 quiet-exit still holds).
+SID=eb3; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
+run_case "EB3 empty range + clean tree -> allow (Step 3 quiet-exit)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

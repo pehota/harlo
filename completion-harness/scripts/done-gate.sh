@@ -121,6 +121,23 @@ else
   fi
 fi
 
+# --- Step 3c: empty changeset -> allow (P0-b, #6) ---------------------------
+# Reaching here means Step 3b found NO introduced tree blockers. If the
+# commit-range base..HEAD is ALSO empty (no committed work to gate), there is
+# nothing to verify → allow. This handles the case where base-advance (Step-A)
+# advanced HC_BASE past foreign commits up to a point where HEAD == the advanced
+# base only in content (identical trees), and, more importantly, where the
+# resolved changeset diff is genuinely empty.
+#
+# Fail-safe: `git diff --quiet` exits 0 ONLY on a genuinely empty diff; ANY git
+# failure exits non-zero → we do NOT short-circuit → fall through to the gate.
+# An empty HC_BASE skips the guard entirely (no anchor → cannot judge emptiness).
+# Introduced dirt has already blocked above (Step 3b precedes this), so an empty
+# range with pre-existing-only dirt correctly reaches here and is allowed.
+if [ -n "$HC_BASE" ] && git -C "$PROJECT_DIR" diff --quiet "$HC_BASE" "$HEAD_SHA" 2>/dev/null; then
+  exit 0
+fi
+
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
 if [ ! -f "$DONE_STATE_FILE" ]; then
   block "run /done to verify the changeset (owns the Step-5 review)"
