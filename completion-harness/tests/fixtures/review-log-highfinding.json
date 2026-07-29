@@ -1,0 +1,11 @@
+{
+  "contract_version": 1,
+  "reviewed_sha": "__HEAD__",
+  "min_review_level": "high",
+  "files_reviewed": [],
+  "findings": [
+    { "severity": "high", "file": "a.txt", "line": 1, "desc": "a blocking high finding" }
+  ],
+  "open_findings": 1,
+  "advisory_findings": 0
+}

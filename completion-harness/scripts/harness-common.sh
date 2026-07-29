@@ -695,3 +695,320 @@ hc_validate() {
   if [ -n "$errs" ]; then printf 'ERR: %s\n' "$errs"; return 1; fi
   printf 'OK\n'; return 0
 }
+
+# ---------------------------------------------------------------------------
+# hc_done_state_blocked <done_state_file> <head_sha> <base> <harness_dir> \
+#                       <contracts_dir> <min_level>
+#
+# The single shared predicate for "is this done-state's recorded outcome (plus
+# the live review evidence at HEAD) a GREEN completion, or is something still
+# blocking?" — an EXACT faithful extraction of done-gate.sh's Step-8 blocker
+# aggregation (the 7-part checklist-outcome gate). Sourced so the gate and any
+# other consumer can never diverge from this logic — the same discipline that
+# makes hc_tree_status / hc_review_blocking single-source predicates.
+#
+# It does NOT re-check commit hygiene (SHA==HEAD, clean tree, escalation) — those
+# are Steps 4b/5/6/7 upstream of Step 8 and remain the caller's responsibility
+# (hc_state composes them). This predicate is ONLY the Step-8 outcome aggregation.
+#
+# Sets shell global:
+#   HC_DONE_BLOCKED_REASON — empty string ("") when NOT blocked (all 7 green);
+#     otherwise a short human-readable reason naming the FIRST failing check, in
+#     Step-8 document order. Callers test the variable, NOT the return code.
+#
+# ALWAYS returns 0 (like hc_tree_status) — the verdict is the global, never $?.
+#
+# Fail direction is INVERTED from the library's usual fail-safe (matching the
+# gate's Step 8): a MISSING / null / malformed outcome, an absent review-log, a
+# jq crash, or jq itself being unavailable, are ALL treated as NOT green → block.
+# A green verdict requires every check to affirmatively pass.
+#
+# The 7 aggregated blockers, in order (first failure wins):
+#   1. tests.exit_code must be exactly "0" (absent → "MISSING" → block).
+#   2. lint.exit_code checked ONLY when .lint is present/non-null; if present it
+#      must be "0" (a present-but-nonzero blocks; absent lint is not a failure —
+#      not every project configures lint).
+#   3. review-log file must EXIST at <harness_dir>/review-log/<head_sha>.json —
+#      keyed by the LIVE head sha passed in, NOT the task key (absence → block).
+#   4. review-log must pass hc_validate against <contracts_dir>/review-log.schema.json.
+#   5. hc_review_blocking <review_log> <min_level> must be exactly "0" — "ERR" or
+#      any non-zero blocking count → block.
+#   6. hc_review_coverage_gap <review_log> <base> <head_sha> <proj> must be empty
+#      OR the token "SKIP" — a non-empty non-SKIP result (uncovered files) → block.
+#      (SKIP = coverage not computable, a graceful no-regression degrade, NOT a block.)
+#   7. task_checks: the count of entries with status != "passed" must be 0.
+#
+# jq is guarded behind `command -v jq`; if jq is missing we cannot read any
+# recorded outcome → degrade fail-toward-block on check 1.
+hc_done_state_blocked() {
+  local done_state_file="$1" head_sha="$2" base="$3"
+  local harness_dir="$4" contracts_dir="$5" min_level="$6"
+
+  # Reset the verdict so a repeat call never leaks a stale reason.
+  HC_DONE_BLOCKED_REASON=""
+
+  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+
+  # jq is mandatory to read any recorded outcome. Without it we cannot verify
+  # a single field → fail toward block (mirrors the gate, whose jq-missing top
+  # guard would already have exited before Step 8 could pass).
+  if ! command -v jq >/dev/null 2>&1; then
+    HC_DONE_BLOCKED_REASON="jq unavailable (cannot verify recorded outcomes)"
+    return 0
+  fi
+
+  # --- 1. tests.exit_code must be exactly "0" (absent → MISSING → block). -----
+  local tests_exit
+  tests_exit=$(jq -r '.tests.exit_code // "MISSING"' "$done_state_file" 2>/dev/null)
+  if [ "$tests_exit" != "0" ]; then
+    HC_DONE_BLOCKED_REASON="tests failed (exit ${tests_exit})"
+    return 0
+  fi
+
+  # --- 2. lint.exit_code — conditional; only when .lint is present/non-null. --
+  local lint_exit
+  lint_exit=$(jq -r '.lint.exit_code // "MISSING"' "$done_state_file" 2>/dev/null)
+  if [ "$lint_exit" != "MISSING" ] && [ "$lint_exit" != "0" ]; then
+    HC_DONE_BLOCKED_REASON="lint failed (exit ${lint_exit})"
+    return 0
+  fi
+
+  # --- 3. review-log file must EXIST at HEAD (keyed by live head sha). --------
+  local review_log="$harness_dir/review-log/$head_sha.json"
+  if [ ! -f "$review_log" ]; then
+    HC_DONE_BLOCKED_REASON="no review-log at HEAD"
+    return 0
+  fi
+
+  # --- 4. review-log must pass the hard-contract schema. ----------------------
+  # A missing schema file → hc_validate nonzero → block (broken install, safe).
+  if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+    if ! hc_validate "$contracts_dir/review-log.schema.json" "$review_log" >/dev/null 2>&1; then
+      HC_DONE_BLOCKED_REASON="review-log fails schema"
+      return 0
+    fi
+  else
+    HC_DONE_BLOCKED_REASON="contract validator unavailable"
+    return 0
+  fi
+
+  # --- 5. hc_review_blocking must be exactly "0" (ERR / non-zero → block). ----
+  local open
+  if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+    open=$(hc_review_blocking "$review_log" "$min_level")
+  else
+    open="ERR"
+  fi
+  if [ "$open" != "0" ]; then
+    HC_DONE_BLOCKED_REASON="${open} blocking review finding(s)"
+    return 0
+  fi
+
+  # --- 6. hc_review_coverage_gap must be empty OR "SKIP". ---------------------
+  # SKIP (no changeset base → not computable) is a graceful degrade, NOT a block.
+  local gap
+  if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
+    gap=$(hc_review_coverage_gap "$review_log" "$base" "$head_sha" "$proj")
+  else
+    # Library failed to source — fail toward block, never toward an allow.
+    gap="LIBUNAVAILABLE"
+  fi
+  if [ -n "$gap" ] && [ "$gap" != "SKIP" ]; then
+    HC_DONE_BLOCKED_REASON="review coverage gap"
+    return 0
+  fi
+
+  # --- 7. task_checks: count of entries with status != "passed" must be 0. ----
+  # An absent task_checks yields length 0 (vacuously green). A jq crash yields ""
+  # which is != "0" → block. The FIRST not-passed check names the reason.
+  local task_failed
+  task_failed=$(jq -r '[.task_checks[]? | select(.status != "passed")] | length' "$done_state_file" 2>/dev/null)
+  if [ "$task_failed" != "0" ]; then
+    local first_failed
+    first_failed=$(jq -r 'first(.task_checks[]? | select(.status != "passed") | .desc) // "?"' "$done_state_file" 2>/dev/null)
+    [ -z "$first_failed" ] && first_failed="?"
+    HC_DONE_BLOCKED_REASON="task check '${first_failed}' not passed"
+    return 0
+  fi
+
+  # All 7 green → not blocked (HC_DONE_BLOCKED_REASON stays "").
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# hc_state <session_id>
+#
+# The composed state classifier: maps the current changeset+tree+done-state to
+# exactly ONE of five operator-facing states, and derives the canonical next
+# action. It COMPOSES the existing single-source predicates (hc_resolve,
+# hc_tree_status, hc_validate, hc_done_state_blocked) — it invents no new
+# semantics; each branch mirrors a decision already made in done-gate.sh so the
+# operator-facing state can never drift from what the Stop gate actually enforces.
+#
+# Sets shell globals:
+#   HC_STATE — one of: S0 S1 S2 S4 S5.
+#   HC_NEXT  — the canonical next-action string (empty "" for silent states).
+#
+# The five states and their gate correspondence:
+#   S0 idle      — tree clean, no committed work past base. Nothing to gate.
+#                  (gate Step 3 quiet-exit.) Silent: HC_NEXT="".
+#   S1 working   — introduced tree blockers exist. "Introduced-dirty dominates":
+#                  checked FIRST, before any commit/done reasoning, exactly as the
+#                  gate would ultimately block on Step 6. HC_NEXT points at finishing
+#                  and committing the slice.
+#   S2 committed-unverified — committed work past base, tree clean, but the
+#                  done-state is MISSING / schema-invalid / stale (verified_sha !=
+#                  HEAD). (gate Steps 4/4b/5 block.) HC_NEXT points at running /done.
+#   S4 blocked-on-X — a VALID done-state at the current HEAD, no escalation, but
+#                  hc_done_state_blocked reports a live blocking outcome. (gate
+#                  Step 8 blocks.) HC_NEXT is the specific remedy for that reason.
+#   S5 verified  — either a valid done-state at HEAD with an escalation override
+#                  (gate Step 7 allow), OR a valid done-state at HEAD whose Step-8
+#                  outcomes are all green (gate Step 9 allow). Silent: HC_NEXT="".
+#
+# Escalation sits ABOVE the blocked predicate (mirroring gate Step 7 running
+# before Step 8): when a non-null .escalation is present we go straight to S5
+# and do NOT even call hc_done_state_blocked.
+#
+# Reachability / disjointness: every tree maps to exactly one state. S1 is the
+# introduced-dirty guard (dominates). Given a clean tree, S0 vs {S2,S4,S5} splits
+# on "committed work past base?". Given committed work, S2 vs {S4,S5} splits on
+# "valid done-state at HEAD?". Given a valid done-state at HEAD, S5-via-escalation
+# vs {S4,S5-green} splits on "escalation present?", and finally S4 vs S5-green
+# splits on hc_done_state_blocked's verdict. No overlap.
+#
+# --- S4-vs-S2 boundary (verified from done-write-state.sh, DO NOT GUESS) -----
+# done-write-state.sh stamps verified_sha=HEAD ONLY on a full-success (or
+# escalated) write: with NO escalation it `exit 1`s BEFORE writing whenever
+# tests/lint/review/coverage/task_checks are not green (lines 132-217), so a
+# FAILED /done attempt with no escalation writes NO done-state at all — leaving
+# the prior (stale or absent) done-state whose verified_sha != HEAD. That case
+# therefore collapses into S2 (committed-unverified), NOT S4.
+#
+# Consequence: in the normal /done flow S4 is NOT reachable via a plain failed
+# attempt. S4 is reachable ONLY when a done-state that is VALID and stamped at the
+# CURRENT HEAD nonetheless has a live blocking outcome — i.e. the recorded outcome
+# or the live HEAD-keyed review evidence has diverged from green AT this HEAD.
+# Concretely reachable via:
+#   (a) the review-log for HEAD is later deleted/absent  → check 3 blocks,
+#   (b) an escalated write recorded a red tests.exit_code and the escalation is
+#       then removed/nulled (Step 7 no longer short-circuits) → check 1 blocks,
+#   (c) a done-state stamped at HEAD recording a failed task_check with an
+#       escalation later dropped → check 7 blocks,
+#   (d) a coverage gap at HEAD after the review-log's files_reviewed no longer
+#       covers the changeset → check 6 blocks.
+# All four are states the Stop gate's Step 8 would itself block on at this HEAD —
+# hc_state surfaces the same verdict pre-emptively. The fixture test exercises S4
+# by writing a valid done-state stamped at HEAD with tests.exit_code=1 and no
+# escalation (case (b)'s end-state), and a separate coverage-gap fixture (case (d)).
+hc_state() {
+  local session_id="$1"
+
+  # Reset outputs so a repeat call never leaks stale values.
+  HC_STATE=""
+  HC_NEXT=""
+
+  # Compose the identity resolver + tree classifier. hc_resolve sets HC_MODE /
+  # HC_BASE / HC_TASK_KEY / HARNESS_DIR / HC_CONTRACTS_DIR; hc_tree_status sets
+  # HC_TREE_BLOCKERS relative to the pinned baseline (needs hc_resolve first).
+  hc_resolve "$session_id"
+  hc_tree_status "$session_id"
+
+  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  local head_sha
+  head_sha=$(git -C "$proj" rev-parse HEAD 2>/dev/null)
+
+  # --- S1 working: introduced-dirty dominates. --------------------------------
+  # Uncommitted work THIS session blocks first, before any commit/done reasoning
+  # (gate Step 6). Checked before S0 so a dirty tree is never mistaken for idle.
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    HC_STATE="S1"
+    HC_NEXT="finish the slice, then commit"
+    return 0
+  fi
+
+  # Tree is clean from here on.
+
+  # --- S0 idle: no committed work past base. ----------------------------------
+  # "Committed work exists" = HEAD has moved past the resolver's anchor (HC_BASE).
+  # In task mode HC_BASE is the pinned fork base; in session mode it is the
+  # SessionStart baseline sha (empty when SessionStart recorded nothing). We have
+  # committed work iff HC_BASE is a real sha AND HEAD != HC_BASE. Otherwise
+  # (HEAD == base, OR session-mode with an empty/unrecorded base and thus nothing
+  # we can attribute to this changeset) the changeset is empty → idle (gate Step 3
+  # quiet-exit). Silent state.
+  local committed_work=0
+  if [ -n "$HC_BASE" ] && [ -n "$head_sha" ] && [ "$head_sha" != "$HC_BASE" ]; then
+    committed_work=1
+  fi
+  if [ "$committed_work" -eq 0 ]; then
+    HC_STATE="S0"
+    HC_NEXT=""
+    return 0
+  fi
+
+  # --- committed work exists, tree clean: locate the done-state. --------------
+  local done_state_file="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
+
+  # S2 committed-unverified: done-state MISSING, schema-invalid, or stale
+  # (verified_sha != HEAD). Any of these means the current changeset was never
+  # verified at THIS HEAD (gate Steps 4 / 4b / 5). Because done-write-state.sh
+  # only stamps verified_sha=HEAD on a successful/escalated write, a failed plain
+  # /done attempt lands here (its verified_sha != HEAD), not in S4.
+  local verified_sha=""
+  local valid_at_head=0
+  if [ -f "$done_state_file" ]; then
+    if hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$done_state_file" >/dev/null 2>&1; then
+      verified_sha=$(jq -r '.verified_sha // ""' "$done_state_file" 2>/dev/null)
+      if [ -n "$verified_sha" ] && [ "$verified_sha" = "$head_sha" ]; then
+        valid_at_head=1
+      fi
+    fi
+  fi
+  if [ "$valid_at_head" -eq 0 ]; then
+    HC_STATE="S2"
+    HC_NEXT="run /done to verify the changeset (owns the Step-5 review)"
+    return 0
+  fi
+
+  # --- valid done-state stamped at HEAD. --------------------------------------
+  # Escalation sits ABOVE the blocked predicate (gate Step 7 before Step 8): a
+  # non-null .escalation short-circuits straight to S5 (verified), WITHOUT calling
+  # hc_done_state_blocked. Silent state.
+  local escalation
+  escalation=$(jq -r '.escalation // "null"' "$done_state_file" 2>/dev/null)
+  if [ -n "$escalation" ] && [ "$escalation" != "null" ]; then
+    HC_STATE="S5"
+    HC_NEXT=""
+    return 0
+  fi
+
+  # No escalation → the Step-8 outcome aggregation decides S4 vs S5.
+  local min_level
+  min_level=$(jq -r '.min_review_level // "high"' "$proj/.claude/done-config.json" 2>/dev/null)
+  [ -z "$min_level" ] && min_level="high"
+
+  hc_done_state_blocked "$done_state_file" "$head_sha" "$HC_BASE" \
+    "$HARNESS_DIR" "$HC_CONTRACTS_DIR" "$min_level"
+
+  if [ -n "$HC_DONE_BLOCKED_REASON" ]; then
+    # --- S4 blocked-on-X: derive the specific remedy from the reason. ---------
+    HC_STATE="S4"
+    case "$HC_DONE_BLOCKED_REASON" in
+      tests\ failed*)          HC_NEXT="fix failing tests, re-commit, re-run /done" ;;
+      lint\ failed*)           HC_NEXT="fix lint, re-commit, re-run /done" ;;
+      "review coverage gap")   HC_NEXT="review the uncovered files, then re-run /done" ;;
+      "no review-log at HEAD") HC_NEXT="run an independent code review, then re-run /done" ;;
+      *blocking\ review*)      HC_NEXT="address the blocking review findings, then re-run /done" ;;
+      task\ check\ *)          HC_NEXT="resolve: ${HC_DONE_BLOCKED_REASON}, then re-run /done" ;;
+      *)                       HC_NEXT="resolve: ${HC_DONE_BLOCKED_REASON}, then re-run /done" ;;
+    esac
+    return 0
+  fi
+
+  # --- S5 verified: valid done-state at HEAD, no escalation, all outcomes green.
+  # Silent state (gate Step 9 allow).
+  HC_STATE="S5"
+  HC_NEXT=""
+  return 0
+}

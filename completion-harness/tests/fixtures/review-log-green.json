@@ -1,0 +1,9 @@
+{
+  "contract_version": 1,
+  "reviewed_sha": "__HEAD__",
+  "min_review_level": "high",
+  "files_reviewed": [],
+  "findings": [],
+  "open_findings": 0,
+  "advisory_findings": 0
+}

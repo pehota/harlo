@@ -1,0 +1,23 @@
+{
+  "contract_version": 1,
+  "source_fingerprint": "test",
+  "detected": {
+    "package_manager": null,
+    "test": null,
+    "build": null,
+    "start": null,
+    "lint": null
+  },
+  "overrides": {},
+  "max_fix_attempts": 3,
+  "max_review_rounds": 2,
+  "baseline_snapshot": true,
+  "deploy_check_cmd": null,
+  "start_check_cmd": null,
+  "start_timeout": 30,
+  "trunk": "main",
+  "untracked_policy": "baseline",
+  "min_review_level": "high",
+  "auto_branch": false,
+  "branch_prefix": "task/"
+}
