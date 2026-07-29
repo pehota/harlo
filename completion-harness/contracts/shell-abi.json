@@ -66,6 +66,20 @@
       "stdout": "OK on success, or ERR: <path>: <what>",
       "return_codes": "0 valid, 1 invalid/error",
       "sentinels": ["OK", "ERR"]
+    },
+    {
+      "name": "hc_state",
+      "globals": ["HC_STATE", "HC_NEXT"],
+      "stdout": "none (sets globals; HC_STATE is S0/S1/S2/S4/S5)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_done_state_blocked",
+      "globals": ["HC_DONE_BLOCKED_REASON"],
+      "stdout": "none (sets globals)",
+      "return_codes": "always 0",
+      "sentinels": []
     }
   ]
 }

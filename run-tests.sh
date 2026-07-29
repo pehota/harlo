@@ -20,7 +20,7 @@ fail=0
 total=0
 
 # Root-level suites (no fixture needed) plus the fixture suites.
-for t in test-version.sh harness-trial/test-*.sh; do
+for t in test-version.sh harness-trial/test-*.sh completion-harness/tests/test-*.sh; do
   [ -f "$t" ] || continue
   total=$((total + 1))
   if bash "$t" >/dev/null 2>&1; then
