@@ -353,11 +353,11 @@ hc_review_blocking() {
 # hc_review_coverage_gap <review_log_file> <base> <head> [proj]
 #
 # STRUCTURAL coverage check for the review step. Answers: "did the reviewer
-# actually attest to having examined every file the changeset touched?" —
-# turning "the review covered the whole changeset" from prose hope into a gate
-# check. Companion to hc_review_blocking (severity) — same fail-toward-block
-# discipline, sourced identically by done-gate.sh (Step 8) and
-# done-write-state.sh so they can never diverge.
+# actually attest to having examined every file the changeset touched, AT ITS
+# CURRENT CONTENT?" — turning "the review covered the whole changeset" from
+# prose hope into a gate check. Companion to hc_review_blocking (severity) —
+# same fail-toward-block discipline, sourced identically by done-gate.sh
+# (Step 8) and done-write-state.sh so they can never diverge.
 #
 # Prints the newline-separated changeset files NOT attested as reviewed.
 #   EMPTY output  → full coverage (PASS).
@@ -366,23 +366,50 @@ hc_review_blocking() {
 #                    must NOT block on coverage (no-regression degrade; there was
 #                    no coverage check before this feature).
 #
-# Definitions:
-#   changed  = `git -C <proj> diff --name-only <base> <head>` (two-dot range).
-#   reviewed = the log's .files_reviewed array (absent or NOT an array → []).
-#   gap      = changed \ reviewed  (files changed but not attested).
+# BLOB semantics (per-file, not per-log). A changed file is COVERED iff its
+# CURRENT blob (its content at <head>) was attested by SOME review-log in the
+# task's chain. Previously coverage was per-log at HEAD only — every HEAD move
+# forced re-attestation of the ENTIRE changeset (the "too many review loops"
+# churn). Now a follow-up commit only needs re-attestation of the files whose
+# CONTENT it actually changed; files whose blob is unchanged carry their
+# attestation forward from an earlier chain-log for free.
 #
-# Guards / fail direction:
+# The CHAIN (which logs count). The signature still takes a single <review_log>
+# file (call sites unchanged); the chain is derived from its DIRECTORY. For each
+# `<sha>.json` in dirname(<log>), the log is IN the chain iff <sha> is an
+# ancestor of <head> AND is NOT an ancestor of <base> — i.e. a commit on the
+# task side of the fork, up to and including HEAD (HEAD's own log qualifies:
+# a commit is its own ancestor). Logs for superseded/unreachable commits are
+# ignored.
+#
+# Attested blob of file `p` in chain-log `f`: `git rev-parse -q --verify
+# <f.reviewed_sha>:p`. Current blob: `git rev-parse -q --verify <head>:p`.
+# `p` is covered iff some chain-log both LISTS `p` in files_reviewed AND its
+# attested blob for `p` equals the current blob.
+#
+# DELETED-file carve-out. If `p` has NO blob at <head> (deleted at head), there
+# is no content to blob-match — a tombstone has no blob. Then `p` is covered iff
+# SOME chain-log simply LISTS `p` in files_reviewed (path attestation: the
+# reviewer attested examining the file, and the file is now gone).
+#
+# REBASE / GC consequence (INTENTIONAL, fail-toward-block). A chain-log's
+# attested blob is recomputed live from its reviewed_sha. If a rebase (or gc)
+# makes an old reviewed_sha unreachable, `git rev-parse <old_sha>:p` fails →
+# that log contributes no attested blob → the file falls into the gap →
+# re-review is forced. We prefer forcing an unnecessary re-review over trusting
+# an attestation whose commit no longer exists.
+#
+# Guards / fail direction (PRESERVED verbatim from the pre-blob version):
 #   - <base> empty/unset OR the git diff command fails → print SKIP. Coverage is
 #     meaningless without a changeset base; this is the ONLY no-block degrade.
 #   - Everything else guarded toward BLOCK: on a jq error, an unreadable log, or
 #     any other failure with a non-empty changed set, print the FULL changed set
 #     (block) rather than empty (allow).
-#   - A missing/non-array files_reviewed with a non-empty changed set → gap = all
-#     changed files → non-empty → block. This is what FORCES the attestation:
-#     the reviewer must list files_reviewed to pass.
+#   - jq missing → we cannot read files_reviewed at all → gap = all changed
+#     files → block. This is what FORCES the attestation.
 #
-# Space-safety: paths may contain spaces, so membership is by EXACT WHOLE-LINE
-# equality (`grep -Fxvf <reviewed> <changed>`), never field-splitting — the same
+# Space-safety: paths may contain spaces, so files_reviewed membership is by
+# EXACT WHOLE-LINE equality (`grep -Fxq`), never field-splitting — the same
 # discipline hc_tree_status uses for porcelain lines.
 hc_review_coverage_gap() {
   local log="$1" base="$2" head="$3"
@@ -406,33 +433,82 @@ hc_review_coverage_gap() {
   # From here a non-empty changeset EXISTS; every remaining failure path prints
   # the full changed set (block), never empty (allow).
 
-  # Reviewed set = .files_reviewed[] when it is an array, else empty. jq missing
-  # or a malformed/unreadable log → treat reviewed as empty → gap = all changed
-  # → block. We only accept an explicit array; anything else is [] (block).
-  local reviewed=""
-  if command -v jq >/dev/null 2>&1 && [ -f "$log" ]; then
-    reviewed=$(jq -r '
-      if (has("files_reviewed") and ((.files_reviewed | type) == "array"))
-      then .files_reviewed[]
-      else empty end
-    ' "$log" 2>/dev/null)
-    # jq crash yields empty stdout too — indistinguishable from a genuinely
-    # empty array, and both mean "nothing attested" → block. Safe either way.
+  # jq is required to read files_reviewed from any log. Missing → nothing can be
+  # attested → gap = all changed files → block.
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%s' "$changed"
+    return 0
   fi
 
-  # gap = changed \ reviewed, by exact whole-line equality (space-safe).
-  # grep -Fxvf <reviewed> <changed>: print changed lines NOT present verbatim in
-  # the reviewed set. Empty reviewed set → grep prints every changed line.
-  local gap grc
-  if [ -z "$reviewed" ]; then
-    gap="$changed"
-  else
-    gap=$(printf '%s\n' "$changed" | grep -Fxvf <(printf '%s\n' "$reviewed") 2>/dev/null)
-    grc=$?
-    # grep exits 0 (lines printed) or 1 (no lines = full coverage). Anything
-    # >1 is a real error → fail toward block with the full changed set.
-    [ "$grc" -gt 1 ] && gap="$changed"
-  fi
+  # --- Build the chain: task-side ancestor logs of <head> ------------------
+  # For each <sha>.json in the log's DIRECTORY, keep it iff <sha> is an ancestor
+  # of <head> AND NOT an ancestor of <base>. We record each attested path keyed
+  # by the log's reviewed_sha, so blob resolution later uses the right rev.
+  local dir; dir=$(dirname "$log")
+  # Attested paths, one "<reviewed_sha>\x1f<path>" record per line (\x1f = US,
+  # a byte that cannot occur in a path → space-safe delimiter).
+  local US=$'\x1f'
+  local attested=""
+
+  local f fname fsha rsha paths p
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    fname=$(basename "$f" .json)
+    # Filename sha must be an ancestor of head and NOT of base (task-side).
+    git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
+    git -C "$proj" merge-base --is-ancestor "$fname" "$base" 2>/dev/null && continue
+    # reviewed_sha to blob against; fall back to the filename sha if absent.
+    rsha=$(jq -r 'if (has("reviewed_sha") and (.reviewed_sha|type=="string") and (.reviewed_sha|length>0)) then .reviewed_sha else empty end' "$f" 2>/dev/null)
+    [ -z "$rsha" ] && rsha="$fname"
+    # Attested paths (array only; anything else contributes none).
+    paths=$(jq -r 'if (has("files_reviewed") and ((.files_reviewed|type)=="array")) then .files_reviewed[] else empty end' "$f" 2>/dev/null)
+    [ -z "$paths" ] && continue
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      attested="${attested:+$attested
+}${rsha}${US}${p}"
+    done <<EOF
+$paths
+EOF
+  done
+
+  # --- Per-file coverage ---------------------------------------------------
+  local gap="" cur covered rec asha apath ablob
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    covered=0
+    # Current blob of p at head. Empty → deleted at head → path-attestation.
+    cur=$(git -C "$proj" rev-parse -q --verify "$head:$p" 2>/dev/null)
+    if [ -z "$cur" ]; then
+      # DELETED: covered iff some chain-log simply lists p (no blob to match).
+      while IFS= read -r rec; do
+        [ -z "$rec" ] && continue
+        apath="${rec#*"$US"}"
+        if [ "$apath" = "$p" ]; then covered=1; break; fi
+      done <<EOF
+$attested
+EOF
+    else
+      # PRESENT: covered iff some chain-log lists p AND its attested blob == cur.
+      while IFS= read -r rec; do
+        [ -z "$rec" ] && continue
+        asha="${rec%%"$US"*}"
+        apath="${rec#*"$US"}"
+        [ "$apath" = "$p" ] || continue
+        ablob=$(git -C "$proj" rev-parse -q --verify "$asha:$p" 2>/dev/null)
+        if [ -n "$ablob" ] && [ "$ablob" = "$cur" ]; then
+          covered=1
+          break
+        fi
+      done <<EOF
+$attested
+EOF
+    fi
+    [ "$covered" -eq 0 ] && gap="${gap:+$gap
+}$p"
+  done <<EOF
+$changed
+EOF
 
   printf '%s' "$gap"
   return 0
@@ -517,18 +593,62 @@ EOF
 # hc_live_review_shas [proj]
 #
 # Prints the KEEP-set of review-log SHAs — one per line — for review-log
-# hygiene. A `review-log/<sha>.json` is load-bearing ONLY if <sha> is a commit
-# the gate might still check: the tip of some local branch, or the current HEAD.
-# Everything else is superseded fix-churn and is reapable.
+# hygiene. A `review-log/<sha>.json` is load-bearing if <sha> is a commit the
+# gate might still check across a LIVE task's chain:
+#   - the current HEAD, and every local branch tip (baseline: always emitted);
+#   - PLUS, for each live task branch (unmerged non-trunk, same liveness logic
+#     hc_live_task_keys uses), EVERY commit on its chain `git rev-list B..T`
+#     (B = the branch's pinned task-base, T = its tip). Blob-keyed coverage
+#     (hc_review_coverage_gap) now walks the WHOLE chain of a task's logs, not
+#     just HEAD's — so an intermediate-commit log on a live branch is still
+#     load-bearing and must NOT be reaped as "superseded fix-churn".
 #
-# The pure "is this sha a live tip / current HEAD" decision lives here; the
-# deletion stays in baseline-snapshot.sh. Guarded; always returns 0.
+# SAFETY (matches the terminal-reap discipline): if trunk is UNCONFIDENT, or a
+# task's pinned base file is missing/unreadable, or `git rev-list B..T` fails,
+# we do NOT narrow — we still emit at least HEAD + all branch tips (the
+# pre-widening behaviour), never nothing. Widening only ADDS shas; it can never
+# drop a tip or HEAD.
+#
+# The pure "which shas are live" decision lives here; the deletion stays in
+# baseline-snapshot.sh. Guarded; always returns 0.
 hc_live_review_shas() {
   local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
-  # Current HEAD (empty in a non-git / unborn-branch repo).
+  # Baseline keep-set (ALWAYS emitted, even if the widening below no-ops):
+  #   Current HEAD (empty in a non-git / unborn-branch repo).
   git -C "$proj" rev-parse HEAD 2>/dev/null
-  # Every local branch tip.
+  #   Every local branch tip.
   git -C "$proj" for-each-ref --format='%(objectname)' refs/heads/ 2>/dev/null
+
+  # --- Widening: chain commits of every LIVE task branch -------------------
+  # Trunk must be confident to judge liveness; otherwise skip widening (the
+  # baseline above already kept tips+HEAD → fail toward keeping everything live).
+  local trunk
+  local _saved_proj="$PROJECT_DIR"
+  PROJECT_DIR="$proj"
+  trunk=$(hc__detect_trunk 2>/dev/null)
+  PROJECT_DIR="$_saved_proj"
+  [ -z "$trunk" ] && return 0
+
+  local hdir="${HARNESS_DIR:-$proj/.claude/.harness}"
+  local br tip base_file base
+  while IFS= read -r br; do
+    [ -z "$br" ] && continue
+    [ "$br" = "$trunk" ] && continue
+    # LIVE iff NOT merged into trunk (unmerged non-trunk = in-progress task).
+    git -C "$proj" merge-base --is-ancestor "$br" "$trunk" 2>/dev/null && continue
+    # Pinned task-base for this branch: task-base/br-<sanitized>.sha.
+    base_file="$hdir/task-base/br-$(hc__sanitize "$br").sha"
+    [ -f "$base_file" ] && [ -r "$base_file" ] || continue
+    base=$(cat "$base_file" 2>/dev/null)
+    [ -z "$base" ] && continue
+    tip=$(git -C "$proj" rev-parse -q --verify "refs/heads/$br" 2>/dev/null)
+    [ -z "$tip" ] && continue
+    # Every commit on the task chain base..tip (rev-list failure → emit nothing
+    # extra for this branch; the tip is already in the baseline set).
+    git -C "$proj" rev-list "$base..$tip" 2>/dev/null
+  done <<EOF
+$(git -C "$proj" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null)
+EOF
   return 0
 }
 

@@ -49,11 +49,15 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" 2>/dev/null
 # tree-base/ would let the next SessionStart re-seed the "pre-existing" set from
 # live porcelain and thereby whitelist the agent's own uncommitted work (the
 # very carryover bug this pinning fixes). Pins are tiny; orphaned ones harmless.
-# Session-mode baselines/<sid>.dirty MAY still be reaped — session state is
-# ephemeral (the changeset is the session).
+# ALSO EXCLUDE review-log/ — blob-keyed coverage walks a live task's WHOLE chain
+# of logs (hc_review_coverage_gap), so an intermediate-commit log can be
+# load-bearing long after 14 days. Its lifetime is governed SOLELY by the
+# ancestry keep-set (hc_live_review_shas + the review-log hygiene prune below),
+# never by age. Session-mode baselines/<sid>.dirty MAY still be reaped — session
+# state is ephemeral (the changeset is the session).
 if [ -d "$HARNESS_DIR" ]; then
   find "$HARNESS_DIR" -type f \
-    -not -path '*/task-base/*' -not -path '*/tree-base/*' \
+    -not -path '*/task-base/*' -not -path '*/tree-base/*' -not -path '*/review-log/*' \
     -mtime +14 -delete 2>/dev/null || true
 fi
 

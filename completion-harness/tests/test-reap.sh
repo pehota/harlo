@@ -68,7 +68,11 @@ printf '{"session_id":"%s"}' "$SID" | CLAUDE_PROJECT_DIR="$REPO" bash "$BASELINE
 # Stale files deleted.
 [ ! -e "$STALE_SHA" ]    && ok "stale baselines/old-sess.sha DELETED"    || bad "stale baselines/old-sess.sha still present"
 [ ! -e "$STALE_DONE" ]   && ok "stale done-state/old-sess.json DELETED"  || bad "stale done-state/old-sess.json still present"
-[ ! -e "$STALE_REVIEW" ] && ok "stale review-log/deadbeef.json DELETED"  || bad "stale review-log/deadbeef.json still present"
+# review-log/ is EXCLUDED from the 14-day age reap (blob-keyed coverage can make
+# an old chain-log load-bearing). deadbeef is a BOGUS sha (no matching commit /
+# tip / HEAD) → not in hc_live_review_shas' keep-set → deleted by the review-log
+# HYGIENE prune (not by age). Either way it must be gone after SessionStart.
+[ ! -e "$STALE_REVIEW" ] && ok "stale review-log/deadbeef.json DELETED (by keep-set, age-exempt)"  || bad "stale review-log/deadbeef.json still present"
 
 # Fresh file kept.
 [ -e "$FRESH_DONE" ] && ok "fresh done-state/recent.json KEPT" || bad "fresh done-state/recent.json was deleted"

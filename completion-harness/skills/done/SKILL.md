@@ -294,8 +294,10 @@ every "yes":
    the existing ones — or can a failure fall through to a success path?
 4. Does the change silently broaden a type, scope, capability, or lifetime beyond
    what the task required?
-5. **(Confirming pass only — Step 6)** does a fix in this diff introduce a NEW
-   issue elsewhere?
+5. **(Confirming pass only — Step 6)** two-pronged: **(a)** does a fix in this
+   diff introduce a NEW issue elsewhere; **(b)** does it INVALIDATE a prior
+   finding or assumption about a **carried-forward** file (one that is unchanged
+   and previously reviewed, so we are NOT re-reviewing it this pass)?
 
 Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
 and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
@@ -333,9 +335,14 @@ count STRUCTURALLY from `findings[].severity` and the config `min_review_level`*
 (a finding blocks iff `rank(severity) >= rank(min_review_level)`; ranks
 `low=0 medium=1 high=2 critical=3`; an unknown/missing severity ranks as
 BLOCKING — safe direction). So the reviewer **cannot dodge the gate by miscounting
-`open_findings`** — it must tag severities accurately. Because the log is keyed to
-the reviewed SHA, fixing a finding (which moves HEAD) automatically invalidates the
-old log — re-review is forced for free (Step 6).
+`open_findings`** — it must tag severities accurately. Coverage is now computed
+**per-file by BLOB across all logs in the task's chain** (not per-log at HEAD): a
+changed file is covered iff **some** chain-log attested it **at its CURRENT blob**.
+A follow-up commit therefore only needs re-attestation of the files whose **blobs
+it changed**; files whose content is untouched carry their earlier attestation
+forward for free. (Consequence: a rebase that makes an old reviewed SHA
+unreachable drops that log's attestations → those files fall into the gap →
+re-review is forced. Fail-toward-block by design.)
 
 ## Step 6 — Address findings (bounded loop)
 
@@ -365,14 +372,20 @@ Otherwise (round 1 has blocking findings):
    3, per-item); a won't-fix blocking finding that does not move HEAD must be
    **escalated** (Category C), never silently waived.
 2. **Commit ONCE.** Commit the whole batch as a single commit so **HEAD moves
-   once**, not once per finding. The old review-log (keyed to the previous HEAD)
-   is now stale — re-review is forced for free.
-3. **Confirming pass (round 2), scoped to the fix diff.** Re-run Step 5, but
-   scope the fresh review to the **diff the fix commit introduced** (`git diff
-   <HEAD before the fix commit> HEAD`), not the whole changeset again — it is
-   cheaper and it is where regressions hide. Include the confirming-pass question
-   ("does a fix in this diff introduce a NEW issue elsewhere?"). The subagent
-   still writes a fresh review-log for the **new HEAD** (the gate requires it).
+   once**, not once per finding. Moving HEAD requires a fresh review-log for the
+   new HEAD; blob-keyed coverage means only the files whose **blobs** the fix
+   changed need re-attestation — untouched files carry forward.
+3. **Confirming pass (round 2), scoped to the delta since last-verified HEAD.**
+   Re-run Step 5, but scope the fresh review to the **delta since the
+   last-verified HEAD** (`git diff <prevHEAD> HEAD`), not the whole changeset
+   again — it is cheaper and it is where regressions hide. The subagent must
+   explicitly answer the two-pronged confirming-pass question: **(a)** does this
+   delta introduce a NEW issue elsewhere, AND **(b)** does it INVALIDATE any
+   carried-forward (unchanged, previously-reviewed) file we are NOT re-reviewing?
+   The subagent still writes a fresh review-log for the **new HEAD** — but its
+   `files_reviewed` lists exactly the delta's changed paths (blob-keyed coverage
+   carries the untouched files forward from the earlier chain-logs). The gate
+   requires the new-HEAD log.
 4. **Cap reached → STOP and escalate, do not loop again.** If round 2 STILL
    returns **blocking** findings, do **NOT** start a round 3. **Escalate via
    AskUserQuestion** (Category C): present the remaining findings and ask *"fix

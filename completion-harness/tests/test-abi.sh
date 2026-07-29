@@ -304,11 +304,18 @@ fi
 new_task_repo                                         # fixture with base.txt+c1.txt
 BASE=$(git -C "$REPO" merge-base main feat/x 2>/dev/null)
 HEAD=$(git -C "$REPO" rev-parse HEAD 2>/dev/null)     # tip has c1.txt over base
-CLOG=$(mktemp); CLEANUP+=("$CLOG")
+
+# The coverage log lives in a directory the chain is derived from, and must be
+# named <sha>.json so it is recognized as a chain-log and its reviewed_sha
+# resolves to a real commit for blob-attestation. Place it at
+# review-log/<HEAD>.json inside the repo's harness dir.
+CLOGDIR="$REPO/.claude/.harness/review-log"
+mkdir -p "$CLOGDIR"
+CLOG="$CLOGDIR/$HEAD.json"
 
 # a) empty base → SKIP, rc0.
 if has_sentinel hc_review_coverage_gap SKIP; then
-  printf '{"files_reviewed":[]}\n' > "$CLOG"
+  printf '{"reviewed_sha":"%s","files_reviewed":[]}\n' "$HEAD" > "$CLOG"
   OUT=$(hc_review_coverage_gap "$CLOG" "" "$HEAD" "$REPO" 2>/dev/null); RC=$?
   if [ "$OUT" = "SKIP" ] && [ "$RC" -eq 0 ]; then
     ok "hc_review_coverage_gap emits declared sentinel 'SKIP' rc0 on empty base"
@@ -319,9 +326,10 @@ else
   bad "shell-abi.json does not declare sentinel 'SKIP' for hc_review_coverage_gap (drift)"
 fi
 
-# b) full coverage (files_reviewed lists the whole changeset) → empty, rc0.
+# b) full coverage (files_reviewed lists the whole changeset AT its current blob,
+#    reviewed_sha=HEAD so the attested blob == current blob) → empty, rc0.
 CHANGED=$(git -C "$REPO" diff --name-only "$BASE" "$HEAD" 2>/dev/null)   # c1.txt
-printf '{"files_reviewed":%s}\n' "$(printf '%s\n' "$CHANGED" | jq -R . | jq -s .)" > "$CLOG"
+printf '{"reviewed_sha":"%s","files_reviewed":%s}\n' "$HEAD" "$(printf '%s\n' "$CHANGED" | jq -R . | jq -s .)" > "$CLOG"
 OUT=$(hc_review_coverage_gap "$CLOG" "$BASE" "$HEAD" "$REPO" 2>/dev/null); RC=$?
 if [ -z "$OUT" ] && [ "$RC" -eq 0 ]; then
   ok "hc_review_coverage_gap prints empty (full coverage) rc0"
@@ -330,7 +338,7 @@ else
 fi
 
 # c) changed-but-unreviewed file → non-empty gap naming it, rc0.
-printf '{"files_reviewed":[]}\n' > "$CLOG"
+printf '{"reviewed_sha":"%s","files_reviewed":[]}\n' "$HEAD" > "$CLOG"
 OUT=$(hc_review_coverage_gap "$CLOG" "$BASE" "$HEAD" "$REPO" 2>/dev/null); RC=$?
 if [ -n "$OUT" ] && printf '%s' "$OUT" | grep -q 'c1.txt' && [ "$RC" -eq 0 ]; then
   ok "hc_review_coverage_gap prints non-empty gap (names unreviewed file) rc0"

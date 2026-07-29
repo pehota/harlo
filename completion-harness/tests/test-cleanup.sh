@@ -174,6 +174,43 @@ fi
 rm -rf "$R"
 
 # ============================================================================
+# PART 3 — REVIEW-LOG HYGIENE (blob chain): an ANCESTOR (intermediate, non-tip)
+# commit's log on a LIVE task branch is KEPT — blob-keyed coverage walks the
+# whole chain, so it is still load-bearing. hc_live_review_shas widens the
+# keep-set to every commit in base..tip of a live branch (given its pinned base).
+# ============================================================================
+R=$(mktemp -d)
+git -C "$R" init -q -b main
+git -C "$R" config user.email t@t; git -C "$R" config user.name t
+printf '.claude/\n' > "$R/.gitignore"; printf 'a\n' > "$R/a.txt"
+git -C "$R" add -A; git -C "$R" commit -qm c1
+mkdir -p "$R/.claude/.harness/review-log" "$R/.claude/.harness/baselines" "$R/.claude/.harness/task-base"
+BASE_SHA=$(git -C "$R" rev-parse HEAD)          # trunk tip = task base
+git -C "$R" checkout -q -b feat-chain
+printf 'b\n' > "$R/b.txt"; git -C "$R" add -A; git -C "$R" commit -qm c2
+MID_SHA=$(git -C "$R" rev-parse HEAD)           # intermediate commit (NOT the tip)
+printf 'c\n' > "$R/c.txt"; git -C "$R" add -A; git -C "$R" commit -qm c3
+TIP2_SHA=$(git -C "$R" rev-parse HEAD)          # branch tip
+# Pin the task-base so the widening can compute base..tip.
+printf '%s\n' "$BASE_SHA" > "$R/.claude/.harness/task-base/br-feat-chain.sha"
+BOGUS_SHA="1111111111111111111111111111111111111111"
+printf '{}\n' > "$R/.claude/.harness/review-log/$MID_SHA.json"    # ancestor log
+printf '{}\n' > "$R/.claude/.harness/review-log/$TIP2_SHA.json"   # tip log
+printf '{}\n' > "$R/.claude/.harness/review-log/$BOGUS_SHA.json"  # off-chain
+run_snapshot "$R" sC startup
+if [ -e "$R/.claude/.harness/review-log/$MID_SHA.json" ]; then
+  ok "REVIEW-LOG HYGIENE: ancestor intermediate log on a LIVE branch KEPT (chain-aware)"
+else
+  bad "ancestor intermediate log on a live branch was DELETED (chain broken)"
+fi
+if [ ! -e "$R/.claude/.harness/review-log/$BOGUS_SHA.json" ]; then
+  ok "REVIEW-LOG HYGIENE: off-chain bogus log still DELETED alongside the kept chain"
+else
+  bad "off-chain bogus log survived"
+fi
+rm -rf "$R"
+
+# ============================================================================
 # PART 1 — SOURCE GUARD: compact must NOT overwrite an existing session baseline
 # (.sha AND .dirty), even though the tree changed. clear/startup DOES refresh.
 # current-session marker is still written on compact.
