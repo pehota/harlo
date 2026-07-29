@@ -293,20 +293,17 @@ assert_eq "S2 reason == canonical" \
   "$(printf '%s' "$OUT" | jq -r '.reason // ""' 2>/dev/null)" \
   "run /done to verify the changeset (owns the Step-5 review)"
 
-# --- S1 (introduced uncommitted) → block, reason starts "finish the slice". -
+# --- S1 (natural: introduced uncommitted, no done-state) → block "finish...". -
 echo
-echo "--- Stop gate S1: introduced uncommitted → block w/ 'finish the slice' ---"
-# The gate's tree-blocker reason (Step 6) fires only AFTER Steps 4/4b/5 pass —
-# a valid done-state stamped at HEAD (else Step 4/5 would block first with the
-# S2 string). So: commit feat, pin the clean baseline, write a green done-state +
-# covering review-log at HEAD, THEN introduce an uncommitted file → Step 6 blocks
-# with the 'finish the slice' reason.
+echo "--- Stop gate S1: NATURAL introduced-dirty (no done-state) → block w/ 'finish the slice' ---"
+# The NATURAL S1 tree: pin a clean baseline, then introduce an uncommitted file —
+# NO done-state, NO review-log. hc_state classifies this S1 ("finish the
+# slice→commit"). After the gate's tree-check reorder (runs BEFORE the done-state
+# checks), the gate blocks with the SAME S1 reason. This is the regression lock:
+# it FAILS before the reorder (the gate would block with the S2 '/done' string
+# because missing-done-state was checked first) and PASSES after.
 DIR=$(make_repo)
-H1=$(commit_change "$DIR" "feat.txt" "feature")
-run_session_start "$DIR" "sess-g1" "startup" >/dev/null   # pin clean baseline at HEAD
-KEY=$(task_key_for_branch "feature/x")
-write_done_state "$DIR" "$FIX/done-state-green.json" "$H1" "$KEY"
-write_review_log "$DIR" "$FIX/review-log-green.json" "$H1" "feat.txt"
+run_session_start "$DIR" "sess-g1" "startup" >/dev/null   # pin clean baseline
 echo "wip" > "$DIR/wip.txt"                                # introduced after pin
 OUT=$(run_stop_gate "$DIR" "sess-g1")
 assert_eq "S1 decision==block" \
@@ -315,6 +312,30 @@ REASON=$(printf '%s' "$OUT" | jq -r '.reason // ""' 2>/dev/null)
 case "$REASON" in
   "finish the slice"*) printf 'PASS  S1 reason starts with "finish the slice"\n'; CASES=$((CASES+1)) ;;
   *) printf 'FAIL  S1 reason: [%s] does not start with "finish the slice"\n' "$REASON"
+     CASES=$((CASES+1)); FAILS=$((FAILS+1)) ;;
+esac
+
+# --- S1 dominance: valid green done-state + dirty tree → STILL blocks on tree. -
+echo
+echo "--- Stop gate S1-dominance: green done-state + dirty tree → tree dominates S5 ---"
+# A would-be-S5 (valid green done-state + covering review-log at HEAD) with an
+# introduced uncommitted file must STILL block on the tree — the tree-check runs
+# before the done-state checks AND before Step-7 escalation/Step-9 allow, so a
+# dirty tree can never be masked by an otherwise-green done-state.
+DIR=$(make_repo)
+H1=$(commit_change "$DIR" "feat.txt" "feature")
+run_session_start "$DIR" "sess-g1d" "startup" >/dev/null   # pin clean baseline at HEAD
+KEY=$(task_key_for_branch "feature/x")
+write_done_state "$DIR" "$FIX/done-state-green.json" "$H1" "$KEY"
+write_review_log "$DIR" "$FIX/review-log-green.json" "$H1" "feat.txt"
+echo "wip" > "$DIR/wip.txt"                                # introduced after pin
+OUT=$(run_stop_gate "$DIR" "sess-g1d")
+assert_eq "S1-dominance decision==block" \
+  "$(printf '%s' "$OUT" | jq -r '.decision // ""' 2>/dev/null)" "block"
+REASON=$(printf '%s' "$OUT" | jq -r '.reason // ""' 2>/dev/null)
+case "$REASON" in
+  "finish the slice"*) printf 'PASS  S1-dominance reason starts with "finish the slice"\n'; CASES=$((CASES+1)) ;;
+  *) printf 'FAIL  S1-dominance reason: [%s] does not start with "finish the slice"\n' "$REASON"
      CASES=$((CASES+1)); FAILS=$((FAILS+1)) ;;
 esac
 

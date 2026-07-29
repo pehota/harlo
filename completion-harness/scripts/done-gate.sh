@@ -96,6 +96,31 @@ if [ -n "$HC_BASE" ] && [ "$HC_BASE" = "$HEAD_SHA" ]; then
   fi
 fi
 
+# --- Step 3b: working tree has INTRODUCED changes -> BLOCK ------------------
+# Re-check the tree live at gate time via the shared baseline-relative
+# classifier (hc_tree_status). Only changes INTRODUCED this session (not present
+# at the SessionStart baseline) block; pre-existing entries are ignored, not
+# blocked (and never surfaced) — this is what breaks the pre-existing-untracked deadlock without
+# weakening the gate (the changeset's own uncommitted work still blocks). Runs
+# BEFORE the done-state checks (Steps 4/4b/5) so an introduced-dirty tree blocks
+# with the S1 ("finish the slice") reason — aligned with hc_state, which
+# evaluates the introduced-dirty guard FIRST. A clean tree makes this a no-op and
+# the done-state checks below proceed exactly as before. Also enforced before
+# escalation (Step 7).
+if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+  hc_tree_status "$SESSION_ID" 2>/dev/null
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    block "finish the slice ($(hc_tree_remediation)), then commit"
+  fi
+else
+  # Classifier unavailable (source failed): fall back to the strict live check
+  # so the gate never weakens toward allow.
+  TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+  if [ -n "$TREE_STATUS" ]; then
+    block "finish the slice (commit or stash your uncommitted changes), then commit"
+  fi
+fi
+
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
 if [ ! -f "$DONE_STATE_FILE" ]; then
   block "run /done to verify the changeset (owns the Step-5 review)"
@@ -122,27 +147,6 @@ fi
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
   block "run /done to verify the changeset (owns the Step-5 review)"
-fi
-
-# --- Step 6: working tree has INTRODUCED changes -> BLOCK -------------------
-# Re-check the tree live at gate time via the shared baseline-relative
-# classifier (hc_tree_status). Only changes INTRODUCED this session (not present
-# at the SessionStart baseline) block; pre-existing entries are ignored, not
-# blocked (and never surfaced) — this is what breaks the pre-existing-untracked deadlock without
-# weakening the gate (the changeset's own uncommitted work still blocks). Also
-# enforced before escalation (Step 7).
-if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
-  hc_tree_status "$SESSION_ID" 2>/dev/null
-  if [ -n "$HC_TREE_BLOCKERS" ]; then
-    block "finish the slice ($(hc_tree_remediation)), then commit"
-  fi
-else
-  # Classifier unavailable (source failed): fall back to the strict live check
-  # so the gate never weakens toward allow.
-  TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
-  if [ -n "$TREE_STATUS" ]; then
-    block "finish the slice (commit or stash your uncommitted changes), then commit"
-  fi
 fi
 
 # --- Step 7: valid escalation present -> exit 0 -----------------------------

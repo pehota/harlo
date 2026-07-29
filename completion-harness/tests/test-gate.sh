@@ -501,6 +501,169 @@ run_case "16b same state ALLOWs for a DIFFERENT session B (cross-session resume)
 rm -rf "$FEAT_REPO"
 
 # ============================================================================
+# Reason-pinning cases — the S1/S2 boundary now matches hc_state.
+#
+# run_case only classifies block/allow; these capture the block JSON's .reason
+# and pin its FAMILY, proving the reordered gate emits the S1 ("finish the
+# slice") reason for an introduced-dirty tree and the S2 ("/done") reason for a
+# committed-clean tree with no done-state — the exact boundary hc_state draws.
+#
+# gate_reason <stdin_json> [proj]  → echoes .reason from the block JSON (empty
+# on allow). Same invocation shape as run_case.
+gate_reason() {
+  local stdin_json="$1" proj="${2:-$PROJECT_DIR}"
+  printf '%s' "$stdin_json" | CLAUDE_PROJECT_DIR="$proj" bash "$GATE" 2>/dev/null \
+    | jq -r '.reason // ""' 2>/dev/null
+}
+# assert_reason_prefix <name> <stdin_json> <prefix> [proj]
+assert_reason_prefix() {
+  local name="$1" stdin_json="$2" prefix="$3" proj="${4:-$PROJECT_DIR}"
+  local r; r=$(gate_reason "$stdin_json" "$proj")
+  case "$r" in
+    "$prefix"*) printf 'PASS  %s\n' "$name"; PASS=$((PASS+1)) ;;
+    *) printf 'FAIL  %s  [reason: %s; expected prefix: %s]\n' "$name" "${r:-<empty>}" "$prefix"; FAIL=$((FAIL+1)) ;;
+  esac
+}
+# assert_reason_eq <name> <stdin_json> <exact> [proj]
+assert_reason_eq() {
+  local name="$1" stdin_json="$2" exact="$3" proj="${4:-$PROJECT_DIR}"
+  local r; r=$(gate_reason "$stdin_json" "$proj")
+  if [ "$r" = "$exact" ]; then
+    printf 'PASS  %s\n' "$name"; PASS=$((PASS+1))
+  else
+    printf 'FAIL  %s  [reason: %s; expected: %s]\n' "$name" "${r:-<empty>}" "$exact"; FAIL=$((FAIL+1))
+  fi
+}
+
+# R1 — introduced-dirty + no done-state → reason starts "finish the slice" (S1).
+# Baseline pinned at HEAD, tree dirtied, NO done-state. Before the reorder the
+# gate blocked with the S2 /done string (missing-done-state checked first); after,
+# the tree-check fires first with the S1 reason.
+SID=rp1; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
+printf 'introduced\n' > "$PROJECT_DIR/a.txt"
+assert_reason_prefix "R1 introduced-dirty + no done-state -> reason 'finish the slice' (S1)" \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}" "finish the slice"
+ensure_clean
+
+# R2 — committed-clean + no done-state → reason is the exact /done S2 string.
+SID=rp2; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+assert_reason_eq "R2 committed-clean + no done-state -> reason is /done S2 string" \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}" \
+  "run /done to verify the changeset (owns the Step-5 review)"
+
+# ============================================================================
+# Floor↔steering PARITY — the gate's reason FAMILY must agree with hc_state's
+# HC_STATE across the two boundary trees. Sources the REAL library, builds its
+# own throwaway repos (self-contained; independent of the main fixture above).
+#   {dirty + no-done-state}            → hc_state S1 ⇔ gate 'finish the slice'
+#   {clean + no-done-state, HEAD>base} → hc_state S2 ⇔ gate '/done'
+# ============================================================================
+LIB="$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh"
+
+# hc_state_for <dir> <sid>  → echoes HC_STATE (subshell: clean globals per call).
+hc_state_for() {
+  local dir="$1" sid="$2"
+  (
+    export CLAUDE_PROJECT_DIR="$dir"
+    unset PROJECT_DIR
+    . "$LIB"
+    hc_state "$sid"
+    printf '%s' "$HC_STATE"
+  )
+}
+
+# Build a task-mode repo (feature branch off main). Echoes "<dir> <feat_head>".
+parity_repo() {
+  local d; d=$(mktemp -d)
+  git -C "$d" init -q -b main
+  git -C "$d" config user.name t; git -C "$d" config user.email t@t
+  printf '.claude/\n' > "$d/.gitignore"
+  printf 'root\n' > "$d/root.txt"
+  git -C "$d" add -A; git -C "$d" commit -q -m root
+  git -C "$d" checkout -q -b feat/parity
+  mkdir -p "$d/.claude/.harness/done-state" "$d/.claude/.harness/review-log" \
+           "$d/.claude/.harness/baselines" "$d/.claude/.harness/tree-base"
+  printf '%s' "$d"
+}
+parity_assert() {
+  local name="$1" state="$2" reason="$3" expect_state="$4" expect_prefix="$5"
+  local ok=1 detail=""
+  [ "$state" = "$expect_state" ] || { ok=0; detail="hc_state=$state (want $expect_state)"; }
+  case "$reason" in "$expect_prefix"*) : ;; *) ok=0; detail="$detail; reason=${reason:-<empty>} (want prefix $expect_prefix)";; esac
+  if [ "$ok" -eq 1 ]; then printf 'PASS  %s\n' "$name"; PASS=$((PASS+1))
+  else printf 'FAIL  %s  [%s]\n' "$name" "$detail"; FAIL=$((FAIL+1)); fi
+}
+
+# P1 — dirty + no-done-state → hc_state S1, gate 'finish the slice'.
+PDIR=$(parity_repo)
+# pin a clean tree baseline for this task key so the introduced file classifies
+# as a blocker (not seeded as pre-existing).
+: > "$PDIR/.claude/.harness/tree-base/br-feat-parity.dirty"
+printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha" 2>/dev/null \
+  || { mkdir -p "$PDIR/.claude/.harness/task-base"; printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha"; }
+printf 'wip\n' > "$PDIR/wip.txt"
+P_STATE=$(hc_state_for "$PDIR" "p1")
+P_REASON=$(gate_reason '{"session_id":"p1","stop_hook_active":false}' "$PDIR")
+parity_assert "PARITY dirty+no-done-state: hc_state S1 == gate 'finish the slice'" \
+  "$P_STATE" "$P_REASON" "S1" "finish the slice"
+rm -rf "$PDIR"
+
+# P2 — clean + no-done-state, HEAD>base → hc_state S2, gate '/done'.
+PDIR=$(parity_repo)
+mkdir -p "$PDIR/.claude/.harness/task-base"
+printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha"
+printf 'work\n' > "$PDIR/work.txt"; git -C "$PDIR" add -A; git -C "$PDIR" commit -q -m work
+# pin the tree baseline AFTER committing so the tree is clean (no blockers).
+: > "$PDIR/.claude/.harness/tree-base/br-feat-parity.dirty"
+P_STATE=$(hc_state_for "$PDIR" "p2")
+P_REASON=$(gate_reason '{"session_id":"p2","stop_hook_active":false}' "$PDIR")
+parity_assert "PARITY clean+no-done-state(HEAD>base): hc_state S2 == gate '/done'" \
+  "$P_STATE" "$P_REASON" "S2" "run /done"
+rm -rf "$PDIR"
+
+# ============================================================================
+# Part B lock — PreToolUse no-deny invariant. auto-branch.sh must NEVER emit a
+# deny/decision and must ALWAYS exit 0, whether driven on trunk or off-trunk.
+# (Audit conclusion: no new PreToolUse-deny was added; this pins that.)
+# ============================================================================
+AUTOBRANCH="$(cd "$(dirname "$0")/../scripts" && pwd)/auto-branch.sh"
+
+# assert_no_deny <name> <dir>  → runs the hook with a Write tool_input; asserts
+# exit 0 AND stdout carries no deny/decision key.
+assert_no_deny() {
+  local name="$1" dir="$2" out code
+  out=$(printf '{"session_id":"pb","tool_name":"Write","tool_input":{"file_path":"x.txt","content":"y"}}' \
+    | CLAUDE_PROJECT_DIR="$dir" bash "$AUTOBRANCH" 2>/dev/null)
+  code=$?
+  local ok=1 detail=""
+  [ "$code" -eq 0 ] || { ok=0; detail="exit $code (expected 0)"; }
+  case "$out" in
+    *'"decision"'*|*'"deny"'*|*'"permissionDecision"'*) ok=0; detail="$detail; emitted a decision/deny: $out" ;;
+  esac
+  if [ "$ok" -eq 1 ]; then printf 'PASS  %s\n' "$name"; PASS=$((PASS+1))
+  else printf 'FAIL  %s  [%s]\n' "$name" "$detail"; FAIL=$((FAIL+1)); fi
+}
+
+# PB1 — on trunk (main). The hook may auto-branch but must never deny.
+PBDIR=$(mktemp -d)
+git -C "$PBDIR" init -q -b main
+git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
+printf 'root\n' > "$PBDIR/root.txt"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
+mkdir -p "$PBDIR/.claude"; printf '{"trunk":"main"}\n' > "$PBDIR/.claude/done-config.json"
+assert_no_deny "PB1 PreToolUse on trunk -> exit 0, no deny/decision" "$PBDIR"
+rm -rf "$PBDIR"
+
+# PB2 — off trunk (feature branch). Fast-path no-op; still no deny, exit 0.
+PBDIR=$(mktemp -d)
+git -C "$PBDIR" init -q -b main
+git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
+printf 'root\n' > "$PBDIR/root.txt"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
+git -C "$PBDIR" checkout -q -b feat/pb
+mkdir -p "$PBDIR/.claude"; printf '{"trunk":"main"}\n' > "$PBDIR/.claude/done-config.json"
+assert_no_deny "PB2 PreToolUse off trunk -> exit 0, no deny/decision" "$PBDIR"
+rm -rf "$PBDIR"
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
