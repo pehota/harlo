@@ -217,8 +217,35 @@ if [ -n "$HC_TREE_BASE_FILE" ]; then
   fi
 fi
 
+# --- classify the FSM state for proactive steering (P2) ---------------------
+# Compose the classifier (hc_state) to learn the current operator-facing state
+# and its canonical next-action. Run AFTER the tree baseline is pinned above, so
+# hc_tree_status classifies against the just-written .dirty (a first-session tree
+# would otherwise degrade to strict and misclassify a clean S0 as S1). Same guard
+# idiom as hc_resolve; pre-init so a source failure leaves them empty (→ no
+# additionalContext, silent). Read-only w.r.t. baselines — it reclassifies, it
+# does not re-pin.
+HC_STATE=""
+HC_NEXT=""
+if command -v hc_state >/dev/null 2>&1 || type hc_state >/dev/null 2>&1; then
+  hc_state "$SESSION_ID" 2>/dev/null
+fi
+
+# ADDL_CTX carries the agent-visible proactive steering, injected via
+# hookSpecificOutput.additionalContext ONLY in ACTIONABLE states (S1/S2/S4). The
+# first line is the D4 review-ownership directive; the second injects the FSM
+# next-action. Silent (empty) in S0/S5.
+ADDL_CTX=""
+case "$HC_STATE" in
+  S1|S2|S4)
+    ADDL_CTX="[completion-harness] /done owns the Step-5 independent code review — it is the Definition-of-Done. Do NOT run your own separate pre-commit review.
+Next action: ${HC_NEXT}"
+    ;;
+esac
+
 # SYS_MSG accumulates non-blocking guidance; emitted ONCE at the end as a single
-# {"systemMessage":...} object (two objects on stdout = invalid JSON).
+# JSON object (two objects on stdout = invalid JSON). It may coexist with
+# hookSpecificOutput.additionalContext in that one object.
 SYS_MSG=""
 append_msg() { SYS_MSG="${SYS_MSG:+$SYS_MSG
 }$1"; }
@@ -308,11 +335,34 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
   fi
 fi
 
-# --- emit accumulated guidance as a single systemMessage (guarded) ----------
-if [ -n "$SYS_MSG" ]; then
+# --- emit ONE JSON object carrying the user-facing systemMessage AND/OR the ---
+# --- agent-visible additionalContext (guarded) ------------------------------
+# The SessionStart contract: a top-level `additionalContext` is silently ignored
+# by the runtime — the agent-visible channel is hookSpecificOutput.additionalContext
+# (nested, with hookEventName:"SessionStart"). ONE object MAY carry BOTH a
+# top-level `systemMessage` (shown in the user's terminal, NOT agent-visible) and
+# hookSpecificOutput.additionalContext (injected into agent context) — both are
+# honoured. Never emit two JSON objects (invalid).
+#
+# jq builds the object safely, dropping any absent key: systemMessage only when
+# SYS_MSG is non-empty (preserving prior behaviour), hookSpecificOutput only when
+# ADDL_CTX is non-empty (actionable state). The whole emission is guarded so a
+# fully-silent session (S0/S5, no warnings) prints nothing.
+#
+# jq-absent fallback: without jq the nested object cannot be built, so we degrade
+# to the systemMessage-only form (additionalContext dropped) — matching the
+# existing degrade path; emit only when SYS_MSG is set.
+if [ -n "$SYS_MSG" ] || [ -n "$ADDL_CTX" ]; then
   if command -v jq >/dev/null 2>&1; then
-    jq -n --arg m "$SYS_MSG" '{"systemMessage":$m}' 2>/dev/null
-  else
+    jq -n --arg m "$SYS_MSG" --arg ctx "$ADDL_CTX" '
+      {
+        systemMessage: (if $m != "" then $m else null end),
+        hookSpecificOutput: (if $ctx != ""
+          then {hookEventName:"SessionStart", additionalContext:$ctx}
+          else null end)
+      } | with_entries(select(.value != null))
+    ' 2>/dev/null
+  elif [ -n "$SYS_MSG" ]; then
     printf '{"systemMessage":"%s"}\n' "$SYS_MSG"
   fi
 fi

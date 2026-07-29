@@ -98,7 +98,7 @@ fi
 
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
 if [ ! -f "$DONE_STATE_FILE" ]; then
-  block "/done has not passed for the current changeset (HEAD: ${HEAD_SHA:0:7}). Run /done to verify tests, app start, code review, and task-specific checks before declaring done."
+  block "run /done to verify the changeset (owns the Step-5 review)"
 fi
 
 # --- Step 4b: done-state must satisfy the hard contract (schema) -> BLOCK ----
@@ -109,10 +109,10 @@ fi
 # this never fires on a jq-less host.
 if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
   if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" >/dev/null 2>&1; then
-    block "done-state fails contract (schema) for HEAD ${HEAD_SHA:0:7} — the recorded state is malformed or missing required fields; re-run /done."
+    block "run /done to verify the changeset (owns the Step-5 review)"
   fi
 else
-  block "contract validator unavailable (broken install) — cannot verify done-state integrity for HEAD ${HEAD_SHA:0:7}."
+  block "run /done to verify the changeset (owns the Step-5 review)"
 fi
 
 # --- Step 5: verified_sha != HEAD -> BLOCK ----------------------------------
@@ -121,7 +121,7 @@ fi
 # gate once HEAD has moved past the changeset it was recorded against.
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
-  block "changes committed since last /done (HEAD: ${HEAD_SHA:0:7}) — re-run /done to re-verify the current changeset."
+  block "run /done to verify the changeset (owns the Step-5 review)"
 fi
 
 # --- Step 6: working tree has INTRODUCED changes -> BLOCK -------------------
@@ -134,14 +134,14 @@ fi
 if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
-    block "uncommitted changes in the working tree — $(hc_tree_remediation) — then re-run /done."
+    block "finish the slice ($(hc_tree_remediation)), then commit"
   fi
 else
   # Classifier unavailable (source failed): fall back to the strict live check
   # so the gate never weakens toward allow.
   TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
   if [ -n "$TREE_STATUS" ]; then
-    block "uncommitted changes in the working tree — commit or stash them, then re-run /done."
+    block "finish the slice (commit or stash your uncommitted changes), then commit"
   fi
 fi
 
@@ -173,7 +173,7 @@ fi
 # tests.exit_code must be exactly "0". Absent -> "MISSING" -> block.
 TESTS_EXIT=$(jq -r '.tests.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TESTS_EXIT" != "0" ]; then
-  block "recorded tests are not green (exit_code=${TESTS_EXIT}) — fix and re-run /done, or escalate."
+  block "fix failing tests, re-commit, re-run /done"
 fi
 
 # lint (conditional). Only projects with a lint command record a .lint object.
@@ -183,7 +183,7 @@ fi
 # yielding "") fails toward BLOCK via the string compare.
 LINT_EXIT=$(jq -r '.lint.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$LINT_EXIT" != "MISSING" ] && [ "$LINT_EXIT" != "0" ]; then
-  block "recorded lint is not green (exit_code=${LINT_EXIT}) — fix and re-run /done, or escalate."
+  block "fix lint, re-commit, re-run /done"
 fi
 
 # review: an INDEPENDENT review-log must exist for the current HEAD, written by
@@ -196,17 +196,17 @@ fi
 # the tests.exit_code check.
 REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
 if [ ! -f "$REVIEW_LOG" ]; then
-  block "no independent code review recorded for HEAD ${HEAD_SHA:0:7} — run /done."
+  block "run an independent code review, then re-run /done"
 fi
 # Hard contract: the review-log must be structurally valid before its
 # findings[]/files_reviewed are trusted by the severity + coverage checks below.
 # A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
 if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
   if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
-    block "review-log fails contract (schema) for HEAD ${HEAD_SHA:0:7} — the log is malformed or missing required fields; re-run /done."
+    block "run /done to verify the changeset (owns the Step-5 review)"
   fi
 else
-  block "contract validator unavailable (broken install) — cannot verify review-log integrity for HEAD ${HEAD_SHA:0:7}."
+  block "run /done to verify the changeset (owns the Step-5 review)"
 fi
 MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
@@ -218,7 +218,7 @@ else
   OPEN="ERR"
 fi
 if [ "$OPEN" != "0" ]; then
-  block "${OPEN} blocking (≥ ${MIN_LEVEL}) review findings for HEAD ${HEAD_SHA:0:7} — address them and re-run /done, or escalate."
+  block "address the blocking review findings (${OPEN}), then re-run /done"
 fi
 
 # review COVERAGE: the review-log must attest (in .files_reviewed) EVERY file the
@@ -235,7 +235,7 @@ fi
 GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
-  block "review did not cover changed files: ${GAP_LIST}— re-review the full changeset (HEAD ${HEAD_SHA:0:7} vs base ${HC_BASE:0:7}) and record every changed file in the review-log's files_reviewed."
+  block "review the uncovered files (${GAP_LIST}), then re-run /done"
 fi
 
 # task_checks: every entry must be status "passed". Count the non-passed ones;
@@ -243,7 +243,7 @@ fi
 # yields "" which is != "0" -> block.
 TASK_FAILED=$(jq -r '[.task_checks[]? | select(.status != "passed")] | length' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TASK_FAILED" != "0" ]; then
-  block "recorded task_checks are not all passed (${TASK_FAILED} not passed) — fix and re-run /done, or escalate."
+  block "fix ${TASK_FAILED} task check(s) not passed, then re-run /done"
 fi
 
 # --- Step 9: all checks pass -> allow the stop ------------------------------
