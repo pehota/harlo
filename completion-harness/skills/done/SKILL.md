@@ -170,6 +170,20 @@ in the `.tests.json`) or **absent**, you have no baseline to diff against — yo
 for this changeset rather than silently proceeding as if every red were
 pre-existing.
 
+**Green must carry evidence — never fake it.** A green `tests` payload is
+**un-forgeable**: it must record `exit_code: 0` **and** the exact `command` you
+ran **and** an `output_tail` (the last ~20 lines of that command's output). The
+writer and the gate both **refuse a green `tests` object that lacks a non-empty
+`command` or `output_tail`** — a bare `{"exit_code": 0}` no longer passes. Record
+what you actually ran and saw.
+
+**If the tests genuinely cannot be run** (environment/capability block — Docker
+down, no network, missing hardware), do **NOT** fake `exit_code: 0`. Encode
+`tests: {"status": "not_run", "reason": "<why they could not run>"}` **and raise
+an escalation** (Category A — environment). The writer/gate accept a `not_run`
+tests object **only** when an escalation is present; without one it blocks. This
+keeps an unrun suite from ever masquerading as verified green.
+
 If a **lint command is configured** (effective `lint` from Step 0), run it too
 and record its exit code — you will include `lint: {"exit_code": N}` in the
 Step-7 payload. Non-zero → fix (or escalate), same discipline as tests. No lint
@@ -432,7 +446,7 @@ Payload shape (facts are injected, not supplied):
     "sources": ["base", "agent-instructions", "task", "session"],
     "items": ["tests green", "lint green", "app starts", "changeset-scoped independent review", "re-verified after fixes", "verification real not synthetic", "deploy target stated", "visually verify button"]
   },
-  "tests": {"exit_code": 0, "newly_red": [], "pre_existing_red": []},
+  "tests": {"exit_code": 0, "command": "<the exact test command you ran>", "output_tail": "<last ~20 lines of its output>", "newly_red": [], "pre_existing_red": []},
   "lint": {"exit_code": 0},
   "app_started": true,
   "task_checks": [

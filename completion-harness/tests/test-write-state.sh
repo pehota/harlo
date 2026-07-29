@@ -72,7 +72,7 @@ export CLAUDE_PROJECT_DIR="$TMP"
 DONE_STATE="$TMP/.claude/.harness/done-state/session-${SESSION}.json"
 
 # Green payload: tests green, lint green (lint IS configured), no review field.
-PAYLOAD='{"dod":{"sources":["base"],"items":["tests green","lint green","app starts"]},"tests":{"exit_code":0,"newly_red":[],"pre_existing_red":[]},"lint":{"exit_code":0},"app_started":true,"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+PAYLOAD='{"dod":{"sources":["base"],"items":["tests green","lint green","app starts"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok","newly_red":[],"pre_existing_red":[]},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"app_started":true,"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 
 echo "== test-write-state =="
 
@@ -122,7 +122,7 @@ fi
 # and this fixture repo is on `main` (session mode), so each id needs one — as
 # SessionStart records in reality. Done AFTER cases 1-4 so the no-arg `ls -t`
 # above deterministically resolved sess-abc123 (the sole .sha at that point).
-for s in sess-explicit sess-red sess-lint sess-nolog sess-blkfind sess-advfind sess-nonarr sess-esc sess-green; do seed_sha "$s"; done
+for s in sess-explicit sess-red sess-lint sess-nolog sess-blkfind sess-advfind sess-nonarr sess-esc sess-green sess-notrun-noesc sess-notrun-esc sess-noevidence; do seed_sha "$s"; done
 
 # --- 5. dirty tree → REFUSE (nonzero, no new write) --------------------------
 rm -f "$DONE_STATE"
@@ -166,7 +166,7 @@ fi
 
 # --- 8. non-green payload (tests red), no escalation → REFUSE (no write) ------
 # review-log is green (open:0) so the refusal is unambiguously on tests.
-RED_PAYLOAD='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":1,"newly_red":[],"pre_existing_red":[]},"lint":{"exit_code":0},"app_started":true,"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+RED_PAYLOAD='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":1,"newly_red":[],"pre_existing_red":[]},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"app_started":true,"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8="$TMP/.claude/.harness/done-state/session-sess-red.json"
 rm -f "$OUT8"
 ERR=$(printf '%s' "$RED_PAYLOAD" | bash "$SCRIPT" "sess-red" 2>&1)
@@ -189,7 +189,7 @@ fi
 
 # --- 8b. lint configured + lint red, no escalation → REFUSE (no write) --------
 # tests green, review-log green → the refusal is unambiguously on lint.
-LINT_RED='{"tests":{"exit_code":0},"lint":{"exit_code":1},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+LINT_RED='{"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":1},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8B="$TMP/.claude/.harness/done-state/session-sess-lint.json"
 rm -f "$OUT8B"
 ERR=$(printf '%s' "$LINT_RED" | bash "$SCRIPT" "sess-lint" 2>&1)
@@ -203,7 +203,7 @@ fi
 # --- 8c. no review-log for HEAD, no escalation → REFUSE (no write) ------------
 # tests green, lint green → the refusal is unambiguously on the missing log.
 clear_review_log
-NOLOG_PAYLOAD='{"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+NOLOG_PAYLOAD='{"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8C="$TMP/.claude/.harness/done-state/session-sess-nolog.json"
 rm -f "$OUT8C"
 ERR=$(printf '%s' "$NOLOG_PAYLOAD" | bash "$SCRIPT" "sess-nolog" 2>&1)
@@ -219,7 +219,7 @@ write_review_log 0   # restore green review-log for the remaining green cases
 # tests green, lint green → refusal is unambiguously on the review severity gate.
 # self-reported open_findings=0 proves the writer recomputes structurally.
 write_review_findings '[{"severity":"high","file":"a","line":1,"desc":"x"}]'
-BLK_PAYLOAD='{"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+BLK_PAYLOAD='{"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8D="$TMP/.claude/.harness/done-state/session-sess-blkfind.json"
 rm -f "$OUT8D"
 ERR=$(printf '%s' "$BLK_PAYLOAD" | bash "$SCRIPT" "sess-blkfind" 2>&1)
@@ -233,7 +233,7 @@ fi
 # --- 8e. only ADVISORY findings at HEAD (low/medium, default min=high) → WRITES
 # advisory findings never gate; tests+lint green → the writer must write.
 write_review_findings '[{"severity":"low","file":"a","line":1,"desc":"nit"},{"severity":"medium","file":"a","line":2,"desc":"style"}]'
-ADV_PAYLOAD='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+ADV_PAYLOAD='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8E="$TMP/.claude/.harness/done-state/session-sess-advfind.json"
 rm -f "$OUT8E"
 OUTPATH=$(printf '%s' "$ADV_PAYLOAD" | bash "$SCRIPT" "sess-advfind")
@@ -253,7 +253,7 @@ write_review_log 0   # restore green review-log for the remaining green cases
 # reason shifted from "blocking" to "contract (schema)"; the refuse+no-write
 # outcome is preserved (anti-forgery holds).
 printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":[],"findings":{"severity":"critical"},"open_findings":0}\n' "$REAL_SHA" > "$TMP/.claude/.harness/review-log/$REAL_SHA.json"
-NONARR_PAYLOAD='{"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+NONARR_PAYLOAD='{"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT8F="$TMP/.claude/.harness/done-state/session-sess-nonarr.json"
 rm -f "$OUT8F"
 ERR=$(printf '%s' "$NONARR_PAYLOAD" | bash "$SCRIPT" "sess-nonarr" 2>&1)
@@ -297,6 +297,46 @@ else
   bad "green payload no-escalation write failed (rc=$RC, out=$OUTPATH)"
 fi
 
+# --- 10a. tests not_run, NO escalation → REFUSE (P1-c, #6) -------------------
+# tests+lint would be green but tests were never run: without an escalation the
+# writer must refuse (an unrun suite cannot masquerade as verified).
+write_review_log 0
+NOTRUN_NOESC='{"dod":{"sources":["base"],"items":["x"]},"tests":{"status":"not_run","reason":"docker down"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+OUT10A="$TMP/.claude/.harness/done-state/session-sess-notrun-noesc.json"
+rm -f "$OUT10A"
+ERR=$(printf '%s' "$NOTRUN_NOESC" | bash "$SCRIPT" "sess-notrun-noesc" 2>&1)
+RC=$?
+if [ "$RC" -ne 0 ] && [ ! -f "$OUT10A" ] && echo "$ERR" | grep -qi "not run"; then
+  ok "tests not_run + no escalation: refused, no write, clear message"
+else
+  bad "not_run no-escalation refusal failed (rc=$RC, file=$( [ -f "$OUT10A" ] && echo present || echo absent ), err=$ERR)"
+fi
+
+# --- 10b. tests not_run, WITH escalation → WRITES (escape hatch) -------------
+NOTRUN_ESC='{"dod":{"sources":["base"],"items":["x"]},"tests":{"status":"not_run","reason":"docker down"},"app_started":false,"task_checks":[{"desc":"x","status":"passed"}],"escalation":{"type":"environment","command":"npm test","captured_error":"no runtime","exit_code":1}}'
+OUT10B="$TMP/.claude/.harness/done-state/session-sess-notrun-esc.json"
+rm -f "$OUT10B"
+OUTPATH=$(printf '%s' "$NOTRUN_ESC" | bash "$SCRIPT" "sess-notrun-esc")
+RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$OUT10B" ] && jq -e '.tests.status == "not_run"' "$OUT10B" >/dev/null 2>&1; then
+  ok "tests not_run WITH escalation: writes (escape hatch), not_run preserved"
+else
+  bad "not_run + escalation did NOT write (rc=$RC, out=$OUTPATH)"
+fi
+
+# --- 10c. tests exit_code:0 but MISSING evidence, no escalation → REFUSE -----
+# green claim without command/output_tail must be refused ("green must carry evidence").
+NOEV_PAYLOAD='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+OUT10C="$TMP/.claude/.harness/done-state/session-sess-noevidence.json"
+rm -f "$OUT10C"
+ERR=$(printf '%s' "$NOEV_PAYLOAD" | bash "$SCRIPT" "sess-noevidence" 2>&1)
+RC=$?
+if [ "$RC" -ne 0 ] && [ ! -f "$OUT10C" ] && echo "$ERR" | grep -qi "evidence"; then
+  ok "green tests WITHOUT evidence + no escalation: refused, no write, clear message"
+else
+  bad "no-evidence refusal failed (rc=$RC, file=$( [ -f "$OUT10C" ] && echo present || echo absent ), err=$ERR)"
+fi
+
 # --- 11/12. review COVERAGE contract (structural: files_reviewed ⊇ changed) ---
 # All prior cases have base==HEAD (session baseline == HEAD) → EMPTY changeset →
 # coverage trivially satisfied (that itself is the SKIP-adjacent no-regression
@@ -310,7 +350,7 @@ git -C "$TMP" add -A
 git -C "$TMP" commit -qm "coverage changeset"
 COV_HEAD=$(git -C "$TMP" rev-parse HEAD)
 COV_DONE="$TMP/.claude/.harness/done-state/session-sess-abc123.json"
-cov_payload='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+cov_payload='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 cov_log() { printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[]}\n' "$COV_HEAD" "$1" > "$TMP/.claude/.harness/review-log/$COV_HEAD.json"; }
 
 # 11. files_reviewed MISSING a changed file → REFUSE (no write)
@@ -342,7 +382,7 @@ fi
 # write) and name the fix. Tests+lint green + a HEAD review-log present, so the
 # refusal is unambiguously on the dead id, not another gate.
 printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["cov1.txt","cov2.txt"],"findings":[],"open_findings":0}\n' "$COV_HEAD" > "$TMP/.claude/.harness/review-log/$COV_HEAD.json"
-DEAD_PAYLOAD='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"lint":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+DEAD_PAYLOAD='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 OUT13A="$TMP/.claude/.harness/done-state/session-sess-dead.json"
 rm -f "$OUT13A"
 ERR=$(printf '%s' "$DEAD_PAYLOAD" | bash "$SCRIPT" "sess-dead" 2>&1)

@@ -190,7 +190,7 @@ printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","fil
   > "$REPO/.claude/.harness/review-log/$IDENT_HEAD.json"
 
 # write-state writes the done-state; capture the path it chose
-GREEN='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+GREEN='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 WROTE_PATH=$(printf '%s' "$GREEN" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITE" "sess-ident" 2>/dev/null)
 EXPECT_PATH="$REPO/.claude/.harness/done-state/br-feat-x.json"
 eq "case6 write-state targets br-feat-x path" "$EXPECT_PATH" "$WROTE_PATH"

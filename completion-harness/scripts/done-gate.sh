@@ -191,10 +191,22 @@ fi
 # a sentinel default so an empty jq result fails toward BLOCK (never toward an
 # accidental allow via a broken numeric test).
 
-# tests.exit_code must be exactly "0". Absent -> "MISSING" -> block.
+# tests must be GREEN with EVIDENCE (P1-c, #6). Escalation already short-circuited
+# at Step 7, so a tests.status=="not_run" here is an unverified green claim ->
+# block. A green result carries exit_code==0 AND non-empty command AND non-empty
+# output_tail (un-forgeable green); a missing field -> "MISSING"/"" -> block.
+TESTS_STATUS=$(jq -r '.tests.status // ""' "$DONE_STATE_FILE" 2>/dev/null)
+if [ "$TESTS_STATUS" = "not_run" ]; then
+  block "tests were not run and there is no escalation — run tests, re-commit, re-run /done"
+fi
 TESTS_EXIT=$(jq -r '.tests.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TESTS_EXIT" != "0" ]; then
   block "fix failing tests, re-commit, re-run /done"
+fi
+TESTS_CMD=$(jq -r '.tests.command // ""' "$DONE_STATE_FILE" 2>/dev/null)
+TESTS_TAIL=$(jq -r '.tests.output_tail // ""' "$DONE_STATE_FILE" 2>/dev/null)
+if [ -z "$TESTS_CMD" ] || [ -z "$TESTS_TAIL" ]; then
+  block "green tests must carry evidence (command + output_tail); re-run /done recording them"
 fi
 
 # lint (conditional). Only projects with a lint command record a .lint object.

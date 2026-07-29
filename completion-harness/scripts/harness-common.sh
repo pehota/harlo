@@ -797,10 +797,12 @@ hc_tree_remediation() {
 # subset using ONLY jq — no node/ajv/new runtime. This is a SECURITY GATE:
 # every ambiguity fails toward `return 1` (reject).
 #
-# Supported keyword subset (exactly these — NO $ref/oneOf/anyOf/allOf/
-# pattern/format): type (string OR array-of-strings union), required (array),
-# properties (object name→subschema), items (subschema applied to every array
-# element), enum (array of allowed scalars), const (exact required scalar),
+# Supported keyword subset (exactly these — NO $ref/anyOf/allOf/pattern/format):
+# type (string OR array-of-strings union), required (array), properties (object
+# name→subschema), items (subschema applied to every array element), enum (array
+# of allowed scalars), const (exact required scalar), minLength (integer — the
+# instance, when a string, must have length >= it), oneOf (array of subschemas —
+# valid iff EXACTLY ONE matches), not (subschema the instance must NOT match),
 # additionalProperties (boolean, default true). Nullable is expressed as a type
 # union, e.g. ["string","null"].
 #
@@ -834,8 +836,8 @@ hc_validate() {
   # The recursive validator `v($schema; $path)` RETURNS a flat array of
   # "path: why" error strings (empty array = valid), collected depth-first in
   # document order. In bash we take `.[0]` — the FIRST error. Keyword order per
-  # node: type → const → enum → (object) required → additionalProperties →
-  # properties(recurse) → (array) items(recurse). Every keyword and every
+  # node: type → const → enum → minLength → not → oneOf → (object) required →
+  # additionalProperties → properties(recurse) → (array) items(recurse). Every keyword and every
   # recursion is guarded on the INSTANCE's actual type so a union type or an
   # absent keyword never crashes jq (a crash → empty stdout + nonzero rc →
   # handled as fail-closed below). The schema arrives via --slurpfile, which
@@ -895,6 +897,35 @@ hc_validate() {
                 else [ ($path + ": not in enum " + ($schema.enum|tostring)) ] end )
           else [] end ) as $enum_errs
 
+      # --- minLength: when the instance is a STRING it must be at least this
+      # long. Non-string instances are unconstrained by minLength (type handles
+      # them). Fail-closed: a present-but-shorter string errors.
+      | ( if ($schema | type) == "object" and ($schema | has("minLength")) then
+            ( if (. | type) == "string" and ((. | length) < $schema.minLength)
+              then [ ($path + ": string shorter than minLength " + ($schema.minLength|tostring)) ]
+              else [] end )
+          else [] end ) as $minlen_errs
+
+      # --- not: the instance must NOT satisfy the subschema. If it DOES match
+      # (the recursive validator returns [] = valid), that is an error here.
+      | ( if ($schema | type) == "object" and ($schema | has("not")) then
+            ( if (v($schema.not; $path + ".not") | length) == 0
+              then [ ($path + ": must not match the 'not' subschema") ]
+              else [] end )
+          else [] end ) as $not_errs
+
+      # --- oneOf: EXACTLY ONE subschema must match. Count the matching branches
+      # (a branch matches iff v(...) returns []); anything other than exactly one
+      # is an error. Fail-closed: zero matches OR multiple matches both error.
+      | ( if ($schema | type) == "object" and ($schema | has("oneOf")) then
+            ( . as $inst
+              | ( [ $schema.oneOf[] | . as $sub
+                    | ($inst | v($sub; $path + ".oneOf")) | length
+                    | select(. == 0) ] | length ) as $matches
+              | if $matches == 1 then []
+                else [ ($path + ": matched " + ($matches|tostring) + " oneOf branches, expected exactly 1") ] end )
+          else [] end ) as $oneof_errs
+
       # --- object keywords (only when the INSTANCE is an object).
       | ( if (. | type) == "object" and ($schema | type) == "object" then
             . as $inst
@@ -929,7 +960,7 @@ hc_validate() {
           else [] end ) as $items_errs
 
       # Concatenate in the documented order; caller takes the first.
-      | ( $type_errs + $const_errs + $enum_errs + $obj_errs + $items_errs ) ;
+      | ( $type_errs + $const_errs + $enum_errs + $minlen_errs + $not_errs + $oneof_errs + $obj_errs + $items_errs ) ;
 
     v($schema[0]; "$") | .[0] // empty
   ' "$json_file" 2>/dev/null)
@@ -1003,11 +1034,28 @@ hc_done_state_blocked() {
     return 0
   fi
 
-  # --- 1. tests.exit_code must be exactly "0" (absent → MISSING → block). -----
+  # --- 1. tests must be GREEN with EVIDENCE (P1-c, #6). -----------------------
+  # Reaching Step 8 means NO escalation short-circuited (Step 7 ran first). So a
+  # tests.status=="not_run" here is a green claim WITHOUT verification → block.
+  # A green result must carry exit_code==0 AND non-empty command AND non-empty
+  # output_tail (un-forgeable green). Any missing field → "MISSING" → block.
+  local tests_status
+  tests_status=$(jq -r '.tests.status // ""' "$done_state_file" 2>/dev/null)
+  if [ "$tests_status" = "not_run" ]; then
+    HC_DONE_BLOCKED_REASON="tests not run (no escalation)"
+    return 0
+  fi
   local tests_exit
   tests_exit=$(jq -r '.tests.exit_code // "MISSING"' "$done_state_file" 2>/dev/null)
   if [ "$tests_exit" != "0" ]; then
     HC_DONE_BLOCKED_REASON="tests failed (exit ${tests_exit})"
+    return 0
+  fi
+  local tests_cmd tests_tail
+  tests_cmd=$(jq -r '.tests.command // ""' "$done_state_file" 2>/dev/null)
+  tests_tail=$(jq -r '.tests.output_tail // ""' "$done_state_file" 2>/dev/null)
+  if [ -z "$tests_cmd" ] || [ -z "$tests_tail" ]; then
+    HC_DONE_BLOCKED_REASON="tests green but missing evidence (command/output_tail)"
     return 0
   fi
 

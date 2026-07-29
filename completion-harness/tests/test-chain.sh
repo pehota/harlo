@@ -133,7 +133,7 @@ printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","fil
 # Step 5 — done-write-state.sh with a GREEN payload → writes done-state
 # (Fix-2 refuses non-green payloads, so the payload must be genuinely green.)
 # ============================================================================
-GREEN='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"newly_red":[],"pre_existing_red":[]},"app_started":true,"review":{"findings":1,"addressed":1},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+GREEN='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok","newly_red":[],"pre_existing_red":[]},"app_started":true,"review":{"findings":1,"addressed":1},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 WROTE=$(printf '%s' "$GREEN" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITE" "$SID" 2>&1)
 RC=$?
 # Done-state is now keyed by HC_TASK_KEY. This fixture's repo is on `main` (its

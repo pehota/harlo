@@ -24,14 +24,37 @@
       "additionalProperties": true
     },
     "tests": {
-      "type": "object",
-      "required": ["exit_code"],
-      "properties": {
-        "exit_code": { "type": "integer" },
-        "newly_red": { "type": "array", "items": { "type": "string" } },
-        "pre_existing_red": { "type": "array", "items": { "type": "string" } }
-      },
-      "additionalProperties": true
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["exit_code", "command", "output_tail"],
+          "properties": {
+            "exit_code": { "const": 0 },
+            "command": { "type": "string", "minLength": 1 },
+            "output_tail": { "type": "string", "minLength": 1 },
+            "newly_red": { "type": "array", "items": { "type": "string" } },
+            "pre_existing_red": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["exit_code"],
+          "properties": {
+            "exit_code": { "type": "integer", "not": { "const": 0 } }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "const": "not_run" },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": true
+        }
+      ]
     },
     "lint": {
       "type": "object",

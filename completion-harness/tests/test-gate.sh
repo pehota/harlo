@@ -155,7 +155,7 @@ run_case "3 missing done-state (HEAD>baseline) -> block" block \
 # ============================================================================
 SID=s4; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 0
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "4 valid done-state, sha==HEAD, clean, green outcomes + review-log open:0 -> allow" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
@@ -163,7 +163,7 @@ run_case "4 valid done-state, sha==HEAD, clean, green outcomes + review-log open
 # Case 5 — verified_sha != HEAD → BLOCK
 # ============================================================================
 SID=s5; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":null}"
 run_case "5 verified_sha != HEAD -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
@@ -171,7 +171,7 @@ run_case "5 verified_sha != HEAD -> block" block \
 # Case 6 — dirty tree (sha matches) → BLOCK
 # ============================================================================
 SID=s6; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":null}"
 printf 'dirty\n' > "$PROJECT_DIR/a.txt"   # make tree dirty
 run_case "6 dirty tree -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
@@ -183,7 +183,7 @@ ensure_clean
 # (sha matches HEAD, tree clean). Under the reordered gate this reaches exit 0.
 # ============================================================================
 SID=s7; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
 run_case "7 escalation + sha==HEAD + clean -> allow" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
@@ -213,7 +213,7 @@ ensure_clean
 # first, so the escalation never gets a chance to allow the stop.
 # ============================================================================
 SID=s9; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"deadbeef\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"deadbeef\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
 run_case "9 escalation + stale sha -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
@@ -222,7 +222,7 @@ run_case "9 escalation + stale sha -> block" block \
 # Proves the dirty-tree check is enforced before escalation is honoured.
 # ============================================================================
 SID=s10; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
 printf 'dirty\n' > "$PROJECT_DIR/a.txt"   # make tree dirty
 run_case "10 escalation + sha==HEAD + dirty -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
@@ -250,42 +250,42 @@ run_case "11 tests exit_code=1, no escalation -> block" block \
 # Case 12a — NO review-log for HEAD (tests green) → BLOCK (missing review)
 SID=s12a; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 clear_review_log
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "12a no review-log for HEAD -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # Case 12b — review-log present with open_findings:2 → BLOCK (open findings)
 SID=s12b; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 2
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "12b review-log open_findings:2 -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # Case 12c — review-log present with open_findings:0 → ALLOW (green review)
 SID=s12c; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 0
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "12c review-log open_findings:0 -> allow" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # Case 12d — done-state lint.exit_code:1 (tests green, review green) → BLOCK
 SID=s12d; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 0
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"lint\":{\"exit_code\":1},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"lint\":{\"exit_code\":1},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "12d lint exit_code:1 -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # Case 12e — lint field ABSENT (tests green, review green) → ALLOW (lint skipped)
 SID=s12e; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 0
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"
 run_case "12e lint absent -> allow (not blocked on lint)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # Case 13 — a task_check with status "failed" → BLOCK (tests+lint+review green)
 SID=s13; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_review_log 0
-write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"lint\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"},{\"desc\":\"y\",\"status\":\"failed\"}],\"escalation\":null}"
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"lint\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"},{\"desc\":\"y\",\"status\":\"failed\"}],\"escalation\":null}"
 run_case "13 a task_check status=failed -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
@@ -318,7 +318,7 @@ run_case "15 no tests field, no escalation -> block (schema)" block \
 # task_checks passed, sha==HEAD, clean tree, no escalation). done-state is a
 # shared green fixture; only the review-log + config vary.
 # ============================================================================
-GREEN_DONE() { write_done "$1" "{\"contract_version\":1,\"session_id\":\"$1\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"; }
+GREEN_DONE() { write_done "$1" "{\"contract_version\":1,\"session_id\":\"$1\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[{\"desc\":\"x\",\"status\":\"passed\"}],\"escalation\":null}"; }
 
 # Case 17a — findings [{high}], min_review_level high → BLOCK (high blocks).
 SID=s17a; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
@@ -435,7 +435,7 @@ COV_HEAD=$(git -C "$COV_REPO" rev-parse HEAD)
 CHDIR="$COV_REPO/.claude/.harness"
 mkdir -p "$CHDIR/done-state" "$CHDIR/review-log"
 # branch-keyed green done-state (task_key = br-feat-cov)
-printf '{"contract_version":1,"session_id":"c","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$COV_HEAD" \
+printf '{"contract_version":1,"session_id":"c","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$COV_HEAD" \
   > "$CHDIR/done-state/br-feat-cov.json"
 # cov_log <files_reviewed_json_array>  → review-log for COV_HEAD, empty findings
 # (severity passes) so coverage is the sole gating axis.
@@ -495,7 +495,7 @@ FEAT_HEAD=$(git -C "$FEAT_REPO" rev-parse HEAD)
 FHDIR="$FEAT_REPO/.claude/.harness"
 mkdir -p "$FHDIR/done-state" "$FHDIR/review-log"
 # branch-keyed done-state (NOT session-keyed): br-feat-x
-printf '{"contract_version":1,"session_id":"whatever","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$FEAT_HEAD" \
+printf '{"contract_version":1,"session_id":"whatever","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$FEAT_HEAD" \
   > "$FHDIR/done-state/br-feat-x.json"
 # independent review-log for the feature HEAD, no open findings. files_reviewed
 # covers the feature changeset (merge-base(main,feat/x)..HEAD == work.txt) so the

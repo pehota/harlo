@@ -47,7 +47,7 @@ seed_green_done() {
   printf '%s\n' "$head" > "$r/.claude/.harness/baselines/$sid.sha"
   printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":[],"findings":[],"open_findings":0}\n' "$head" \
     > "$r/.claude/.harness/review-log/$head.json"
-  printf '{"contract_version":1,"session_id":"%s","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$sid" "$head" \
+  printf '{"contract_version":1,"session_id":"%s","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$sid" "$head" \
     > "$r/.claude/.harness/done-state/session-$sid.json"
 }
 
@@ -168,7 +168,7 @@ rm -rf "$R"
 # installed WRITER against a controlled repo. It requires a green review-log +
 # green payload to reach the tree decision.
 # ============================================================================
-GREEN_PAYLOAD='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+GREEN_PAYLOAD='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 
 # 5a — writer REFUSES when there is an introduced blocker (new untracked file).
 R=$(make_repo); SID=wr-block
@@ -419,7 +419,7 @@ seed_green_done_task() {
   local head; head=$(git -C "$r" rev-parse HEAD)
   printf '{"reviewed_sha":"%s","findings":[],"open_findings":0}\n' "$head" \
     > "$r/.claude/.harness/review-log/$head.json"
-  printf '{"session_id":"%s","verified_sha":"%s","tree_clean":true,"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$sid" "$head" \
+  printf '{"session_id":"%s","verified_sha":"%s","tree_clean":true,"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$sid" "$head" \
     > "$r/.claude/.harness/done-state/br-feat.json"
 }
 
@@ -530,7 +530,7 @@ HEADB=$(git -C "$R" rev-parse HEAD)
 printf '%s\n' "$HEADB" > "$R/.claude/.harness/baselines/sidB.sha"
 printf '{"reviewed_sha":"%s","findings":[],"open_findings":0}\n' "$HEADB" \
   > "$R/.claude/.harness/review-log/$HEADB.json"
-printf '{"session_id":"sidB","verified_sha":"%s","tree_clean":true,"tests":{"exit_code":0},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$HEADB" \
+printf '{"session_id":"sidB","verified_sha":"%s","tree_clean":true,"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$HEADB" \
   > "$R/.claude/.harness/done-state/$KEY.json"
 OUT=$(run_gate "$R" sidB)
 if is_block "$OUT"; then

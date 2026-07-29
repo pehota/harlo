@@ -30,11 +30,53 @@ if vok "$CONTRACTS/review-log.schema.json" "$TMP/review-log.json"; then
 else bad "review-log minimal valid → 0"; fi
 
 cat > "$TMP/done-state.json" <<'JSON'
-{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["base-dod.md"],"items":["x"]},"tests":{"exit_code":0},"task_checks":[]}
+{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["base-dod.md"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[]}
 JSON
 if vok "$CONTRACTS/done-state.schema.json" "$TMP/done-state.json"; then
   ok "done-state minimal valid → 0"
 else bad "done-state minimal valid → 0"; fi
+
+# --- done-state tests oneOf branches (P1-c, #6) -----------------------------
+DS_PRE='{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["b"],"items":["x"]},"task_checks":[],"tests":'
+# (green) exit_code:0 + command + output_tail → valid.
+cat > "$TMP/ds-green.json" <<JSON
+${DS_PRE}{"exit_code":0,"command":"npm test","output_tail":"ok"}}
+JSON
+if vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-green.json"; then
+  ok "done-state tests green (evidence) → 0"
+else bad "done-state tests green (evidence) → 0"; fi
+
+# (green) exit_code:0 but MISSING evidence → INVALID (matches no oneOf branch).
+cat > "$TMP/ds-greenbad.json" <<JSON
+${DS_PRE}{"exit_code":0}}
+JSON
+if ! vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-greenbad.json"; then
+  ok "done-state tests green WITHOUT evidence → nonzero"
+else bad "done-state tests green WITHOUT evidence → nonzero"; fi
+
+# (red) exit_code:1 → valid (red branch: integer != 0).
+cat > "$TMP/ds-red.json" <<JSON
+${DS_PRE}{"exit_code":1}}
+JSON
+if vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-red.json"; then
+  ok "done-state tests red (exit 1) → 0"
+else bad "done-state tests red (exit 1) → 0"; fi
+
+# (not_run) status:not_run + reason → valid.
+cat > "$TMP/ds-notrun.json" <<JSON
+${DS_PRE}{"status":"not_run","reason":"docker down"}}
+JSON
+if vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-notrun.json"; then
+  ok "done-state tests not_run (reason) → 0"
+else bad "done-state tests not_run (reason) → 0"; fi
+
+# (not_run) status:not_run MISSING reason → INVALID.
+cat > "$TMP/ds-notrunbad.json" <<JSON
+${DS_PRE}{"status":"not_run"}}
+JSON
+if ! vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-notrunbad.json"; then
+  ok "done-state tests not_run WITHOUT reason → nonzero"
+else bad "done-state tests not_run WITHOUT reason → nonzero"; fi
 
 cat > "$TMP/done-config.json" <<'JSON'
 {"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/"}
@@ -195,7 +237,7 @@ else bad "top-level number vs [string,null] → nonzero"; fi
 
 # --- nullable field positive: done-state escalation:null → 0 ----------------
 cat > "$TMP/done-state-null-esc.json" <<'JSON'
-{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["base-dod.md"],"items":["x"]},"tests":{"exit_code":0},"task_checks":[],"escalation":null}
+{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["base-dod.md"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[],"escalation":null}
 JSON
 if vok "$CONTRACTS/done-state.schema.json" "$TMP/done-state-null-esc.json"; then
   ok "done-state escalation:null → 0"

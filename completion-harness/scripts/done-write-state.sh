@@ -130,9 +130,26 @@ HAS_ESCALATION=$(printf '%s' "$PAYLOAD" | jq -r '
   if (.escalation != null) then "yes" else "no" end
 ' 2>/dev/null)
 if [ "$HAS_ESCALATION" != "yes" ]; then
+  # tests must be GREEN AND carry evidence. tests.status=="not_run" is allowed
+  # ONLY with an escalation (handled by the outer branch — we are in the no-
+  # escalation path here, so a not_run reaching this point is refused). A green
+  # tests payload must record exit_code==0 AND a non-empty command AND a
+  # non-empty output_tail — "green must carry evidence" (P1-c, #6). A
+  # missing/empty field fails toward refuse.
+  P_TESTS_STATUS=$(printf '%s' "$PAYLOAD" | jq -r '.tests.status // ""' 2>/dev/null)
+  if [ "$P_TESTS_STATUS" = "not_run" ]; then
+    echo "error: refusing to write — tests were not run (status=not_run) and there is no escalation; run the tests, or supply an escalation recording why they cannot run" >&2
+    exit 1
+  fi
   P_TESTS_EXIT=$(printf '%s' "$PAYLOAD" | jq -r '.tests.exit_code // "MISSING"' 2>/dev/null)
   if [ "$P_TESTS_EXIT" != "0" ]; then
     echo "error: refusing to write — tests are not green (exit_code=${P_TESTS_EXIT}); fix and re-run, or supply an escalation" >&2
+    exit 1
+  fi
+  P_TESTS_CMD=$(printf '%s' "$PAYLOAD" | jq -r '.tests.command // ""' 2>/dev/null)
+  P_TESTS_TAIL=$(printf '%s' "$PAYLOAD" | jq -r '.tests.output_tail // ""' 2>/dev/null)
+  if [ -z "$P_TESTS_CMD" ] || [ -z "$P_TESTS_TAIL" ]; then
+    echo "error: refusing to write — green tests must carry evidence: a non-empty 'command' and 'output_tail'; record what ran and its output tail, or supply an escalation" >&2
     exit 1
   fi
 

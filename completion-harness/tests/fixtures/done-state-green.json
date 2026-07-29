@@ -4,7 +4,7 @@
   "verified_sha": "__HEAD__",
   "tree_clean": true,
   "dod": { "sources": ["base"], "items": ["ships"] },
-  "tests": { "exit_code": 0 },
+  "tests": { "exit_code": 0, "command": "npm test", "output_tail": "PASS 42 tests" },
   "task_checks": [
     { "desc": "does the thing", "status": "passed" }
   ]
