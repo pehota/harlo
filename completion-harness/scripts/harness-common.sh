@@ -28,6 +28,17 @@ hc__sanitize() {
   printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9_.-]/-/g' 2>/dev/null
 }
 
+# Is <s> a raw git object id — 40 (sha1) or 64 (sha256) lowercase hex chars?
+# Returns 0 if so, 1 otherwise. Everything the harness keys by sha (review-log
+# basenames, the carried review anchor) must pass this BEFORE the value reaches
+# git as a rev: a symbolic name (HEAD, main, HEAD@{0}) resolves against the
+# CURRENT tree, which turns a freshness check into a tautology.
+hc__is_object_id() {
+  case "${#1}" in 40|64) ;; *) return 1 ;; esac
+  case "$1" in *[!0-9a-f]*) return 1 ;; esac
+  return 0
+}
+
 # Offline, conservative trunk detection. Prints the trunk name, or nothing
 # (empty = UNCONFIDENT). Never consults origin/HEAD (repos may have no remote).
 hc__detect_trunk() {
@@ -649,7 +660,13 @@ hc_review_blocking() {
 }
 
 # ---------------------------------------------------------------------------
-# hc_review_coverage_gap <review_log_file> <base> <head> [proj]
+# hc_review_coverage_gap <review_log_file> <base> <head> [proj] [extra_admit]
+#
+# <extra_admit> (optional) is a CARRIED review-anchor sha: a chain-log the
+# caller has already proven still describes the current content (its recorded
+# tree equals HEAD's tree). It is admitted to the chain by NAME, bypassing the
+# ancestry test its rewritten sha can no longer satisfy, and its blobs are
+# resolved at <head>. Callers must pass it ONLY after proving tree equality.
 #
 # STRUCTURAL coverage check for the review step. Answers: "did the reviewer
 # actually attest to having examined every file the changeset touched, AT ITS
@@ -713,6 +730,14 @@ hc_review_blocking() {
 hc_review_coverage_gap() {
   local log="$1" base="$2" head="$3"
   local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  # extra: a CARRIED review anchor — the sha of a log the caller has already
+  # proven still describes the current content (its tree == HEAD's tree). Its
+  # own sha may no longer be an ancestor of head (amend/rebase rewrote it) and
+  # may not even resolve after a gc, so it is admitted to the chain by NAME and
+  # its blobs are resolved at <head>. That is byte-identical to resolving them
+  # at the anchor — equal trees, same blobs — minus the reflog/gc dependency.
+  # Empty (the normal case) admits nothing extra.
+  local extra="${5:-}"
 
   # No changeset base → coverage is not computable. SKIP (no-block degrade).
   [ -z "$base" ] && { printf 'SKIP'; return 0; }
@@ -753,21 +778,25 @@ hc_review_coverage_gap() {
   for f in "$dir"/*.json; do
     [ -e "$f" ] || continue
     fname=$(basename "$f" .json)
-    # The basename MUST be a raw object id — 40 (sha1) or 64 (sha256) lowercase
-    # hex chars. Anything else is not a sha the harness ever wrote, and feeding
-    # it to git as a rev is a coverage HOLE: a symbolic name (HEAD, main,
-    # HEAD@{0}) satisfies `merge-base --is-ancestor` and then resolves its
-    # attested blob via `rev-parse HEAD:<path>` — i.e. against the CURRENT tree,
-    # so its attestation self-validates and never expires. Skipped BEFORE the
-    # two merge-base calls, so junk basenames also cost zero forks.
-    case "${#fname}" in 40|64) ;; *) continue ;; esac
-    case "$fname" in *[!0-9a-f]*) continue ;; esac
-    # Filename sha must be an ancestor of head and NOT of base (task-side).
-    git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
-    git -C "$proj" merge-base --is-ancestor "$fname" "$base" 2>/dev/null && continue
-    # reviewed_sha to blob against; fall back to the filename sha if absent.
-    rsha=$(jq -r 'if (has("reviewed_sha") and (.reviewed_sha|type=="string") and (.reviewed_sha|length>0)) then .reviewed_sha else empty end' "$f" 2>/dev/null)
-    [ -z "$rsha" ] && rsha="$fname"
+    # The basename MUST be a raw object id. Anything else is not a sha the
+    # harness ever wrote, and feeding it to git as a rev is a coverage HOLE: a
+    # symbolic name (HEAD, main, HEAD@{0}) satisfies `merge-base --is-ancestor`
+    # and then resolves its attested blob via `rev-parse HEAD:<path>` — i.e.
+    # against the CURRENT tree, so its attestation self-validates and never
+    # expires. Skipped BEFORE the two merge-base calls, so junk basenames also
+    # cost zero forks.
+    hc__is_object_id "$fname" || continue
+    if [ -n "$extra" ] && [ "$fname" = "$extra" ]; then
+      # CARRIED ANCHOR: admitted by name, resolved at head (see `extra` above).
+      rsha="$head"
+    else
+      # Filename sha must be an ancestor of head and NOT of base (task-side).
+      git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
+      git -C "$proj" merge-base --is-ancestor "$fname" "$base" 2>/dev/null && continue
+      # reviewed_sha to blob against; fall back to the filename sha if absent.
+      rsha=$(jq -r 'if (has("reviewed_sha") and (.reviewed_sha|type=="string") and (.reviewed_sha|length>0)) then .reviewed_sha else empty end' "$f" 2>/dev/null)
+      [ -z "$rsha" ] && rsha="$fname"
+    fi
     # Attested paths (array only; anything else contributes none).
     paths=$(jq -r 'if (has("files_reviewed") and ((.files_reviewed|type)=="array")) then .files_reviewed[] else empty end' "$f" 2>/dev/null)
     [ -z "$paths" ] && continue
@@ -904,6 +933,10 @@ EOF
 # hygiene. A `review-log/<sha>.json` is load-bearing if <sha> is a commit the
 # gate might still check across a LIVE task's chain:
 #   - the current HEAD, and every local branch tip (baseline: always emitted);
+#   - PLUS every done-state's verified_sha and review_anchor_sha (baseline too):
+#     a tree-identical HEAD move leaves the anchored log's sha unreachable, so
+#     no git-derived source names it and the next SessionStart would reap the
+#     log the carry depends on;
 #   - PLUS, for each live task branch (unmerged non-trunk, same liveness logic
 #     hc_live_task_keys uses), EVERY commit on its chain `git rev-list B..T`
 #     (B = the branch's pinned task-base, T = its tip). Blob-keyed coverage
@@ -921,11 +954,24 @@ EOF
 # baseline-snapshot.sh. Guarded; always returns 0.
 hc_live_review_shas() {
   local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local hdir="${HARNESS_DIR:-$proj/.claude/.harness}"
   # Baseline keep-set (ALWAYS emitted, even if the widening below no-ops):
   #   Current HEAD (empty in a non-git / unborn-branch repo).
   git -C "$proj" rev-parse HEAD 2>/dev/null
   #   Every local branch tip.
   git -C "$proj" for-each-ref --format='%(objectname)' refs/heads/ 2>/dev/null
+  #   Every sha a live done-state still points at — its verified_sha AND its
+  #   review_anchor_sha. The anchor is a log for a sha that a tree-identical
+  #   HEAD move (amend / rebase) left unreachable, so NONE of the git-derived
+  #   sources above can name it: without this the very next SessionStart reaps
+  #   it and the carry silently expires. Part of the BASELINE set deliberately —
+  #   the widening below returns early on an unconfident trunk, and a reaped
+  #   anchor is not a degrade we can accept. Guarded; a missing dir is a no-op.
+  local ds
+  for ds in "$hdir"/done-state/*.json; do
+    [ -e "$ds" ] || continue
+    jq -r '(.verified_sha // empty), (.review_anchor_sha // empty)' "$ds" 2>/dev/null
+  done
 
   # --- Widening: chain commits of every LIVE task branch -------------------
   # Trunk must be confident to judge liveness; otherwise skip widening (the
@@ -937,7 +983,6 @@ hc_live_review_shas() {
   PROJECT_DIR="$_saved_proj"
   [ -z "$trunk" ] && return 0
 
-  local hdir="${HARNESS_DIR:-$proj/.claude/.harness}"
   local br tip base_file base
   while IFS= read -r br; do
     [ -z "$br" ] && continue

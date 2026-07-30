@@ -74,6 +74,10 @@ HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 if [ -z "$HEAD_SHA" ]; then
   exit 0
 fi
+# HEAD's TREE id — the content fingerprint the Step-5 carry compares against.
+# Empty means git could not resolve it; Step 5 then refuses to carry (strict):
+# no tree, no proof of identical content.
+HEAD_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)
 
 # --- paths (task-mandated locations under .harness) -------------------------
 # Done-state is keyed by HC_TASK_KEY (task mode: br-<branch>; session mode:
@@ -236,13 +240,51 @@ else
   block "$S2_REASON"
 fi
 
-# --- Step 5: verified_sha != HEAD -> BLOCK ----------------------------------
+# --- Step 5: verified_sha != HEAD -> BLOCK unless the TREE is identical ------
 # Re-check live, do not trust any stored convenience flag. This is enforced
 # BEFORE any escalation is honoured, so a stale escalation cannot disarm the
 # gate once HEAD has moved past the changeset it was recorded against.
+#
+# TREE-IDENTICAL CARRY. A HEAD move does not always change the code: `reset
+# --soft` + recommit to reword a message, or a `pull --rebase` that replays the
+# same patches, leaves EVERY blob and every mode byte-identical. Demanding a
+# fresh review and a rewritten done-state for that is churn with no safety
+# value — the verified content is still exactly what is at HEAD. So when the
+# shas differ we compare TREES, and carry the existing verification iff they
+# are equal (CARRY=1). Everything downstream (Step 8's outcomes, severity,
+# coverage) still runs in full; only the sha-equality requirement relaxes.
+#
+# Tree equality is the WHOLE guarantee — deliberately NOT ancestry. Ancestry is
+# strictly weaker: `reset --hard` past an empty commit yields both an identical
+# tree AND a descendant verified_sha, so an ancestry test would admit moves that
+# tree equality already covers while also admitting content changes.
+#
+# Sources, in order: the done-state's recorded head_tree (writer-injected), else
+# — for LEGACY states written before that field existed — the tree recomputed
+# live from verified_sha, so the fix works on the session that installs it. When
+# verified_sha STILL resolves we additionally cross-check its tree; after a gc
+# it does not resolve and the recorded head_tree carries it alone.
+#
+# Fail direction: an empty HEAD_TREE, an unobtainable recorded tree, or any
+# mismatch → BLOCK, exactly as before.
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
+CARRY=0
 if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
-  block "$S2_REASON"
+  if [ -z "$HEAD_TREE" ]; then
+    block "$S2_REASON"
+  fi
+  DS_TREE=$(jq -r '.head_tree // ""' "$DONE_STATE_FILE" 2>/dev/null)
+  VS_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify "${VERIFIED_SHA}^{tree}" 2>/dev/null)
+  [ -z "$DS_TREE" ] && DS_TREE="$VS_TREE"
+  if [ -z "$DS_TREE" ] || [ "$DS_TREE" != "$HEAD_TREE" ]; then
+    block "$S2_REASON"
+  fi
+  if [ -n "$VS_TREE" ] && [ "$VS_TREE" != "$HEAD_TREE" ]; then
+    block "$S2_REASON"
+  fi
+  # Audit signal only: records WHY Step 5 did not block. Step 8 deliberately
+  # does NOT gate the anchor admission on it (see there).
+  CARRY=1
 fi
 
 # --- Step 7: valid escalation present -> exit 0 -----------------------------
@@ -312,7 +354,39 @@ fi
 # threshold are advisory and never block. A missing log, or a jq crash / unknown
 # severity ("ERR"), all fail toward BLOCK — same fail-toward-block discipline as
 # the tests.exit_code check.
+#
+# CANDIDATE SET — EXACTLY TWO harness-derived paths, never a directory listing:
+#   1. review-log/<HEAD_SHA>.json, preferred; and
+#   2. the CARRIED ANCHOR review-log/<review_anchor_sha>.json, the log the
+#      done-state records as the one its verification actually rests on.
+# The anchor is admitted whenever its log exists — NOT only when CARRY=1. After
+# a carry the writer records a done-state at the NEW sha whose anchor is still
+# the OLD log; the next gate run takes the sha-equal path (CARRY=0) and would
+# otherwise find no HEAD-exact log and re-block, undoing the carry one turn
+# later. It is also admitted alongside an existing HEAD-exact log, because a
+# delta-scoped HEAD log may attest fewer paths than the anchor does.
+#
+# Reaching here means Step 5 proved the done-state's tree == HEAD's tree
+# (trivially so on the sha-equal path), which is exactly the precondition for
+# resolving the anchor's attested blobs at HEAD. The anchor must be a raw object
+# id: a symbolic value would resolve against the current tree and self-validate.
+# Schema validation and hc_review_blocking then run on the ONE resolved log
+# exactly as before.
 REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
+EXTRA_ADMIT=""
+# LEGACY states predate review_anchor_sha; for them the anchor IS verified_sha
+# (the log the write validated by construction), the same fallback the writer
+# uses. On the sha-equal path that resolves to HEAD_SHA, so it changes nothing
+# there; on a carry it names the log Step 5 just proved still describes HEAD.
+ANCHOR_SHA=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
+if [ -n "$ANCHOR_SHA" ] && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; }; then
+  if hc__is_object_id "$ANCHOR_SHA" && [ -f "$HARNESS_DIR/review-log/$ANCHOR_SHA.json" ]; then
+    EXTRA_ADMIT="$ANCHOR_SHA"
+    if [ ! -f "$REVIEW_LOG" ]; then
+      REVIEW_LOG="$HARNESS_DIR/review-log/$ANCHOR_SHA.json"
+    fi
+  fi
+fi
 if [ ! -f "$REVIEW_LOG" ]; then
   block "run an independent code review, then re-run /done"
 fi
@@ -350,7 +424,7 @@ fi
 # so a missing function here cannot silently allow. A coverage-computation error
 # with a real changeset returns the full changed set (non-empty → block), never
 # SKIP — so it fails toward block, not toward an accidental allow.
-GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR")
+GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
   block "review the uncovered files (${GAP_LIST}), then re-run /done"

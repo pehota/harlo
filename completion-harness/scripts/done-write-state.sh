@@ -97,6 +97,13 @@ if [ -z "$VERIFIED_SHA" ]; then
   echo "error: not a git repo (git rev-parse HEAD failed) — cannot record done-state" >&2
   exit 1
 fi
+# HEAD's TREE id — the content fingerprint the gate's Step-5 carry compares
+# against, so a later tree-identical HEAD move (an amend that only rewords, a
+# rebase that replays the same patches) does not invalidate this verification.
+# A FACT, computed here, never a payload field. Empty (git could not resolve it)
+# → the field is OMITTED rather than refused: its absence only costs the carry,
+# and legacy states without it are handled by the gate's recompute fallback.
+HEAD_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)
 
 # Baseline-relative tree check via the shared classifier (same predicate the
 # gate uses). Refuse iff there are INTRODUCED blockers (the changeset's own
@@ -129,6 +136,11 @@ fi
 HAS_ESCALATION=$(printf '%s' "$PAYLOAD" | jq -r '
   if (.escalation != null) then "yes" else "no" end
 ' 2>/dev/null)
+# The sha of the review-log this write actually validated, and the carried
+# anchor coverage must admit. Both stay EMPTY on the escalation path — no log is
+# validated there, so there is nothing to anchor and nothing to claim.
+REVIEW_ANCHOR_SHA=""
+EXTRA_ADMIT=""
 if [ "$HAS_ESCALATION" != "yes" ]; then
   # tests must be GREEN AND carry evidence. tests.status=="not_run" is allowed
   # ONLY with an escalation (handled by the outer branch — we are in the no-
@@ -174,7 +186,45 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # feedback at /done time. Findings below the threshold are advisory and never
   # refuse. HEAD is the live rev-parse computed above (VERIFIED_SHA). A missing
   # log, or a jq crash / unknown severity ("ERR"), all refuse (fail toward block).
+  #
+  # CARRY. The HEAD-exact log is preferred. If it is absent, the PRIOR
+  # done-state for this task may still point at a log that describes exactly
+  # this content: accept its review_anchor_sha, but ONLY when that prior state
+  # recorded a head_tree equal to the live HEAD_TREE — i.e. the HEAD move
+  # changed no blob and no mode. That is the same tree-equality proof the gate
+  # requires; nothing weaker (ancestry in particular) is accepted. The anchor
+  # must be a raw object id, or it would resolve against the current tree and
+  # self-validate. The resolved anchor is recorded below as this state's own
+  # review_anchor_sha, so the chain does not break at the next HEAD move.
   REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${VERIFIED_SHA}.json"
+  REVIEW_ANCHOR_SHA="$VERIFIED_SHA"
+  if [ ! -f "$REVIEW_LOG" ] && [ -n "$HEAD_TREE" ]; then
+    PRIOR_STATE="$PROJECT_DIR/.claude/.harness/done-state/${HC_TASK_KEY}.json"
+    if [ -f "$PRIOR_STATE" ]; then
+      PRIOR_TREE=$(jq -r '.head_tree // ""' "$PRIOR_STATE" 2>/dev/null)
+      PRIOR_ANCHOR=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
+      # LEGACY prior state (written before head_tree existed): recompute its
+      # tree live from its verified_sha, exactly as the gate's Step 5 does. Both
+      # must use the same fallback or they diverge — the gate would carry a
+      # reworded HEAD and the writer would then refuse the very write the gate
+      # is about to accept, which is the churn this whole change removes. The
+      # outer `[ -n "$HEAD_TREE" ]` guard keeps two empties from matching.
+      if [ -z "$PRIOR_TREE" ]; then
+        PRIOR_VERIFIED=$(jq -r '.verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
+        if [ -n "$PRIOR_VERIFIED" ]; then
+          PRIOR_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify "${PRIOR_VERIFIED}^{tree}" 2>/dev/null)
+        fi
+      fi
+      if [ "$PRIOR_TREE" = "$HEAD_TREE" ] && [ -n "$PRIOR_ANCHOR" ] \
+         && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
+         && hc__is_object_id "$PRIOR_ANCHOR" \
+         && [ -f "$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json" ]; then
+        REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json"
+        REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
+        EXTRA_ADMIT="$PRIOR_ANCHOR"
+      fi
+    fi
+  fi
   if [ ! -f "$REVIEW_LOG" ]; then
     echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} (.claude/.harness/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
     exit 1
@@ -213,7 +263,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # fail-toward-block discipline: a computation error with a real changeset returns
   # the full changed set (non-empty → refuse), never SKIP.
   if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
-    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR")
+    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT")
   else
     # Library failed to source — the review-log refusal above already exited via
     # the ERR path, so we never reach here without the function; but guard anyway
@@ -252,12 +302,28 @@ DONE_STATE_DIR="$PROJECT_DIR/.claude/.harness/done-state"
 mkdir -p "$DONE_STATE_DIR" 2>/dev/null
 OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 
+# head_tree / review_anchor_sha / base_sha are FACTS this script computed, in
+# the same class as verified_sha — never payload fields. The merge is `payload *
+# {facts}`, so a fact only wins where it is PRESENT; an empty one must therefore
+# be DELETED, not merely skipped, or an agent-supplied value would survive into
+# the state and forge the very thing the carry trusts.
+#   head_tree         — HEAD's tree; lets the gate carry this verification across
+#                       a tree-identical HEAD move.
+#   review_anchor_sha — the review-log this write validated, so the carry knows
+#                       which log to keep admitting (and the reaper to keep).
+#   base_sha          — the resolved changeset base. Audit only, never gating.
 RESULT=$(printf '%s' "$PAYLOAD" | jq \
   --arg sid "$SESSION_ID" \
   --arg sha "$VERIFIED_SHA" \
+  --arg tree "$HEAD_TREE" \
+  --arg anchor "$REVIEW_ANCHOR_SHA" \
+  --arg base "${HC_BASE:-}" \
   --argjson clean "$TREE_CLEAN" \
   --argjson plan "$PLAN_JSON" '
   . * {contract_version: 1, session_id: $sid, verified_sha: $sha, tree_clean: $clean}
+  | (if $tree   != "" then .head_tree = $tree           else del(.head_tree)         end)
+  | (if $anchor != "" then .review_anchor_sha = $anchor else del(.review_anchor_sha) end)
+  | (if $base   != "" then .base_sha = $base            else del(.base_sha)          end)
   | (if $plan != null then .plan = $plan else . end)
 ' 2>/dev/null)
 

@@ -13,6 +13,9 @@
     "contract_version": { "const": 1 },
     "session_id": { "type": "string" },
     "verified_sha": { "type": "string" },
+    "head_tree": { "type": "string", "minLength": 40 },
+    "review_anchor_sha": { "type": "string", "minLength": 40 },
+    "base_sha": { "type": "string" },
     "tree_clean": { "type": "boolean" },
     "dod": {
       "type": "object",

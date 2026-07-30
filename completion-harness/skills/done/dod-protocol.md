@@ -292,7 +292,15 @@ severities accurately.
 Coverage is computed **per-file by BLOB across all logs in the task's chain**: a changed
 file is covered iff **some** chain-log attested it **at its current blob**. So a
 follow-up commit only needs re-attestation of the files whose **blobs it changed**;
-untouched files carry their earlier attestation forward for free.
+untouched files carry their earlier attestation forward for free. Chain-logs are keyed by
+raw object id — a log whose basename is not 40/64 lowercase hex is ignored outright.
+
+**A HEAD move with an IDENTICAL tree needs no new review-log.** Rewording a commit
+(`reset --soft` + recommit, `commit --amend -m`) or a `pull --rebase` that replays the
+same patches leaves every blob and mode byte-identical, so the existing log and
+done-state still describe exactly what is at HEAD: the gate compares `head_tree` and
+carries them. A **content-changing** move — one byte, or even just a file mode — produces
+a different tree and still requires a fresh log for the new HEAD.
 
 <a id="step-6"></a>
 ## Step 6 — Address findings (bounded loop)
@@ -304,7 +312,9 @@ full-changeset review; round 2 is the confirming pass below.
 **Zero-BLOCKING-findings short-circuit (the common, cheap path).** If round 1 returned
 **zero blocking findings** (at/above `min_review_level`), nothing gates: HEAD does not
 move, the review-log already written for the current HEAD satisfies the gate, and you are
-**done reviewing with NO second review**. Advisory findings may remain; they don't gate.
+**done reviewing with NO second review**. This holds even if HEAD later moves **without
+changing the tree** (a reworded commit, a replaying rebase) — same tree, same
+verification; do **not** re-review for that. Advisory findings may remain; they don't gate.
 A clean changeset costs exactly **one** review.
 
 Otherwise (round 1 has blocking findings):
@@ -353,10 +363,18 @@ a payload field** — the review evidence is the separate HEAD-keyed review-log 
 subagent wrote.
 
 The script **injects the git facts live** — `verified_sha` from `git rev-parse HEAD`,
-`tree_clean` from `git status --porcelain` — **refuses to write over a dirty tree**
+`head_tree` from `git rev-parse HEAD^{tree}`, `review_anchor_sha` (the review-log it
+actually validated), `base_sha` (audit only), and `tree_clean` from
+`git status --porcelain` — **refuses to write over a dirty tree**
 (commit first), and (absent an escalation) refuses unless tests are green, lint is green
 when configured, and the review-log for HEAD has **zero blocking findings** (recomputed
 structurally, same as the gate). You never hand-write a SHA.
+
+`head_tree` and `review_anchor_sha` are **writer-injected facts, never agent-supplied**:
+put them in the payload and the writer overwrites — or deletes — them. When there is no
+review-log for HEAD but the prior done-state for this task recorded the **same
+`head_tree`**, the writer reuses that state's `review_anchor_sha` instead of refusing
+(see Step 5).
 
 The "dirty tree" refusal is **baseline-relative**: only changes you *introduced* this
 session block; files present at the SessionStart baseline are warned, not blocked (stops
@@ -389,8 +407,8 @@ Payload shape (facts are injected, not supplied):
 `review_rounds` (integer, **optional**) records how many review rounds you used (Step 6);
 **informational only** — neither writer nor gate enforces it. `dod` records the effective
 DoD from Step 0.5 verbatim: `sources` lists the folded inputs, `items` is the deduped
-checklist. The script writes `session_id`, `verified_sha`, `tree_clean` itself and prints
-the path written. The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 5)
+checklist. The script writes `session_id`, `verified_sha`, `head_tree`, `review_anchor_sha`,
+`base_sha` and `tree_clean` itself and prints the path written. The review-log at `.claude/.harness/review-log/<HEAD>.json` (Step 5)
 lives beside the done-state; both writer and gate read it.
 
 <a id="step-8"></a>
