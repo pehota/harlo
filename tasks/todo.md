@@ -25,13 +25,27 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
    Must become `$(dirname "$0")/..` + `/install.sh` (name-independent afterwards).
 3. Every other `completion-harness` occurrence inside the bundle (7 test files,
    3 scripts) is **comment text only**.
-4. **Runtime state is already name-agnostic** — `HARNESS_DIR=$PROJECT_DIR/.claude/.harness`,
-   config `.claude/done-config.json`. No state-key rename needed, and no migration
-   burden for anyone already running the harness. Verified the adjacent risk:
-   `install.sh:59,64` rewrites on the **literal token** `${CLAUDE_PLUGIN_ROOT}`
-   (single-quoted sed, `s#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g`) —
-   no path fragment containing the plugin name, so the rename cannot break the
-   fallback installer.
+4. **State dir renames too: `.claude/.harness` → `.claude/.done-gate`** (user call —
+   an engineer finding `.harness` in their `.claude/` has no way to trace it back to
+   a plugin). 245 occurrences across 27 files, but only ~12 are the actual path
+   definition (`HARNESS_DIR=` in 4 scripts, bare literals in `done-triage.sh`,
+   `done-write-state.sh`, `harness-common.sh` defaults, `install.sh` mkdir + gitignore).
+   The rest are test fixture literals and prose. Single global `sed` on the string
+   `.claude/.harness`; the 16 suites are the verification.
+   - **`HARNESS_DIR` (the variable) does NOT rename.** It is pinned by
+     `contracts/shell-abi.json` and asserted by `test-abi.sh`. Traceability is about
+     what an engineer sees on disk, not an internal shell var.
+   - **No migration shim.** `done-gate` ships at 0.1.0 with no install base. Any
+     stale `.claude/.harness/` left by a `completion-harness` install is regenerated-
+     on-SessionStart session state — safe to delete by hand. Note it in the README;
+     don't write code for it.
+   - Verified the adjacent risk: `install.sh:59,64` rewrites on the **literal token**
+     `${CLAUDE_PLUGIN_ROOT}` (single-quoted sed,
+     `s#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g`) — no path fragment
+     containing the plugin name, so neither rename can break the fallback installer.
+   - **Open:** `.claude/done-config.json` keeps its name. It maps to the `/done`
+     skill, not to the plugin, and it is the one file engineers author by hand.
+     Say if you want `done-gate-config.json` instead.
 5. **`package.json` needs no change** — target's test script globs
    `plugins/*/tests/test-*.sh`, which picks `done-gate` up automatically.
 6. **`done-gate` would be the first plugin in coding-agents that ships `hooks/`.**
@@ -52,9 +66,12 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
 
 ## Steps
 
-### 1. Branch in target repo
-- [ ] `cd coding-agents`, confirm `main` up to date, `git switch -c feat/done-gate-plugin`
-- [ ] Do not stage the pre-existing dirty files.
+### 1. Target repo — work on `main` (user call)
+- [ ] Verified 2026-07-30: `coding-agents` is on `main`, clean, in sync with
+      `origin/main`. No feature branch; commit directly to `main`.
+- [ ] `done-gate`'s own `PreToolUse: Write|Edit` auto-branch hook is NOT active in
+      that repo during authoring (plugin not installed yet), so nothing will move
+      you off `main` mid-edit. Step 5's live install is where that changes.
 
 ### 2. Copy the bundle
 - [ ] `cp -R harlo/completion-harness/ coding-agents/plugins/done-gate/`
@@ -69,6 +86,14 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
 - [ ] `plugin.json`: `name: done-gate`, `version: 0.1.0`, `description` unchanged,
       `author: ClimatePartner` — matches every other plugin in that org marketplace.
 - [ ] **Fix `tests/test-install.sh:22`** — the one real path edit (finding #2).
+- [ ] **State dir rename** — global `sed 's#\.claude/\.harness#.claude/.done-gate#g'`
+      across `scripts/ tests/ install.sh skills/ dod/ README.md DOD.md docs/`.
+      Then sweep bare `.harness/` mentions in prose that the anchored pattern misses.
+      Leave `HARNESS_DIR`, `harness-common.sh`, `harness-resolve.sh`, `hc_*` alone —
+      internal names, pinned by `contracts/shell-abi.json`.
+- [ ] `install.sh:174` writes `.claude/.harness/` into the target project's
+      `.gitignore` → must become `.claude/.done-gate/`. Same for the `mkdir -p` at
+      `:178`. These two are the only lines that touch a *consumer* project.
 - [ ] Sweep comment-only mentions: `completion-harness` → `done-gate` across
       tests/scripts/README/docs (`grep -rl` then `sed -i ''`).
 - [ ] `README.md` + `docs/`: install line becomes
@@ -90,19 +115,23 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
 - [ ] `pnpm run test` at target root — all 16 done-gate suites + every pre-existing
       plugin suite green.
 - [ ] `grep -rn 'completion-harness\|harlo' plugins/done-gate/` returns nothing.
+- [ ] `grep -rn '\.claude/\.harness' plugins/done-gate/` returns nothing.
+      (`HARNESS_DIR` / `harness-common.sh` hits are expected and correct.)
 - [ ] Live install: `/plugin install done-gate@cp-marketplace-dev --scope local`,
       reload, confirm `/done-gate:done` resolves and the Stop hook fires.
 
   > **Only step with side effects outside `plugins/done-gate/`.** A live install
   > arms three hooks *in the target repo*: `Stop` (blocks completion),
-  > `SessionStart` (`baseline-snapshot.sh` writes `.claude/.harness/` and seeds
+  > `SessionStart` (`baseline-snapshot.sh` writes `.claude/.done-gate/` and seeds
   > `.claude/done-config.json`), `PreToolUse: Write|Edit` (`auto-branch.sh` can
   > create a branch). The target tree is already dirty with unrelated work.
   > Therefore: run this on the feature branch only, and afterwards
-  > (a) `rm -rf .claude/.harness/`, (b) remove the seeded `done-config.json`
+  > (a) `rm -rf .claude/.done-gate/`, (b) remove the seeded `done-config.json`
   > unless the repo genuinely wants the gate on itself, (c) decide whether
-  > `.claude/.harness/` belongs in target `.gitignore` — it does if the repo
+  > `.claude/.done-gate/` belongs in target `.gitignore` — it does if the repo
   > dogfoods done-gate, otherwise leave `.gitignore` alone.
+  > Because Step 1 puts us on `main`, this cleanup is mandatory, not optional —
+  > there is no branch to throw away.
 
 - [ ] Fresh-context code review of the diff (independent agent).
 
@@ -121,6 +150,7 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
 | `.githooks/pre-push` | Target already runs `pnpm test` pre-push via husky. |
 | `run-tests.sh` | Target's `package.json` glob replaces it. |
 | `.claude/done-config.json`, `.claude/.harness/` | harlo's own dogfooding state — must not be copied. |
+| The `.harness` → `.done-gate` rename **in harlo** | harlo's plugin is still named `completion-harness`; `.done-gate` there would recreate the exact traceability problem in reverse. The two copies diverge on this one string, by design. |
 | harlo root `CLAUDE.md`, `README.md` | Repo-level, not plugin-level. Plugin `README.md` ports. |
 
 ## Known mismatch to declare in the plugin README
