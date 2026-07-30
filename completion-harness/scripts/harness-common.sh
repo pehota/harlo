@@ -1135,6 +1135,18 @@ hc_validate() {
             | ($path + ": unsupported schema keyword: " + .) ]
         else [] end ) as $kw_errs
 
+      # --- additionalProperties form check (fail-closed). We ONLY enforce the
+      # BOOLEAN form (true/false); the object-subschema form
+      # (`additionalProperties: {...}`) is NOT descended into or validated, so
+      # any nested keywords would be silently ignored — the same fail-open
+      # pocket as an unsupported keyword (#2), in a different idiom. When present
+      # and NOT a boolean, REJECT it as unsupported. Rides this recursion so it
+      # fires at every schema node. Boolean values (true/false) are unaffected.
+      | ( if ($schema | type) == "object" and ($schema | has("additionalProperties"))
+             and (($schema.additionalProperties | type) != "boolean") then
+            [ ($path + ": additionalProperties as a subschema is not supported") ]
+          else [] end ) as $addlprop_errs
+
       # --- type: single string OR array-of-strings union (pass if ANY match).
       | ( if ($schema | type) == "object" and ($schema | has("type")) then
             ($schema.type) as $ty
@@ -1224,7 +1236,7 @@ hc_validate() {
           else [] end ) as $items_errs
 
       # Concatenate in the documented order; caller takes the first.
-      | ( $kw_errs + $type_errs + $const_errs + $enum_errs + $minlen_errs + $not_errs + $oneof_errs + $obj_errs + $items_errs ) ;
+      | ( $kw_errs + $addlprop_errs + $type_errs + $const_errs + $enum_errs + $minlen_errs + $not_errs + $oneof_errs + $obj_errs + $items_errs ) ;
 
     v($schema[0]; "$") | .[0] // empty
   ' "$json_file" 2>/dev/null)

@@ -225,6 +225,26 @@ if vok "$TMP/strict.schema.json" "$TMP/strict_ok.json"; then
   ok "additionalProperties:false + only allowed keys → 0"
 else bad "additionalProperties:false + only allowed keys → 0"; fi
 
+# --- #2 fail-closed: additionalProperties as an OBJECT subschema is rejected -
+# The validator only enforces the BOOLEAN form; the object-subschema form is not
+# descended into, so nested keywords would be silently ignored. It must REJECT,
+# regardless of the instance. Non-vacuous: strict_ok.json validates cleanly
+# under the boolean form above, so acceptance here would prove the check absent.
+cat > "$TMP/ap-obj.schema.json" <<'JSON'
+{"type":"object","required":["contract_version"],"properties":{"contract_version":{"const":1},"a":{"type":"string"}},"additionalProperties":{"type":"string","pattern":"^x"}}
+JSON
+if ! vok "$TMP/ap-obj.schema.json" "$TMP/strict_ok.json"; then
+  ok "additionalProperties object subschema → nonzero (fail-closed)"
+else bad "additionalProperties object subschema → nonzero (fail-closed)"; fi
+
+# --- additionalProperties:true (boolean) allows extra keys → 0 --------------
+cat > "$TMP/ap-true.schema.json" <<'JSON'
+{"type":"object","required":["contract_version"],"properties":{"contract_version":{"const":1},"a":{"type":"string"}},"additionalProperties":true}
+JSON
+if vok "$TMP/ap-true.schema.json" "$TMP/strict_bad.json"; then
+  ok "additionalProperties:true + extra key → 0"
+else bad "additionalProperties:true + extra key → 0"; fi
+
 # --- jq-missing fail-closed path --------------------------------------------
 # Strip jq from PATH in a subshell so the rest of the suite is unaffected.
 # command -v jq fails → hc_validate prints "ERR: jq unavailable" and returns 1.
