@@ -58,6 +58,7 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalat
 if [ -d "$HARNESS_DIR" ]; then
   find "$HARNESS_DIR" -type f \
     -not -path '*/task-base/*' -not -path '*/tree-base/*' -not -path '*/review-log/*' \
+    -not -path '*/escalation-accept/*' \
     -mtime +14 -delete 2>/dev/null || true
 fi
 
@@ -154,7 +155,7 @@ fi
 # ONLY if its <HEAD> is a commit the gate might check — the tip of some local
 # branch or the current HEAD. Prune the rest (superseded fix-churn).
 # SAFETY: never delete the current HEAD's review-log (it IS in the keep-set).
-if [ -d "$HARNESS_DIR/review-log" ] \
+if { [ -d "$HARNESS_DIR/review-log" ] || [ -d "$HARNESS_DIR/escalation-accept" ]; } \
    && { command -v hc_live_review_shas >/dev/null 2>&1 || type hc_live_review_shas >/dev/null 2>&1; }; then
   LIVE_SHAS=$(hc_live_review_shas "$PROJECT_DIR" 2>/dev/null)
   # Only prune when we could compute a keep-set (git ok). Empty keep-set in a git
@@ -167,6 +168,20 @@ if [ -d "$HARNESS_DIR/review-log" ] \
         rm -f "$f" 2>/dev/null || true
       fi
     done
+    # escalation-accept/<sha>.json (P2-b, #6) is governed by the SAME keep-set:
+    # exempt from the 14-day age-reap (above), pruned ONLY when its SHA is no
+    # longer reachable (unreachable commit → acceptance is dead). Mirrors the
+    # review-log prune so a live task's per-commit acceptance survives as long as
+    # its commit does, and no longer.
+    if [ -d "$HARNESS_DIR/escalation-accept" ]; then
+      for f in "$HARNESS_DIR/escalation-accept"/*.json; do
+        [ -e "$f" ] || continue
+        sha=$(basename "$f" .json)
+        if ! printf '%s\n' "$LIVE_SHAS" | grep -Fxq -- "$sha" 2>/dev/null; then
+          rm -f "$f" 2>/dev/null || true
+        fi
+      done
+    fi
   fi
 fi
 

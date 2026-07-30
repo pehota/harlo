@@ -278,5 +278,21 @@ if [ ! -f "$OUT_FILE" ]; then
   exit 1
 fi
 
+# --- SHA-keyed escalation sidecar (P2-b, #6) --------------------------------
+# When the payload carries a non-null escalation, ALSO persist it keyed by the
+# VERIFIED_SHA (session-independent), so a later session at the SAME HEAD honours
+# the acceptance without the done-state (whose task-key may differ). This is
+# ADDITIVE — the done-state keeps its own escalation copy. Acceptance disarms ONLY
+# this exact HEAD: a new commit moves HEAD → new sha → no sidecar → re-block.
+# Guarded; a write failure here does not fail the done-state write above.
+if [ "$HAS_ESCALATION" = "yes" ]; then
+  ESC_DIR="$PROJECT_DIR/.claude/.harness/escalation-accept"
+  mkdir -p "$ESC_DIR" 2>/dev/null
+  ESC_OBJ=$(printf '%s' "$PAYLOAD" | jq -c '.escalation' 2>/dev/null)
+  if [ -n "$ESC_OBJ" ] && [ "$ESC_OBJ" != "null" ]; then
+    printf '%s\n' "$ESC_OBJ" > "$ESC_DIR/${VERIFIED_SHA}.json" 2>/dev/null
+  fi
+fi
+
 echo "$OUT_FILE"
 exit 0

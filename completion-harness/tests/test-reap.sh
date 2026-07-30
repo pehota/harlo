@@ -61,6 +61,17 @@ done
 FRESH_DONE="$HARNESS/done-state/recent.json"
 echo "fresh" > "$FRESH_DONE"   # mtime = now
 
+# --- escalation-accept sidecars (P2-b, #6) ----------------------------------
+# Governed by the SAME keep-set as review-log (hc_live_review_shas reachability),
+# EXEMPT from the 14-day age reap. A sidecar for the REACHABLE HEAD must survive
+# even when stale; a sidecar for an UNREACHABLE (bogus) sha must be pruned.
+mkdir -p "$HARNESS/escalation-accept"
+HEAD_SHA_REAP=$(git -C "$REPO" rev-parse HEAD)
+ESC_LIVE="$HARNESS/escalation-accept/${HEAD_SHA_REAP}.json"       # reachable HEAD
+ESC_DEAD="$HARNESS/escalation-accept/deadbeefdeadbeef.json"       # unreachable sha
+echo '{"type":"user_accepted"}' > "$ESC_LIVE";  touch -d '20 days ago' "$ESC_LIVE"   # STALE but reachable
+echo '{"type":"user_accepted"}' > "$ESC_DEAD";  touch -d '20 days ago' "$ESC_DEAD"
+
 # --- run baseline-snapshot.sh -----------------------------------------------
 printf '{"session_id":"%s"}' "$SID" | CLAUDE_PROJECT_DIR="$REPO" bash "$BASELINE" >/dev/null 2>&1
 
@@ -82,6 +93,11 @@ printf '{"session_id":"%s"}' "$SID" | CLAUDE_PROJECT_DIR="$REPO" bash "$BASELINE
 
 # Stale tree-base PIN kept (excluded from reap — prevents re-seed carryover bug).
 [ -e "$STALE_TREE_PIN" ] && ok "stale tree-base pin KEPT (excluded from reap)" || bad "stale tree-base pin was reaped — pre-existing set would re-seed"
+
+# escalation-accept: reachable HEAD sidecar survives (age-exempt, in keep-set);
+# unreachable sidecar pruned by the keep-set hygiene.
+[ -e "$ESC_LIVE" ] && ok "escalation-accept for reachable HEAD KEPT (stale but age-exempt)" || bad "escalation-accept for reachable HEAD was reaped"
+[ ! -e "$ESC_DEAD" ] && ok "escalation-accept for unreachable sha PRUNED (keep-set)" || bad "escalation-accept for unreachable sha still present"
 
 # Current session's baseline written fresh.
 CUR_SHA="$HARNESS/baselines/${SID}.sha"

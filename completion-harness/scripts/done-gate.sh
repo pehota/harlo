@@ -208,6 +208,16 @@ ESCALATION=$(jq -r '.escalation // "null"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ -n "$ESCALATION" ] && [ "$ESCALATION" != "null" ]; then
   exit 0
 fi
+# P2-b (#6): also honour a SHA-keyed escalation sidecar written for THIS exact
+# HEAD (session-independent). Reached only after Step 5 (verified_sha == HEAD),
+# so the done-state is already valid at HEAD; the sidecar simply lets a DIFFERENT
+# session — one whose done-state lacks the escalation copy — honour the same
+# acceptance for the same commit. Disarms ONLY this HEAD: a new commit → new sha
+# → no sidecar → re-block.
+ESC_SIDECAR="$HARNESS_DIR/escalation-accept/$HEAD_SHA.json"
+if [ -f "$ESC_SIDECAR" ]; then
+  exit 0
+fi
 
 # --- Step 8: recorded checklist outcomes must all be green -> else BLOCK -----
 # With no escalation (step 7 already returned if one was present), the gate

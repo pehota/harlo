@@ -727,6 +727,54 @@ run_case "EB3 empty range + clean tree -> allow (Step 3 quiet-exit)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # ============================================================================
+# Chunk G (P2-b, #6) — SHA-keyed escalation sidecar honored at Step 7.
+# A done-state VALID at HEAD but with a RED outcome (tests exit 1) and NULL
+# escalation would block at Step 8. With a sidecar escalation-accept/<HEAD>.json
+# present, the gate honors it at Step 7 and ALLOWS — proving a session whose
+# done-state lacks the escalation copy still honors the SHA-keyed acceptance.
+# ----------------------------------------------------------------------------
+SID=eg1; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+# Red done-state at HEAD, escalation:null → would block Step 8 without a sidecar.
+write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"b\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":1},\"task_checks\":[],\"escalation\":null}"
+write_review_log 0
+# Control: NO sidecar yet → must BLOCK (red tests, no escalation).
+rm -f "$HDIR/escalation-accept/$HEAD_SHA.json"
+run_case "EG1 red done-state, no sidecar -> block (control)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+# Seed the sidecar for THIS HEAD → gate honors it at Step 7 → ALLOW.
+mkdir -p "$HDIR/escalation-accept"
+printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$HEAD_SHA.json"
+run_case "EG1 red done-state + SHA sidecar -> allow (Step 7 honors sidecar)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+# Sidecar disarms ONLY this HEAD: a sidecar for a DIFFERENT sha does NOT help.
+rm -f "$HDIR/escalation-accept/$HEAD_SHA.json"
+printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$BASELINE_SHA.json"
+run_case "EG1 sidecar for OTHER sha -> block (disarms only this HEAD)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -f "$HDIR/escalation-accept/$BASELINE_SHA.json"
+
+# Writer: an escalated /done writes the SHA-keyed sidecar. Uses the WRITE script
+# against a self-contained repo to assert the sidecar file is created at HEAD.
+WRITE_G="$(cd "$(dirname "$0")/../scripts" && pwd)/done-write-state.sh"
+EG_REPO=$(mktemp -d)
+git -C "$EG_REPO" init -q -b main
+git -C "$EG_REPO" config user.name t; git -C "$EG_REPO" config user.email t@t
+printf '.claude/\n' > "$EG_REPO/.gitignore"
+printf 'r\n' > "$EG_REPO/r.txt"; git -C "$EG_REPO" add -A; git -C "$EG_REPO" commit -qm init
+EG_HEAD=$(git -C "$EG_REPO" rev-parse HEAD)
+mkdir -p "$EG_REPO/.claude/.harness/baselines"
+printf '%s\n' "$EG_HEAD" > "$EG_REPO/.claude/.harness/baselines/eg-esc.sha"
+# Escalated payload (red tests) → writer bypasses green checks AND writes sidecar.
+EG_PAYLOAD='{"dod":{"sources":["b"],"items":["x"]},"tests":{"exit_code":1},"task_checks":[{"desc":"x","status":"failed"}],"escalation":{"type":"user_accepted","user_decision":"accept"}}'
+printf '%s' "$EG_PAYLOAD" | CLAUDE_PROJECT_DIR="$EG_REPO" bash "$WRITE_G" "eg-esc" >/dev/null 2>&1
+if [ -f "$EG_REPO/.claude/.harness/escalation-accept/$EG_HEAD.json" ]; then
+  printf 'PASS  %s\n' "EG1 writer creates SHA-keyed escalation sidecar"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [sidecar not written]\n' "EG1 writer sidecar"; FAIL=$((FAIL+1))
+fi
+rm -rf "$EG_REPO"
+
+# ============================================================================
 # Chunk E (P1-b, #6) — pending-escalation one-shot pass (Step 2b).
 # A state that WOULD block (committed work past baseline, no done-state → S2)
 # is allowed EXACTLY ONCE when a pending-escalation/<task_key>.json exists; the
