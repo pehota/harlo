@@ -91,6 +91,7 @@
       "globals": [],
       "stdout": "OK on success, or ERR: <path>: <what>",
       "return_codes": "0 valid, 1 invalid/error",
+      "notes": "Fail-closed: rejects any schema containing an unsupported keyword (outside the enforced subset + benign-annotation allowlist), naming the offending keyword.",
       "sentinels": [
         "OK",
         "ERR"

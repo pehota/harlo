@@ -329,6 +329,94 @@ if ! vok "$TMP/empty-schema.json" "$TMP/anything.json"; then
   ok "empty schema file → nonzero (no fail-open)"
 else bad "empty schema file → nonzero (no fail-open)"; fi
 
+# --- fail-closed on UNSUPPORTED schema keywords (#2) ------------------------
+# A schema keyword this validator neither enforces nor knows to be a benign
+# annotation must be REJECTED (fail-closed), even for a doc that would pass the
+# enforced constraints, and the offending keyword must be NAMED.
+cat > "$TMP/kw-nested.schema.json" <<'JSON'
+{"type":"object","properties":{"x":{"type":"string","pattern":"^a"}}}
+JSON
+cat > "$TMP/kw-nested.json" <<'JSON'
+{"x":"abc"}
+JSON
+out=$(hc_validate "$TMP/kw-nested.schema.json" "$TMP/kw-nested.json" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'pattern'; then
+  ok "nested unsupported keyword 'pattern' → nonzero + named"
+else bad "nested unsupported keyword 'pattern' → nonzero + named (rc=$rc out=$out)"; fi
+
+# Top-level unsupported keyword (anyOf).
+cat > "$TMP/kw-anyof.schema.json" <<'JSON'
+{"anyOf":[{"type":"string"},{"type":"number"}]}
+JSON
+cat > "$TMP/kw-anyof.json" <<'JSON'
+"hi"
+JSON
+out=$(hc_validate "$TMP/kw-anyof.schema.json" "$TMP/kw-anyof.json" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'anyOf'; then
+  ok "top-level unsupported keyword 'anyOf' → nonzero + named"
+else bad "top-level unsupported keyword 'anyOf' → nonzero + named (rc=$rc out=$out)"; fi
+
+# Top-level unsupported keyword (minimum).
+cat > "$TMP/kw-min.schema.json" <<'JSON'
+{"type":"integer","minimum":5}
+JSON
+cat > "$TMP/kw-min.json" <<'JSON'
+10
+JSON
+out=$(hc_validate "$TMP/kw-min.schema.json" "$TMP/kw-min.json" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'minimum'; then
+  ok "top-level unsupported keyword 'minimum' → nonzero + named"
+else bad "top-level unsupported keyword 'minimum' → nonzero + named (rc=$rc out=$out)"; fi
+
+# BENIGN annotations ($schema, title, description) are ignored, not rejected.
+cat > "$TMP/kw-benign.schema.json" <<'JSON'
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"urn:x","title":"T","description":"d","type":"object","properties":{"x":{"type":"string","description":"a field"}}}
+JSON
+cat > "$TMP/kw-benign.json" <<'JSON'
+{"x":"abc"}
+JSON
+if vok "$TMP/kw-benign.schema.json" "$TMP/kw-benign.json"; then
+  ok "benign annotations ($schema/title/description) → 0"
+else bad "benign annotations ($schema/title/description) → 0"; fi
+
+# KEY REGRESSION GUARD: a property literally NAMED like a keyword must NOT be
+# misread as a keyword — its subschema is validated normally.
+cat > "$TMP/kw-propname.schema.json" <<'JSON'
+{"type":"object","required":["pattern","minimum"],"properties":{"pattern":{"type":"string"},"minimum":{"type":"integer"}}}
+JSON
+cat > "$TMP/kw-propname-ok.json" <<'JSON'
+{"pattern":"^a","minimum":3}
+JSON
+if vok "$TMP/kw-propname.schema.json" "$TMP/kw-propname-ok.json"; then
+  ok "property NAMED 'pattern'/'minimum' → 0 (name not a keyword)"
+else bad "property NAMED 'pattern'/'minimum' → 0 (name not a keyword)"; fi
+# ...and the subschema under such a name still enforces (wrong type → nonzero).
+cat > "$TMP/kw-propname-bad.json" <<'JSON'
+{"pattern":"^a","minimum":"nope"}
+JSON
+if ! vok "$TMP/kw-propname.schema.json" "$TMP/kw-propname-bad.json"; then
+  ok "property NAMED 'minimum' still type-checked → nonzero"
+else bad "property NAMED 'minimum' still type-checked → nonzero"; fi
+
+# const/enum VALUES may contain arbitrary keys; those are DATA, not keywords.
+cat > "$TMP/kw-constval.schema.json" <<'JSON'
+{"type":"object","properties":{"x":{"const":{"pattern":"data","minimum":1}}}}
+JSON
+cat > "$TMP/kw-constval.json" <<'JSON'
+{"x":{"pattern":"data","minimum":1}}
+JSON
+if vok "$TMP/kw-constval.schema.json" "$TMP/kw-constval.json"; then
+  ok "keyword-like keys inside a const VALUE → 0 (data, not schema)"
+else bad "keyword-like keys inside a const VALUE → 0 (data, not schema)"; fi
+
+# All shipped schemas still validate their canonical fixtures (sanity) — the
+# earlier per-schema vok assertions above already cover base-dod/done-state/
+# done-config/done-plan/resolver-output/review-log; re-assert the shipped
+# base-dod data file once more as an explicit no-regression marker.
+if vok "$CONTRACTS/base-dod.schema.json" "$CONTRACTS/base-dod.json"; then
+  ok "shipped base-dod still validates after keyword lint → 0"
+else bad "shipped base-dod still validates after keyword lint → 0"; fi
+
 echo
 echo "test-contracts: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -1040,6 +1040,15 @@ hc_tree_remediation() {
 # additionalProperties (boolean, default true). Nullable is expressed as a type
 # union, e.g. ["string","null"].
 #
+# Fail-closed on UNSUPPORTED keywords: any schema keyword outside the enforced
+# subset above and the benign-annotation allowlist ($schema, $id, title,
+# description, $comment, examples, default, deprecated, readOnly, writeOnly,
+# definitions, $defs) is REJECTED at the node where it appears (e.g. pattern,
+# minimum, anyOf, $ref). This prevents a false-pass where an author writes a
+# constraint this validator does not enforce. The lint rides the v() recursion,
+# inspecting only schema-object keys — never property names, `required` entries,
+# or const/enum/default values.
+#
 # Contract: prints "OK" and returns 0 when the instance is valid; prints
 # "ERR: <path>: <what>" (the FIRST violation in document order) and returns 1
 # on any invalidity or error. Fail-closed: jq missing, unreadable/unparseable
@@ -1104,9 +1113,30 @@ hc_validate() {
     # Recursive validator. Returns [] when valid, else an array of error
     # strings. $schema is the (sub)schema node; $path is a jq-path string used
     # only for human-readable error messages.
+    # ENFORCED keywords — validation semantics implemented by v() below.
+    ["type","required","properties","items","enum","const","additionalProperties","oneOf","not","minLength"] as $enforced_kw
+    # ALLOWED-and-ignored keywords — benign JSON-Schema annotations that carry
+    # no validation semantics; present for documentation only, safe to skip.
+    | ["$schema","$id","title","description","$comment","examples","default","deprecated","readOnly","writeOnly","definitions","$defs"] as $allowed_kw
+    | ($enforced_kw + $allowed_kw) as $known_kw
+    |
     def v($schema; $path):
+      # --- unsupported-keyword lint (fail-closed). Rides this recursion so it
+      # runs at EVERY schema node v() visits (root, each properties value, items,
+      # each oneOf branch, not). A keyword this validator neither enforces nor
+      # knows to be a benign annotation is REJECTED: a schema author who writes
+      # e.g. `pattern`/`minimum` must not silently believe it is enforced in a
+      # security gate. We inspect ONLY the KEYS of the schema OBJECT itself —
+      # never instance data, property NAMES (which live under .properties, one
+      # level down), `required`/`enum`/`const`/`default` VALUES, or $defs member
+      # names — so a property literally named "pattern" is not misread.
+      ( if ($schema | type) == "object" then
+          [ ($schema | keys[]) | select( . as $k | ($known_kw | any(. == $k)) | not )
+            | ($path + ": unsupported schema keyword: " + .) ]
+        else [] end ) as $kw_errs
+
       # --- type: single string OR array-of-strings union (pass if ANY match).
-      ( if ($schema | type) == "object" and ($schema | has("type")) then
+      | ( if ($schema | type) == "object" and ($schema | has("type")) then
             ($schema.type) as $ty
             | ( if ($ty | type) == "array"
                 then ( . as $inst
@@ -1194,7 +1224,7 @@ hc_validate() {
           else [] end ) as $items_errs
 
       # Concatenate in the documented order; caller takes the first.
-      | ( $type_errs + $const_errs + $enum_errs + $minlen_errs + $not_errs + $oneof_errs + $obj_errs + $items_errs ) ;
+      | ( $kw_errs + $type_errs + $const_errs + $enum_errs + $minlen_errs + $not_errs + $oneof_errs + $obj_errs + $items_errs ) ;
 
     v($schema[0]; "$") | .[0] // empty
   ' "$json_file" 2>/dev/null)
