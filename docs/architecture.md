@@ -37,15 +37,21 @@ silent allow).
 **Hard contracts (versioned + fail-closed).** Every JSON artifact the harness
 produces or consumes carries a `contract_version` (const **`1`**) and has a
 declared JSON-Schema in `contracts/` (done-state, review-log, done-config,
-resolver-output, base-dod). Machine producers **stamp** the version
-(`done-write-state.sh`, `done-detect.sh`, `harness-resolve.sh` all write
-`contract_version: 1`); consumers **assert** it by validating against the schema
-via `hc_validate` before trusting a single field. This is invariant (2) applied
-to *shape*: a schema failure (malformed artifact, a missing required field, or
-even a missing schema file / absent validator = broken install) fails **toward
-BLOCK/refuse**, never toward a silent allow. `hc_validate` is a jq-only
-JSON-Schema-**subset** validator (no node/ajv runtime); it prints `OK`/returns 0
-when valid, prints `ERR: …`/returns 1 on any invalidity or error. The
+resolver-output, base-dod, done-plan). Machine producers **stamp** the version
+(`done-write-state.sh`, `done-detect.sh`, `harness-resolve.sh`, `done-triage.sh`
+all write `contract_version: 1`); consumers **assert** it by validating against
+the schema via `hc_validate` before trusting a single field. This is invariant
+(2) applied to *shape*: a schema failure (malformed artifact, a missing required
+field, or even a missing schema file / absent validator = broken install) fails
+**toward BLOCK/refuse**, never toward a silent allow. `hc_validate` is a jq-only
+JSON-Schema-**subset** validator (no node/ajv runtime) that is **fail-closed on
+unsupported keywords** (#2): the enforced subset is `type` / `required` /
+`properties` / `items` / `enum` / `const` / `minLength` / `oneOf` / `not` /
+`additionalProperties` (boolean form only) — any other keyword (`pattern`,
+`minimum`, `anyOf`, `$ref`, …) or `additionalProperties` written as a *subschema*
+is **rejected** at the node where it appears, so an author can never believe a
+constraint is enforced when it is not. It prints `OK`/returns 0 when valid,
+prints `ERR: …`/returns 1 on any invalidity or error. The
 shell-function ABI is itself a declared, **test-enforced** contract
 (`contracts/shell-abi.json` + `completion-harness/tests/test-abi.sh`); the validator and
 schemas are covered by `completion-harness/tests/test-contracts.sh`.
@@ -111,15 +117,16 @@ C4Container
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
-    Container(skill, "/done skill", "skills/done/SKILL.md", "Judgment steps 0-8: detect, tests, app, task_checks, review, fix loop, write-state, report")
-    Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_validate (jq-only schema validator, sets HC_CONTRACTS_DIR)")
+    Container(skill, "/done skill (thin)", "skills/done/SKILL.md + dod-protocol.md", "Thin entry point: runs triage, then reads each applicable step's section from dod-protocol.md on demand (progressive disclosure)")
+    Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base, authorship base-advance) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_changeset_is_code (scope) + hc_review_blocking/hc_review_coverage_gap (blob-keyed) + hc_validate (jq-only schema validator) + hc_state (S0/S_OOS/S1/S2/S4/S5)")
     Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as a self-validated JSON object (resolver-output contract)")
     Container(detect, "Config detector", "done-detect.sh", "Probe toolchain + fingerprint; seed/preserve done-config.json")
-    Container(write, "State writer", "done-write-state.sh", "Inject live git facts; refuse dirty/non-green/dead session-id; write done-state")
+    Container(triage, "Triage", "done-triage.sh", "Compute applicable /done steps; write audit done-plan/<task_key>.json (self-validated); fail-safe → run all")
+    Container(write, "State writer", "done-write-state.sh", "Inject live git facts; refuse dirty/non-green/dead session-id; fold done-plan as .plan; write escalation-accept sidecar; write done-state")
     Container(pf, "Preflight", "done-preflight.sh", "Prove the gate is winnable before work (missing tree baseline = HARD block)")
     ContainerDb(cfg, "Config", "done-config.json", "Effective commands + knobs (human-owned + auto-detected); contract_version 1")
-    ContainerDb(schemas, "Schema store", "contracts/*.json", "Shipped config: 5 JSON-Schemas + base-dod.json + shell-abi.json; the hard contracts hc_validate asserts")
-    ContainerDb(state, "State store", ".claude/.harness/*", "baselines, current-session, task-base, tree-base, done-state, review-log")
+    ContainerDb(schemas, "Schema store", "contracts/*.json", "Shipped config: 6 JSON-Schemas (+ done-plan) + base-dod.json + shell-abi.json; the hard contracts hc_validate asserts")
+    ContainerDb(state, "State store", ".claude/.harness/*", "baselines, current-session, task-base, tree-base, done-state, review-log, done-plan, pending-escalation, escalation-accept")
   }
   System_Ext(git, "Git repo")
   System_Ext(tool, "Project toolchain")
@@ -135,9 +142,12 @@ C4Container
   Rel(write, lib, "sources → hc_resolve, hc_tree_status")
   Rel(pf, lib, "sources → hc_resolve, hc_tree_status")
   Rel(skill, wrap, "runs → reads base/task_key")
-  Rel(skill, detect, "Step 0 → effective config")
+  Rel(skill, detect, "triage → effective config")
+  Rel(skill, triage, "computes applicable steps")
   Rel(skill, pf, "Step 0 preflight")
   Rel(skill, write, "Step 7 → done-state")
+  Rel(triage, state, "writes done-plan (audit)")
+  Rel(triage, schemas, "hc_validate done-plan (self)")
 
   Rel(gate, state, "reads done-state + review-log")
   Rel(start, state, "writes baselines/tree-base/task-base")
@@ -192,11 +202,24 @@ live git). Both bottom out on the same sourced predicates.
 
 ### 4a. Inside `/done` (the executor)
 
+The `/done` skill itself is **split for progressive disclosure (#7)**: a thin
+`SKILL.md` entry point runs the deterministic triage
+(`done-detect.sh | done-triage.sh`) — which computes exactly which DoD steps
+apply to this changeset and prints them as `[id] <intent> → dod-protocol.md#<anchor>`
+lines — and the agent reads each step's section from the sibling reference
+`dod-protocol.md` **on demand**. Triage also writes the full ordered plan
+(applicable **and** excluded, each with a reason) to `done-plan/<task_key>.json`
+as an **audit artifact** (Step 7 folds it into done-state as a `.plan` field; the
+gate gains no precondition on it). If triage exits non-zero or prints nothing
+usable, the SKILL fallback runs **all** steps — a wrongly-excluded step is the
+one unacceptable outcome.
+
 ```mermaid
 flowchart TD
   P["Prerequisite (task start)<br/>capture task_checks from the task statement"] --> S0PF
   S0PF["Step 0 Preflight<br/>done-preflight.sh → gate winnable?"] -->|HARD problem, exit 1| STOP["stop & fix/surface"]
-  S0PF -->|winnable| S0["Step 0 Config detect<br/>done-detect.sh → effective config"]
+  S0PF -->|winnable| TRI["Triage (thin SKILL.md)<br/>done-detect.sh | done-triage.sh<br/>→ applicable steps + done-plan/&lt;task_key&gt;.json (audit)<br/>non-zero / empty → run ALL steps (fallback)"]
+  TRI --> S0["Step 0 Config detect<br/>done-detect.sh → effective config (inside triage)"]
   S0 --> S05["Step 0.5 Assemble effective DoD<br/>base-dod.md ⊕ agent instrs ⊕ task ⊕ user"]
   S05 --> S1["Step 1 Scope<br/>harness-resolve.sh → JSON (jq-parsed) base,task_key<br/>git diff base..HEAD"]
   S1 --> S2["Step 2 Tests + before/after<br/>run effective test/lint<br/>vs baselines/&lt;sha&gt;.tests.json"]
@@ -211,10 +234,10 @@ flowchart TD
   CAP -->|no| S6
   CAP -->|yes| ESC["escalate → user (AskUserQuestion, Cat C)"]
   ESC --> S7
-  S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean; stamps contract_version:1<br/>hc_validate done-state schema BEFORE write → refuse if invalid"] --> S8["Step 8 Report + EFFORT line"]
+  S7["Step 7 Write state<br/>done-write-state.sh (stdin payload)<br/>injects verified_sha, tree_clean; stamps contract_version:1<br/>folds done-plan as .plan evidence<br/>hc_validate done-state schema BEFORE write → refuse if invalid"] --> S8["Step 8 Report + EFFORT line"]
 
   classDef script fill:#e8f0ff,stroke:#4472c4;
-  class S0PF,S0,S1,S7 script;
+  class S0PF,TRI,S0,S1,S7 script;
 ```
 
 **How to read this.** Boxes tinted blue delegate mechanical work to scripts
@@ -239,7 +262,7 @@ flowchart TD
   R --> KEY["DONE_STATE_FILE =<br/>.harness/done-state/&lt;HC_TASK_KEY&gt;.json"]
   R --> T["hc_tree_status(session_id)<br/>→ HC_TREE_BLOCKERS / HC_TREE_WARNINGS"]
   KEY --> V1["hc_validate(done-state.schema, DONE_STATE_FILE)<br/>Step 4b: invalid/absent-schema/no-validator → BLOCK"]
-  V1 --> DEC["gate decision logic (Steps 1-9, see §6)"]
+  V1 --> DEC["gate decision logic (Steps 1→2b→3→3a→3b→3c→3d→4→4b→5→7→8→9, see §6)"]
   T --> DEC
   DEC --> V2["hc_validate(review-log.schema, review-log/&lt;HEAD&gt;.json)<br/>Step 8: invalid/absent-schema/no-validator → BLOCK"]
   V2 --> RL["review-log/&lt;HEAD&gt;.json<br/>hc_review_blocking(findings[].severity, min_review_level)<br/>hc_review_coverage_gap(files_reviewed, HC_BASE..HEAD)"]
@@ -302,12 +325,23 @@ done-state (Step 5 SHA check) and the review-log, and forces `/done` to re-run.
 
 ---
 
-## 6. The Stop-gate decision tree (`done-gate.sh`, Steps 1-9)
+## 6. The Stop-gate decision tree (`done-gate.sh`)
 
 Faithful encoding of the script. It emits **exit 0 always**; BLOCK vs ALLOW is
 distinguished only by whether a `{"decision":"block","reason":...}` JSON is
 printed to stdout. The global posture is fail-**safe** (unexpected → allow),
 with one deliberate inversion at Step 8.
+
+**The current step order (exact labels from the script):** Step 1 loop-guard →
+Step 2 not-a-git-repo → **Step 2b pending-escalation one-shot** → Step 3
+HEAD==base && clean quiet-exit → **Step 3a out-of-scope non-code stand-down
+(S_OOS)** → **Step 3b introduced-dirty tree block** → **Step 3c empty-changeset
+short-circuit** → **Step 3d escalation-accept sidecar (cross-session)** → Step 4
+done-state missing → Step 4b schema-invalid → Step 5 `verified_sha != HEAD` →
+Step 7 escalation-in-done-state → Step 8 outcome aggregation → Step 9 allow.
+Note the **tree check (3b) now runs BEFORE the done-state checks (4/4b/5)** —
+an introduced-dirty tree blocks with the S1 "finish the slice" reason without
+ever looking at done-state.
 
 ```mermaid
 flowchart TD
@@ -316,35 +350,46 @@ flowchart TD
   B -->|yes| ALLOW1["exit 0 (loop guard)"]
   B -->|no| C["Step 2: git rev-parse HEAD ok?"]
   C -->|no HEAD| ALLOW2["exit 0 (non-git)"]
-  C -->|HEAD_SHA| D["source lib; hc_resolve<br/>DONE_STATE = done-state/&lt;task_key&gt;.json"]
-  D --> E{"Step 3: HC_BASE set AND<br/>HC_BASE == HEAD?"}
+  C -->|HEAD_SHA| D["source lib; hc_resolve<br/>DONE_STATE = done-state/&lt;task_key&gt;.json<br/>PENDING = pending-escalation/&lt;task_key&gt;.json"]
+  D --> P2B{"Step 2b: pending-escalation/&lt;task_key&gt;.json exists?"}
+  P2B -->|yes| ALLOW2b["rm the file; exit 0 (ONE-SHOT pass)<br/>lets an AskUserQuestion turn reach the user"]
+  P2B -->|no| E{"Step 3: HC_BASE set AND<br/>HC_BASE == HEAD?"}
   E -->|no| SCOPE
   E -->|yes| F{"working tree clean?<br/>(git status --porcelain empty)"}
   F -->|clean| ALLOW3["exit 0 (nothing happened)"]
-  F -->|dirty| SCOPE{"Step 3a: hc_changeset_is_code(HC_BASE, HEAD)<br/>(committed range ∪ introduced tree paths;<br/>NON-CODE iff EVERY file matches noncode_globs;<br/>unknown ext / any error → CODE)"}
-  SCOPE -->|noncode| ALLOW3s["exit 0 (out-of-scope — non-code changeset, #5)"]
-  SCOPE -->|code / error| G["Step 4: done-state file exists?"]
-  G -->|missing| BLK4["BLOCK: run /done"]
-  G -->|exists| G4b{"Step 4b: hc_validate(done-state.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
+  F -->|dirty| SCOPE{"Step 3a: hc_tree_status THEN<br/>hc_changeset_is_code(HC_BASE, HEAD)<br/>(committed range ∪ introduced tree paths;<br/>NON-CODE iff EVERY file matches noncode_globs;<br/>unknown ext / any error → CODE)"}
+  SCOPE -->|noncode| ALLOW3s["exit 0 (out-of-scope — non-code changeset, #5 / S_OOS)"]
+  SCOPE -->|code / error| I{"Step 3b: hc_tree_status<br/>HC_TREE_BLOCKERS non-empty?"}
+  I -->|blockers| BLK3b["BLOCK: finish the slice (commit/stash introduced changes)"]
+  I -->|none| EMPTY{"Step 3c: git diff --quiet HC_BASE HEAD?<br/>(committed range empty?)"}
+  EMPTY -->|empty range| ALLOW3c["exit 0 (empty changeset — nothing to verify)"]
+  EMPTY -->|non-empty| SIDE{"Step 3d: escalation-accept/&lt;HEAD&gt;.json exists?<br/>(SHA-keyed sidecar, cross-session)"}
+  SIDE -->|yes| ALLOW3d["exit 0 (accepted escalation survives across sessions, per-HEAD)"]
+  SIDE -->|no| G["build S2_REASON:<br/>hc_changeset_summary(HC_BASE_ORIG, HEAD)"]
+  G --> G4["Step 4: done-state file exists?"]
+  G4 -->|missing| BLK4["BLOCK: S2_REASON (run /done)"]
+  G4 -->|exists| G4b{"Step 4b: hc_validate(done-state.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
   G4b -->|invalid| BLK4b["BLOCK: done-state fails contract"]
   G4b -->|valid| H{"Step 5: verified_sha == HEAD?"}
   H -->|no| BLK5["BLOCK: changes committed since /done"]
-  H -->|yes| I{"Step 6: hc_tree_status<br/>HC_TREE_BLOCKERS non-empty?"}
-  I -->|blockers| BLK6["BLOCK: uncommitted introduced changes"]
-  I -->|none| J{"Step 7: escalation present & != null?"}
+  H -->|yes| J{"Step 7: .escalation present & != null?"}
   J -->|yes| ALLOW7["exit 0 (escape hatch, per-HEAD)"]
   J -->|no| K["Step 8: recorded outcomes (INVERTED: fail → BLOCK)"]
-  K --> K1{"tests.exit_code == '0'?<br/>(absent → 'MISSING')"}
+  K --> K0{"tests.status == 'not_run'?"}
+  K0 -->|yes| BLK8z["BLOCK: tests not run & no escalation"]
+  K0 -->|no| K1{"tests.exit_code == '0'?<br/>(absent → 'MISSING')"}
   K1 -->|no| BLK8a["BLOCK: tests not green"]
-  K1 -->|yes| K2{".lint present? if so exit_code=='0'?"}
+  K1 -->|yes| K1e{"tests.command AND tests.output_tail non-empty?"}
+  K1e -->|no| BLK8ev["BLOCK: green tests must carry evidence"]
+  K1e -->|yes| K2{".lint present? if so exit_code=='0'?"}
   K2 -->|present & !=0| BLK8b["BLOCK: lint not green"]
   K2 -->|absent or 0| K3{"review-log/&lt;HEAD&gt;.json exists?"}
   K3 -->|no| BLK8c["BLOCK: no independent review for HEAD"]
-  K3 -->|yes| K3v{"Step 8: hc_validate(review-log.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
+  K3 -->|yes| K3v{"hc_validate(review-log.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
   K3v -->|invalid| BLK8v["BLOCK: review-log fails contract"]
   K3v -->|valid| K4{"hc_review_blocking(log, min_review_level) == '0'?<br/>(structural: rank(severity) >= rank(min); default high;<br/>unknown/missing severity or jq-fail → block)"}
   K4 -->|no| BLK8d["BLOCK: N blocking (≥ min) findings"]
-  K4 -->|yes| KC{"hc_review_coverage_gap(log, HC_BASE, HEAD) empty or 'SKIP'?<br/>(structural: files_reviewed ⊇ changed files in HC_BASE..HEAD;<br/>SKIP = no base → no coverage block; error w/ changeset → block)"}
+  K4 -->|yes| KC{"hc_review_coverage_gap(log, HC_BASE, HEAD) empty or 'SKIP'?<br/>(structural, BLOB-keyed across the review-log chain;<br/>SKIP = no base → no coverage block; error w/ changeset → block)"}
   KC -->|no (gap)| BLK8cov["BLOCK: review did not cover changed files"]
   KC -->|yes| K5{"task_checks: all status=='passed'?"}
   K5 -->|no| BLK8e["BLOCK: task_checks not all passed"]
@@ -352,8 +397,8 @@ flowchart TD
 
   classDef block fill:#ffe0e0,stroke:#c00;
   classDef allow fill:#e0ffe0,stroke:#0a0;
-  class BLK4,BLK4b,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8v,BLK8d,BLK8cov,BLK8e block;
-  class ALLOW0,ALLOW1,ALLOW2,ALLOW3,ALLOW3s,ALLOW7,ALLOW9 allow;
+  class BLK3b,BLK4,BLK4b,BLK5,BLK8z,BLK8a,BLK8ev,BLK8b,BLK8c,BLK8v,BLK8d,BLK8cov,BLK8e block;
+  class ALLOW0,ALLOW1,ALLOW2,ALLOW2b,ALLOW3,ALLOW3s,ALLOW3c,ALLOW3d,ALLOW7,ALLOW9 allow;
 ```
 
 **How to read this / key decisions.**
@@ -361,6 +406,42 @@ flowchart TD
   Exit 2 is deliberately *not* used — on exit 2 the runtime reads stderr and
   discards the stdout JSON reason. A stderr line is written too, but only as a
   human log.
+- **Step 2b — pending-escalation one-shot (#6).** When `/done` needs to
+  `AskUserQuestion` for a Category-C / `user_halt` escalation, it first writes
+  `pending-escalation/<task_key>.json`. That question turn ends with a Stop the
+  gate would otherwise BLOCK (no green done-state yet) — trapping the very
+  question meant for the user. So if the pending file exists the gate **consumes
+  it (`rm`) and allows exactly once**; the next Stop finds no file and re-gates
+  normally. One file → one allow — it cannot indefinitely disarm the gate.
+- **Tree-check moved ahead of done-state (P4).** Step 3b runs the shared
+  `hc_tree_status` classifier and blocks on `HC_TREE_BLOCKERS` **before** Steps
+  4/4b/5 — aligned with `hc_state`, which evaluates the introduced-dirty guard
+  (S1) first. An introduced-dirty tree therefore blocks with "finish the slice"
+  rather than the done-state "run /done" reason.
+- **Step 3a scope stand-down (S_OOS, #5).** After Step 3, `hc_tree_status` runs,
+  then `hc_changeset_is_code(HC_BASE, HEAD)`. If the WHOLE changeset (committed
+  range ∪ introduced tree paths) is non-code, the gate exits 0 with **empty
+  stdout** (no block JSON) — mirroring `hc_state` S_OOS. It is placed *before*
+  3b so that introduced **code** dirt still blocks (the predicate returns
+  non-code only when every file — committed or introduced — is non-code).
+- **Step 3c empty-changeset short-circuit (#6).** Reaching here means no
+  introduced tree blockers. If `git diff --quiet HC_BASE HEAD` (the committed
+  range is genuinely empty — e.g. after authorship base-advance left HEAD atop
+  an identical tree), there is nothing to verify → allow. `git diff --quiet`
+  exits 0 only on a truly empty diff; any git failure falls through to the gate.
+- **Step 3d escalation-accept sidecar (cross-session, #6).** An accepted
+  escalation is also persisted as `escalation-accept/<HEAD>.json`, keyed to the
+  exact committed HEAD. A *different* session (fresh `session-<id>` key) has no
+  done-state for the task, so honoring the sidecar HERE — after the tree/empty
+  checks but **before** the Step-4 done-state checks — lets an accepted
+  escalation survive across sessions on an unchanged trunk HEAD. Keyed to the
+  exact sha: any new/amended commit → different sha → no sidecar → re-block.
+- **The block message says WHAT is gated (P1-a, #6).** Before Steps 4/4b/5 the
+  gate builds `S2_REASON` by prepending a one-shot `hc_changeset_summary` — file/
+  commit counts and how many commits were authored **this session** (computed
+  from `HC_BASE_ORIG`, the *unadvanced* base, so it honestly reads "0 authored
+  this session" when every commit is foreign). If the helper is unavailable the
+  reason degrades to the bare "run /done" string.
 - **Contract gates fail closed.** Before any of a done-state's fields are read,
   **Step 4b** runs `hc_validate(done-state.schema, DONE_STATE_FILE)`; before the
   review-log's `findings[]`/`files_reviewed` are read, **Step 8** runs
@@ -368,15 +449,24 @@ flowchart TD
   missing schema file (broken install), or an unavailable `hc_validate` (library
   didn't source) all → BLOCK. This is the shape-level tier of invariant (2): a
   malformed or forged-but-invalid artifact can't reach the trust-bearing checks.
-- **Ordering is load-bearing.** SHA (5) and tree (6) checks run **before**
-  escalation (7). So an escalation disarms *only* the exact committed changeset
-  it was recorded against — any new commit moves HEAD, Step 5 blocks first, and
-  a stale escalation can no longer disarm the gate for the rest of the session.
+- **Ordering is load-bearing.** SHA (5) and tree (3b) checks run **before**
+  escalation (7 / the 3d sidecar). So an escalation disarms *only* the exact
+  committed changeset it was recorded against — any new commit moves HEAD, Step 5
+  blocks first, and a stale escalation can no longer disarm the gate for the rest
+  of the session.
 - **Step 8 inverts the fail direction.** Everywhere else "unexpected → allow."
   Here a missing/null/malformed outcome (or a `jq` crash) is treated as **NOT
   green → BLOCK**. All comparisons are *string* compares against a sentinel
   (`// "MISSING"`) so an empty `jq` result can never accidentally pass a numeric
   test. `.lint` is conditional: absent → skip; present-but-nonzero → block.
+- **Tests: `not_run` + evidence-backed green (P1-c, #6).** Escalation already
+  short-circuited at Step 7, so a `tests.status == "not_run"` reaching Step 8 is
+  an unverified green claim → BLOCK ("tests were not run and there is no
+  escalation"). A green result is **un-forgeable**: it must carry
+  `exit_code == 0` **AND** a non-empty `command` **AND** a non-empty
+  `output_tail`; a bare `{"exit_code":0}` is blocked ("green tests must carry
+  evidence"). A `not_run` tests object is accepted **only** when an escalation is
+  present (Step 7 having exited first).
 - **The review check is severity-gated, computed structurally.** The gate does
   **not** trust the log's self-reported `open_findings`; it calls the shared
   `hc_review_blocking(log, min_review_level)` (in `harness-common.sh`), which
@@ -393,17 +483,27 @@ flowchart TD
   integer is a backward-compat fallback used **only when the `findings` key is
   entirely absent** (old-style logs; missing → 1 → block). `done-write-state.sh`
   mirrors this exactly via the same function.
-- **The review is COVERAGE-gated, structurally.** After the severity check the
-  gate calls `hc_review_coverage_gap(log, HC_BASE, HEAD)`: it computes the changed
-  set from `git diff --name-only HC_BASE..HEAD` and subtracts the log's
-  `files_reviewed` array (whole-line, space-safe). A non-empty gap (a changed file
-  the reviewer did **not** attest) → BLOCK — making "the review covered the whole
-  changeset" a structural check instead of prose hope. A missing/non-array
-  `files_reviewed` with a real changeset → gap = all changed files → block, which
-  **forces** the attestation. When `HC_BASE` is empty/unresolvable (or the diff
-  fails) the function returns `SKIP` and the gate does **not** block on coverage — a
-  no-regression degrade (there was no coverage check before). Any other error with a
-  real changeset returns the full changed set (block), never `SKIP`.
+- **The review is COVERAGE-gated, structurally — BLOB-keyed across the chain
+  (#1 / P5).** After the severity check the gate calls
+  `hc_review_coverage_gap(log, HC_BASE, HEAD)`: it computes the changed set from
+  `git diff --name-only HC_BASE..HEAD`, then decides coverage **per-(file, blob)**
+  rather than per-log-at-HEAD. A changed file is COVERED iff **some** review-log
+  in the task's *chain* attested it **at its current blob** (its content at
+  HEAD). The chain is every `review-log/<sha>.json` in the log's directory whose
+  `<sha>` is an ancestor of HEAD but not of HC_BASE (task-side, up to and
+  including HEAD). The attested blob is recomputed live from each log's
+  `reviewed_sha` (`git rev-parse <reviewed_sha>:<path>`) and compared to the
+  current blob (`<HEAD>:<path>`). Consequence: a follow-up commit only needs
+  re-attestation of the files whose **blobs it changed**; files whose blob is
+  unchanged carry their earlier attestation forward for free — this is what ends
+  the "re-review the whole changeset on every HEAD move" churn. A deleted file
+  (no blob at HEAD) is covered by simple path-attestation in some chain-log. A
+  non-empty gap → BLOCK; a missing/non-array `files_reviewed`, a jq error, or a
+  rebase/gc that makes an old `reviewed_sha` unreachable all leave the file in
+  the gap → block (fail-toward-block; prefer an unnecessary re-review to trusting
+  an attestation whose commit no longer exists). When `HC_BASE` is
+  empty/unresolvable (or the diff fails) the function returns `SKIP` and the gate
+  does **not** block on coverage — a no-regression degrade.
   `done-write-state.sh` mirrors this via the same function.
 
 ---
@@ -439,15 +539,30 @@ flowchart TD
   MBQ -->|yes| WRITE["pin task-base/&lt;key&gt;.sha = mb<br/>HC_BASE = mb"]
   MBQ -->|no| DEGR["UNRELATED HISTORIES:<br/>degrade → SESSION mode<br/>task_key = session-&lt;id&gt;, do NOT pin"]
 
-  SESS --> SB["HC_BASE = baselines/&lt;id&gt;.sha (or empty)"]
+  SESS --> SB["HC_BASE = baselines/&lt;id&gt;.sha (or empty)<br/>HC_BASE_ORIG = same (unadvanced)"]
+  SB --> ADV["ADVANCE past leading CONFIDENTLY-FOREIGN commits (#6)<br/>walk HC_BASE_ORIG..HEAD oldest→newest;<br/>while committer_email ≠ session_email (both non-empty)<br/>→ HC_BASE = that commit; STOP at first non-foreign<br/>(same/empty email or any doubt → keep it & everything after)"]
   DEGR --> SB
 
   READ --> TB
   WRITE --> TB
-  SB --> TB["set HC_TREE_BASE_FILE on FINAL mode:<br/>TASK → tree-base/&lt;key&gt;.dirty (pinned once)<br/>SESSION → baselines/&lt;id&gt;.dirty (per session)"]
+  ADV --> TB["set HC_TREE_BASE_FILE on FINAL mode:<br/>TASK → tree-base/&lt;key&gt;.dirty (pinned once)<br/>SESSION → baselines/&lt;id&gt;.dirty (per session)"]
 ```
 
 **How to read this / key decisions.**
+- **Authorship-scoped base advance (SESSION mode, #6).** After reading the
+  SessionStart baseline, `hc__resolve_session_base` walks `HC_BASE_ORIG..HEAD`
+  oldest→newest and advances `HC_BASE` past each **CONFIDENTLY-FOREIGN** leading
+  commit — one whose committer email is non-empty and *provably differs* from the
+  session's `git config user.email` (also non-empty). It **STOPS** at the first
+  commit that is not confidently foreign (same email, either email empty, or any
+  git error) and keeps that commit and everything after it in the changeset. This
+  is **fail-safe**: any uncertainty keeps the commit in the gate; we never advance
+  past a commit that might be the session's. The email-only predicate deliberately
+  dropped the old mutable `committer_date >= mtime(baseline.sha)` signal (a
+  touch/clock-skew could misclassify a real session commit as foreign → false
+  PASS). `HC_BASE_ORIG` retains the *unadvanced* baseline so `hc_changeset_summary`
+  can honestly report "0 authored this session". **Task mode never advances** — the
+  pinned fork point is the anchor, so `HC_BASE_ORIG` always mirrors `HC_BASE`.
 - `HC_TREE_BASE_FILE` is set **after** `hc__resolve_task_base` runs, because that
   function can degrade task→session on unrelated histories — the tree-base path
   must follow the *final* mode.
@@ -570,6 +685,9 @@ flowchart LR
   H --> TRB["tree-base/"]
   H --> DS["done-state/"]
   H --> RL["review-log/"]
+  H --> DP["done-plan/"]
+  H --> PE["pending-escalation/"]
+  H --> EA["escalation-accept/"]
   BL --> B1["&lt;sid&gt;.sha"]
   BL --> B2["&lt;sid&gt;.dirty"]
   BL --> B3["&lt;sha&gt;.tests.json"]
@@ -577,6 +695,9 @@ flowchart LR
   TRB --> TR1["&lt;task_key&gt;.dirty"]
   DS --> D1["&lt;task_key&gt;.json"]
   RL --> R1["&lt;HEAD&gt;.json"]
+  DP --> DP1["&lt;task_key&gt;.json"]
+  PE --> PE1["&lt;task_key&gt;.json"]
+  EA --> EA1["&lt;HEAD&gt;.json"]
 ```
 
 | Dir / file | Holds | Keyed by | Written by | Pinned once vs rewritten | Cleanup |
@@ -588,9 +709,12 @@ flowchart LR
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded | age-**excluded**; **terminal reap** on merge/gone |
 | `done-state/<task_key>.json` | verified_sha, tests, lint, task_checks, dod, escalation | **task_key** (branch) | done-write-state | rewritten each `/done` | age 14d; `br-*` keys also **terminal reap** on merge/gone |
-| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-5 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD |
+| `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-5 subagent | one per reviewed SHA | age 14d; **hygiene reap** when sha is not a branch tip / current HEAD (chain-widened: intermediate logs on a live branch kept) |
+| `done-plan/<task_key>.json` | audit plan: applicable + excluded /done steps (id/title/status/ref/reason), `contract_version` 1 | **task_key** (branch) | done-triage | rewritten each `/done` (best-effort; audit only, gate has NO precondition) | age 14d |
+| `pending-escalation/<task_key>.json` | one-shot marker so an AskUserQuestion turn's Stop is allowed once | **task_key** (branch) | `/done` (before AskUserQuestion) | consumed (`rm`) by gate Step 2b on next Stop | age 14d |
+| `escalation-accept/<HEAD>.json` | SHA-keyed accepted-escalation sidecar (cross-session disarm at this exact HEAD) | **HEAD SHA** | done-write-state (on non-null escalation) | one per accepted HEAD | age 14d |
 | `../done-config.json` | effective commands + knobs (`contract_version` 1) | **project** | done-detect / install | seed once; detected block refreshed on fingerprint change; auto-upgraded to v1 in place | n/a (outside `.harness/`) |
-| `../contracts/*.json` | the 5 JSON-Schemas + `base-dod.json` + `shell-abi.json` | **artifact** (one schema per artifact) | install / plugin (shipped) | ship-time; **not runtime state** | n/a (shipped config, never reaped) |
+| `../contracts/*.json` | the 6 JSON-Schemas (incl. `done-plan`) + `base-dod.json` + `shell-abi.json` | **artifact** (one schema per artifact) | install / plugin (shipped) | ship-time; **not runtime state** | n/a (shipped config, never reaped) |
 
 **How to read this / key decisions.** Three cleanups run at SessionStart, all guarded, honouring
 the **HARD SAFETY INVARIANT: never delete in-progress-task state, the current HEAD's review-log,
@@ -641,9 +765,9 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **On trunk** | SESSION fallback + `HC_WARN`; SessionStart surfaces a systemMessage; first Write/Edit auto-branches to task mode | `hc_resolve` (branch==trunk → session); `baseline-snapshot.sh` HC_WARN block; `auto-branch.sh` |
 | **Detached HEAD** | `HC_BRANCH` empty → SESSION mode, **no** warning; auto-branch no-ops (no `symbolic-ref`) | `hc_resolve`; `auto-branch.sh` detached guard |
 | **Unrelated histories** | `merge-base` empty → degrade task→session, `HC_WARN="unrelated histories"`, base **not** pinned | `hc__resolve_task_base` empty-mb branch |
-| **Pre-existing dirty tree** | Lines present at baseline → WARNING (ignored) → gate does NOT block on them (deadlock broken) | `hc_tree_status` in-baseline branch; gate Step 6 |
+| **Pre-existing dirty tree** | Lines present at baseline → WARNING (ignored) → gate does NOT block on them (deadlock broken) | `hc_tree_status` in-baseline branch; gate Step 3b |
 | **Pre-existing untracked** | `?? x` in baseline → WARNING under `baseline` policy; BLOCKER under `strict` | `hc_tree_status` untracked handling |
-| **Agent's own new file** | Not in baseline → BLOCKER → gate Step 6 BLOCK; writer refuses | `hc_tree_status` else-branch (both policies) |
+| **Agent's own new file** | Not in baseline → BLOCKER → gate Step 3b BLOCK; writer refuses | `hc_tree_status` else-branch (both policies) |
 | **Missing tree baseline (`.dirty`)** | SessionStart records it unconditionally (even empty, with a session-scoped fallback if the resolver failed); if still absent, `hc_tree_status` degrades to STRICT (every pre-existing file "introduced" → deadlock), so preflight raises a **HARD problem** (NOT WINNABLE), not a warning | `baseline-snapshot.sh` unconditional `.dirty`; `done-preflight.sh` Check 3 (blocking) |
 | **Dead session id (SESSION mode)** | `session_id` with no `baselines/<id>.sha` → writer **refuses** (exit nonzero, lists valid ids + `current-session` marker); otherwise the done-state keys `session-<id>` the gate never reads → silent forever-block | `done-write-state.sh` dead-id backstop; skill prefers the `current-session` marker |
 | **Multi-session task resume** | Same branch → same `task_key` → inherits done-state + pinned base/tree-base | `hc_resolve` task mode reads existing pins |
@@ -652,7 +776,14 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **jq missing** | Gate exits 0 (allow — fails open); preflight warns; detect emits best-effort; writer errors (jq required) | `done-gate.sh` line 33; `done-preflight.sh` Check 2; `done-write-state.sh` guard |
 | **Non-git repo** | Gate Step 2 exit 0 (allow); SessionStart writes `no-git` baseline; preflight "harness inactive"; auto-branch no-ops | `done-gate.sh` Step 2; `baseline-snapshot.sh`; `done-preflight.sh` Check 1; `auto-branch.sh` `is-inside-work-tree` |
 | **Stop-hook loop guard** | `stop_hook_active==true` → exit 0 immediately (a block never traps forever) | `done-gate.sh` Step 1 |
-| **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 4 BLOCK | `done-gate.sh` Step 3 |
+| **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 3b tree-check | `done-gate.sh` Step 3 |
+| **Empty committed changeset** | No introduced tree blockers AND `git diff --quiet HC_BASE HEAD` (range empty — e.g. after authorship base-advance left HEAD atop an identical tree) → exit 0 (nothing to verify) | `done-gate.sh` Step 3c; `git diff --quiet` |
+| **Leading foreign commits (session mode)** | `hc_resolve` advances HC_BASE past leading commits whose committer email provably differs from the session's; `HC_BASE_ORIG` keeps the unadvanced base for honest "N authored this session" reporting. Fail-safe: any doubt → keep the commit in the changeset | `hc__resolve_session_base`; `hc__commit_confidently_foreign`; `hc_changeset_summary` |
+| **Cross-turn escalation question** | `/done` writes `pending-escalation/<task_key>.json` before AskUserQuestion; the gate consumes it and allows **exactly once** so the question reaches the user; next Stop re-gates | `done-gate.sh` Step 2b; `dod-protocol.md` escalation rules |
+| **Cross-session accepted escalation** | Accepted escalation persisted as `escalation-accept/<HEAD>.json`; a fresh session with no done-state still passes at that exact HEAD via Step 3d; any new commit → new sha → re-block | `done-gate.sh` Step 3d; `done-write-state.sh` sidecar write |
+| **Tests could not run** | `tests:{status:"not_run", reason}` accepted **only** with an escalation; without one → BLOCK ("tests were not run and there is no escalation") | `done-gate.sh` Step 8 `not_run` guard; `done-write-state.sh` refusal |
+| **Green tests without evidence** | A green `tests` object lacking a non-empty `command` or `output_tail` → BLOCK ("green tests must carry evidence"); un-forgeable green | `done-gate.sh` Step 8 evidence guard; `done-state.schema.json` tests `oneOf` |
+| **Triage unavailable / errors** | `done-triage.sh` exits non-zero or prints nothing → SKILL fallback runs ALL steps (a wrongly-excluded step is the one unacceptable outcome); the audit plan is best-effort and the gate has NO precondition on it | `done-triage.sh` fail-safe; thin `SKILL.md` fallback |
 | **Non-code changeset (#5)** | A changeset whose files are **all** non-code (match `noncode_globs`: prose/docs/images) → harness fully stands down: Stop gate exits 0 silently (Step 3a), SessionStart emits nothing (hc_state `S_OOS`). **Fail toward gating:** union of committed range ∪ introduced tree paths; ≥1 unknown-ext/code file or ANY error → CODE → normal gate. Absent/empty `noncode_globs` → everything is code | `done-gate.sh` Step 3a; `hc_changeset_is_code`; `hc_state` S_OOS; `baseline-snapshot.sh` emission set {S1,S2,S4} |
 | **Auto-branch fallback (empty pin)** | Branch created but no clean SessionStart `.dirty` snapshot → pin **empty** tree-base → everything blocks (safe) | `auto-branch.sh` `: > HC_TREE_BASE_FILE` |
 | **Mid-rebase/merge** | Auto-branch no-ops (MERGE_HEAD / rebase-apply / rebase-merge present) | `auto-branch.sh` git-dir guard |
@@ -737,22 +868,58 @@ are covered by `completion-harness/tests/test-contracts.sh` (both run by the rep
 `run-tests.sh`). Design (§Mechanism, Step 1/5/7, Stop-hook, Config, Files) and code
 are in sync.
 
+**Gate reorder, FSM `S_OOS`, blob coverage, authorship base, cross-turn
+escalation, triage/plan, fail-closed validator (added 2026-07-29).** This re-sync
+brought the docs back to the current code:
+- **Gate step order + new steps.** The gate is now Step 1 → 2 → **2b
+  pending-escalation one-shot** → 3 → 3a scope stand-down → **3b introduced-dirty
+  (moved BEFORE the done-state checks)** → **3c empty-changeset short-circuit** →
+  **3d escalation-accept sidecar (cross-session)** → 4 → 4b → 5 → 7 → 8 → 9. §6's
+  decision tree and the edge-case matrix were rewritten to match; the tree-check
+  is no longer labelled "Step 6".
+- **FSM state `S_OOS`.** `hc_state` now classifies into **S0 / S_OOS / S1 / S2 /
+  S4 / S5**; a wholly non-code changeset stands the harness down silently (S_OOS).
+- **Blob-keyed review coverage (#1/P5).** `hc_review_coverage_gap` is per-(file,
+  blob) across the task's review-log chain — follow-up commits re-attest only
+  changed blobs; unchanged files carry attestation forward.
+- **Authorship-scoped changeset (#6).** In session mode `hc_resolve` advances the
+  base past leading FOREIGN commits (committer-email, fail-safe) and keeps
+  `HC_BASE_ORIG` for honest reporting; the block message prepends
+  `hc_changeset_summary`.
+- **Escalation across turns/sessions (#6).** `pending-escalation/<task_key>.json`
+  one-shot pass (Step 2b); SHA-keyed `escalation-accept/<HEAD>.json` sidecar (Step
+  3d + written by `done-write-state.sh`); `tests.status:"not_run"` valid only with
+  an escalation; green tests must carry `command` + `output_tail`.
+- **Computed /done plan + progressive disclosure (#7).** The `/done` skill is
+  split (thin `SKILL.md` → `dod-protocol.md`); `done-triage.sh` computes the
+  applicable steps and writes the audit `done-plan/<task_key>.json`; done-state
+  gained an optional `.plan` field. The **primary value is deterministic
+  applicability + an auditable plan**; token savings are secondary.
+- **`hc_validate` fail-closed (#2).** The validator rejects unsupported schema
+  keywords and `additionalProperties`-as-subschema (correcting the earlier
+  keyword-subset note above, which predated `minLength`/`oneOf`/`not` and the
+  fail-closed lint).
+Every claim above was derived from re-reading the scripts; design and code are in
+sync as of this entry.
+
 ---
 
 ## Appendix — file → responsibility index
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (coverage check), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set), `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
+| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base + authorship base-advance in session mode, `HC_BASE_ORIG`), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_changeset_is_code` (code/non-code scope predicate), `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (BLOB-keyed coverage across the log chain), `hc_changeset_summary` (block-message summary), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set), `hc_validate` (jq-only JSON-Schema-subset validator, fail-closed on unsupported keywords; sets `HC_CONTRACTS_DIR`), `hc_done_state_blocked` + `hc_state` (composed operator state S0/S_OOS/S1/S2/S4/S5) |
 | `scripts/harness-resolve.sh` | Executable wrapper — sources lib, prints resolver output as a **self-validated JSON object** (resolver-output contract), `jq`-parsed by the skill (no longer key=value) |
-| `contracts/*.json` | Hard-contract schema store: `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`, `resolver-output.schema.json`, `base-dod.schema.json` (the 5 JSON-Schemas `hc_validate` asserts), plus `base-dod.json` (the seed DoD) and `shell-abi.json` (the declared, test-enforced shell-function ABI) |
-| `scripts/done-gate.sh` | Stop hook — the gate (Steps 1-9); `hc_validate`s done-state (4b) + review-log (8) before trusting fields |
+| `contracts/*.json` | Hard-contract schema store: `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`, `resolver-output.schema.json`, `base-dod.schema.json`, `done-plan.schema.json` (the 6 JSON-Schemas `hc_validate` asserts), plus `base-dod.json` (the seed DoD) and `shell-abi.json` (the declared, test-enforced shell-function ABI) |
+| `scripts/done-gate.sh` | Stop hook — the gate (Steps 1→2b→3/3a/3b/3c/3d→4/4b→5→7→8→9); `hc_validate`s done-state (4b) + review-log (8) before trusting fields |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |
 | `scripts/auto-branch.sh` | PreToolUse(Write\|Edit) — trunk→task branch, pin task tree-base |
 | `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint; stamps `contract_version:1`, auto-upgrades old configs, validates before writing |
 | `scripts/done-preflight.sh` | `/done` Step 0 — prove the gate is winnable |
-| `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts, stamp `contract_version:1`, refuse dirty/non-green, validate done-state (+ review-log) against schema before writing (refuse if invalid) |
-| `skills/done/SKILL.md` | `/done` judgment steps 0-8 + escalation rules |
+| `scripts/done-triage.sh` | `/done` triage — compute applicable steps, write self-validated audit plan `done-plan/<task_key>.json`, print applicable steps; fail-safe → SKILL runs all steps |
+| `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts, stamp `contract_version:1`, refuse dirty/non-green (incl. `not_run` tests without escalation + evidence-less green), fold `done-plan` as `.plan`, write `escalation-accept/<HEAD>.json` sidecar, validate done-state (+ review-log) against schema before writing (refuse if invalid) |
+| `skills/done/SKILL.md` | Thin `/done` entry point — runs triage, routes to `dod-protocol.md` per applicable step (progressive disclosure) |
+| `skills/done/dod-protocol.md` | Full `/done` protocol reference — every step section (anchors) + escalation rules |
 | `dod/base-dod.md` | Base DoD folded into the effective DoD (Step 0.5) |
 | `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) |
 | `.claude-plugin/plugin.json` | Plugin manifest |

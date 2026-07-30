@@ -11,10 +11,14 @@ Three parts:
 - **`scripts/done-gate.sh`** — a **Stop hook** (the gate). Fires on every turn
   exit; blocks unless a valid done-state exists for the session and matches live
   git state (HEAD == verified SHA, clean tree).
-- **`skills/done/SKILL.md`** — the **`/done` skill** (the executor). Runs the
-  checklist in order — config detect, tests (before/after checkpoint), app
-  startup, changeset-scoped code review, task-specific checks — then writes the
-  done-state that clears the gate.
+- **`skills/done/SKILL.md`** + **`dod-protocol.md`** — the **`/done` skill** (the
+  executor), split for progressive disclosure: a thin `SKILL.md` runs a
+  deterministic **triage** (`done-detect.sh | done-triage.sh`) that computes which
+  DoD steps apply to the changeset and writes an audit plan
+  (`done-plan/<task_key>.json`); the agent reads each applicable step's section
+  from `dod-protocol.md` on demand. The checklist itself — config detect, tests
+  (before/after checkpoint), app startup, task-specific checks, changeset-scoped
+  independent code review — then writes the done-state that clears the gate.
 - **`scripts/baseline-snapshot.sh`** — a **SessionStart hook**. Records the
   baseline HEAD SHA per session and optionally caches a background test snapshot
   keyed by SHA.
@@ -82,8 +86,9 @@ When you finish a task (or when the Stop hook blocks with "Run /done"), run:
 ```
 
 It verifies the changeset and writes
-`.claude/.harness/done-state/<session_id>.json`. The next turn exit sees a valid
-done-state and lets the agent stop.
+`.claude/.harness/done-state/<task_key>.json` (keyed by the git branch, with a
+`session-<id>` fallback on trunk). The next turn exit sees a valid done-state that
+matches the live HEAD/tree and lets the agent stop.
 
 **Parallel work must use separate git worktrees** — the harness makes
 same-directory parallelism *safe* (each session needs its own verification) but

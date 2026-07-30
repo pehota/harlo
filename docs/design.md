@@ -107,7 +107,23 @@ the blockers only. The `untracked_policy` knob (`done-config.json`, default
 - TASK mode → `base = merge-base(trunk, HEAD)`, written to `task-base/<task_key>.sha` on
   first sight and reused thereafter (immune to trunk moving / mis-detection later;
   inspectable). Empty merge-base (unrelated histories) → degrade to SESSION + warn, no pin.
-- SESSION mode → `base = baselines/<session_id>.sha` (HEAD at SessionStart).
+  **Task mode never advances the base** — the pinned fork point IS the anchor, so
+  `HC_BASE_ORIG` always mirrors `HC_BASE`.
+- SESSION mode → `base = baselines/<session_id>.sha` (HEAD at SessionStart), then
+  **advanced past leading CONFIDENTLY-FOREIGN commits** (authorship-scoped changeset, #6):
+  `hc_resolve` walks `HC_BASE_ORIG..HEAD` oldest→newest and, while the leading commit's
+  committer email is **non-empty and provably differs** from the session's
+  `git config user.email` (also non-empty), advances `HC_BASE` to it; it **STOPS** at the
+  first commit that is not confidently foreign (same email, either email empty, or any git
+  error) and keeps that commit and everything after it in the changeset. This is the
+  fail-safe direction — any uncertainty keeps the commit in the gate; we never advance past
+  a commit that might be the session's, which would let the gate PASS with real work
+  unverified. The predicate is **email-only** by design: the old mutable
+  `committer_date >= mtime(baseline.sha)` signal was dropped (a touch/copy/clock-skew could
+  advance the mtime past a genuinely-authored commit → misclassify it foreign → false
+  PASS), and ancestry already bounds the range to commits after the baseline. `HC_BASE_ORIG`
+  retains the **unadvanced** baseline so `hc_changeset_summary` (the block-message enricher)
+  can honestly report "N authored this session".
 - Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
   mid-session, so SessionStart isn't the only place it must pin).
 
@@ -130,8 +146,11 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 | Current-session marker | `.claude/.harness/current-session` | authoritative session id (written each SessionStart from hook stdin; the id source for the skill/writer) |
 | Session tree-base | `.claude/.harness/baselines/<session_id>.dirty` | session — rewritten each SessionStart; classifier's "pre-existing" set |
 | Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |
-| Done-state | `.claude/.harness/done-state/<task_key>.json` | **task** — survives session end |
+| Done-state | `.claude/.harness/done-state/<task_key>.json` | **task** — survives session end (optional `.plan` audit field) |
 | Review-log | `.claude/.harness/review-log/<HEAD>.json` | reviewed commit |
+| Done-plan (audit) | `.claude/.harness/done-plan/<task_key>.json` | **task** — the computed /done plan (audit only; gate has no precondition) |
+| Pending-escalation | `.claude/.harness/pending-escalation/<task_key>.json` | **task** — one-shot marker consumed by gate Step 2b |
+| Escalation-accept | `.claude/.harness/escalation-accept/<HEAD>.json` | reviewed commit — cross-session accepted-escalation sidecar |
 | Config | `.claude/done-config.json` | project |
 
 **Cases:**
@@ -245,10 +264,12 @@ threshold. Durable progress lives in **git**, not in `.harness/`.
 Every JSON artifact the harness produces or consumes has a **declared
 JSON-Schema** under `contracts/` and carries `contract_version` (const `1`):
 `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`,
-`resolver-output.schema.json`, `base-dod.schema.json`. Machine producers
-**stamp** the version; consumers **assert** it by validating before trusting a
-field. `install.sh` copies `contracts/` → `.claude/contracts/`; the library
-resolves it into `HC_CONTRACTS_DIR`.
+`resolver-output.schema.json`, `base-dod.schema.json`, `done-plan.schema.json`.
+Machine producers **stamp** the version; consumers **assert** it by validating
+before trusting a field. `install.sh` copies `contracts/` → `.claude/contracts/`;
+the library resolves it into `HC_CONTRACTS_DIR`. `done-state` gained an optional
+`.plan` field (the folded triage plan); `done-triage.sh` self-validates the plan
+it writes against `done-plan.schema.json`.
 
 **Why versioned + fail-closed.** The gate already refuses to trust what the agent
 *says* about outcomes (Step 8); the contracts extend that distrust to the
@@ -262,17 +283,24 @@ mis-interpret it, and lets `done-detect.sh` **auto-upgrade** a pre-v1 config in
 place.
 
 **Why a jq-only validator, not ajv.** `hc_validate <schema> <json>` (in
-`harness-common.sh`) implements a deliberately small JSON-Schema **subset** —
-`type` (incl. array-of-types unions and `integer`), `required`, `properties`,
-`items`, `enum`, `const`, `additionalProperties` — in pure `jq`. No
-`$ref`/`oneOf`/`anyOf`/`allOf`/`pattern`/`format`. The harness's only hard
-dependency is already `jq` (the gate degrades to allow when jq is absent); adding
-`node`+`ajv` would introduce a second runtime the shipped bundle can't assume on
-every dev machine or CI box. The subset covers exactly what these five schemas
-need, and the validator prints `OK`/returns 0 when valid and `ERR: <path>: <what>`
-(the first violation in document order)/returns 1 on any invalidity or error —
-fail-closed by construction (a jq crash → empty stdout + nonzero rc → treated as
-`ERR`).
+`harness-common.sh`) implements a deliberately small JSON-Schema **subset** in
+pure `jq`. The harness's only hard dependency is already `jq` (the gate degrades
+to allow when jq is absent); adding `node`+`ajv` would introduce a second runtime
+the shipped bundle can't assume on every dev machine or CI box. The **enforced**
+keyword set is `type` (incl. array-of-types unions and `integer`), `required`,
+`properties`, `items`, `enum`, `const`, `minLength`, `oneOf`, `not`, and
+`additionalProperties` (**boolean form only**). It is **fail-closed on unsupported
+keywords (#2)**: any keyword outside that set and a small benign-annotation
+allowlist (`$schema`, `$id`, `title`, `description`, `$comment`, `examples`,
+`default`, `deprecated`, `readOnly`, `writeOnly`, `definitions`, `$defs`) — e.g.
+`pattern`, `minimum`, `anyOf`, `allOf`, `$ref` — is **rejected** at the node where
+it appears, and `additionalProperties` written as a **subschema** (rather than a
+boolean) is likewise rejected. This closes the false-pass pocket where a schema
+author writes a constraint the validator silently does not enforce. The validator
+prints `OK`/returns 0 when valid and `ERR: <path>: <what>` (the first violation in
+document order)/returns 1 on any invalidity or error — fail-closed by construction
+(a jq crash → empty stdout + nonzero rc → treated as `ERR`). `oneOf` powers the
+`tests` object's three-way shape (green-with-evidence | non-zero exit | `not_run`).
 
 **Write-time config validation + auto-upgrade.** `done-detect.sh` never publishes
 an unvalidated config: it assembles the config in a tempfile, runs `hc_validate`
@@ -305,32 +333,27 @@ under the repo's `run-tests.sh`.
 
 ## Stop hook: `scripts/done-gate.sh`
 
-Fires on every main-agent turn exit. Logic in order:
+Fires on every main-agent turn exit. Logic in order (exact labels from the
+script):
 
 1. Read stdin JSON. If `stop_hook_active == true` → **exit 0** (loop guard — a block can never trap the agent forever; blocks are a one-time nudge per stop-continuation chain).
 2. Not a git repo (`git rev-parse HEAD` fails) → **exit 0** (no changeset baseline possible).
-3. `HEAD == baseline/<session_id>.sha` **AND working tree clean** → **exit 0** (nothing happened this session). A dirty tree here means uncommitted "done" — it must NOT pass, so it falls through to the checks below (independent-review finding).
-3a. **Out-of-scope non-code changeset → exit 0 silently (#5).** A changeset exists (committed range non-empty OR introduced tree dirt) but `hc_changeset_is_code(HC_BASE, HEAD)` reports the **whole** set is non-code. The changed-file set = `git diff --name-only HC_BASE..HEAD` ∪ the introduced tree paths (`HC_TREE_BLOCKERS`); a file is non-code iff it matches ≥1 `noncode_globs` pattern (config; conservative prose/docs/images default). **Fail toward gating:** any unknown-extension/code file, or ANY error (git failure, etc.), classifies the changeset as CODE → normal gate; an absent/empty `noncode_globs` recognises **no** file as non-code (everything is code). Placed after Step 3 and before Step 3b, so introduced **code** dirt still blocks (Step 3b) while introduced non-code dirt stands down. Mirrors `hc_state` `S_OOS`.
+2b. **Pending-escalation one-shot pass (#6).** If `pending-escalation/<task_key>.json` exists, **`rm` it and exit 0 exactly once**. `/done` writes this marker *before* an AskUserQuestion escalation; without the one-shot the question turn's Stop would block (no green done-state yet) and trap the very question meant for the user. One file → one allow; the next Stop finds no file and re-gates. Placed after the git checks and **before** the tree/done-state checks.
+3. `HEAD == HC_BASE` **AND working tree clean** → **exit 0** (nothing happened this session). A dirty tree here does NOT exit — it falls through to the checks below (an uncommitted "done" must still be gated).
+3a. **Out-of-scope non-code changeset → exit 0 silently (#5).** Runs `hc_tree_status`, then `hc_changeset_is_code(HC_BASE, HEAD)`. If the **whole** changeset is non-code the gate exits 0 with **empty stdout** (no block JSON), mirroring `hc_state` `S_OOS`. The changed-file set = `git diff --name-only HC_BASE..HEAD` ∪ the introduced tree paths (`HC_TREE_BLOCKERS`); a file is non-code iff it matches ≥1 `noncode_globs` pattern (config; conservative prose/docs/images default). **Fail toward gating:** any unknown-extension/code file, or ANY error, classifies the changeset as CODE → normal gate; an absent/empty `noncode_globs` recognises **no** file as non-code. Placed after Step 3 and **before** Step 3b, so introduced **code** dirt still blocks while introduced non-code dirt stands down.
+3b. **Working tree has INTRODUCED changes → BLOCK** ("finish the slice"). Moved **ahead of the done-state checks** (P4) so an introduced-dirty tree blocks with the S1 reason, aligned with `hc_state`. Not "any non-empty `git status --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks **iff `HC_TREE_BLOCKERS` is non-empty**, i.e. work introduced since the pinned tree baseline. Pre-existing entries are **ignored, not blocked** — this breaks the pre-existing-untracked deadlock **without weakening the gate: the changeset's OWN uncommitted work still blocks**. The block message names only the introduced blockers (`hc_tree_remediation`). `untracked_policy` (default `"baseline"`) tunes untracked handling; `"strict"` blocks every untracked line regardless of baseline. If the classifier can't be sourced, the gate falls back to the **strict** live check — never toward allow.
+3c. **Empty committed changeset → exit 0 (#6).** No introduced tree blockers **and** `git diff --quiet HC_BASE HEAD` (the committed range is genuinely empty — e.g. after the authorship base-advance left HEAD atop an identical tree) → nothing to verify → allow. `git diff --quiet` exits 0 only on a truly empty diff; any git failure falls through to the gate.
+3d. **SHA-keyed escalation-accept sidecar → exit 0 (cross-session, #6).** If `escalation-accept/<HEAD>.json` exists (written by `done-write-state.sh` on a non-null escalation, keyed to the exact committed HEAD), exit 0. Honored HERE — after the tree/empty checks but **before** the done-state checks — so an accepted escalation survives across sessions on an unchanged trunk HEAD, where a fresh `session-<id>` key has no done-state and Step 4 would otherwise block first. Keyed to the exact sha: any new/amended commit → different sha → no sidecar → re-block. Before the remaining steps the gate builds the block reason by prepending a one-shot `hc_changeset_summary(HC_BASE_ORIG, HEAD)` — file/commit counts and how many commits were authored **this session** (from the unadvanced base, so it reads "0 authored this session" honestly when every commit is foreign).
 4. Read `.claude/.harness/done-state/<task_key>.json`. Missing → **BLOCK**.
 4b. **Validate the done-state against its contract** (`hc_validate` vs
    `done-state.schema.json`) *before* any of its fields (`verified_sha`, the Step-8
    outcomes) are trusted. Invalid, a missing schema file, or an unavailable
    validator → **BLOCK** — fail closed on shape.
 5. `verified_sha != HEAD` → **BLOCK** ("changes committed since last /done — re-run it").
-6. **Working tree has INTRODUCED changes → BLOCK.** Not "any non-empty `git status
-   --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks
-   **iff `HC_TREE_BLOCKERS` is non-empty**, i.e. work introduced since the pinned tree
-   baseline. Pre-existing entries (present at baseline) are **ignored, not blocked** —
-   this is what breaks the pre-existing-untracked deadlock **without weakening the gate:
-   the changeset's OWN uncommitted work still blocks** (an agent's introduced file is,
-   by construction, not in the baseline). The block message names only the introduced
-   blockers (`hc_tree_remediation`); pre-existing entries are never surfaced. `untracked_policy`
-   (default `"baseline"`) tunes untracked handling; `"strict"` blocks every untracked
-   line regardless of baseline. If the classifier can't be sourced, the gate falls back
-   to the **strict** live check (block on any non-empty porcelain) — never toward allow.
-7. `escalation` present and valid → **exit 0** (escape hatch — see escalation rules).
+7. `escalation` present and non-null in the done-state → **exit 0** (escape hatch — see escalation rules). Honored **after** the SHA check (5) and the tree check (3b), so it disarms only the exact committed changeset it was recorded against.
 8. **Checklist outcomes not all green** → **BLOCK**. With no escalation, all must hold:
-   - `tests.exit_code == 0`
+   - `tests.status != "not_run"` — a `not_run` here (no escalation short-circuited at Step 7) is an unverified green claim → BLOCK; `not_run` is accepted only with an escalation.
+   - `tests.exit_code == 0` **AND** non-empty `tests.command` **AND** non-empty `tests.output_tail` — green tests must carry **evidence** (P1-c, #6); a bare `{"exit_code":0}` is blocked ("green tests must carry evidence").
    - `lint.exit_code == 0` **if `.lint` is recorded** (projects with no lint command skip this)
    - an **independent review-log exists for the current HEAD** —
      `.claude/.harness/review-log/<HEAD>.json` — that **passes its contract**
@@ -349,20 +372,27 @@ Fires on every main-agent turn exit. Logic in order:
      an empty `findings: []` legitimately counts zero and allows. The
      `open_findings` integer is a backward-compat fallback used **only when the
      `findings` key is entirely absent** (old-style logs).
-   - **the review-log's `files_reviewed` covers every changed file** (structural
-     coverage). The gate computes the changed set from `git diff --name-only
-     <HC_BASE>..HEAD` and requires `files_reviewed ⊇ changed files`, via the
-     shared `hc_review_coverage_gap` (same function the writer uses). A changed
-     file **not attested** → non-empty gap → **BLOCK** ("review did not cover
-     changed files: …") — this turns "the review covered the whole changeset"
-     into a structural check, not prose hope, closing the too-narrow-scope leak
-     that caused the fix→re-review loop. A missing/non-array `files_reviewed` with
-     a real changeset → gap = all changed files → block (this **forces** the
-     attestation). When **no changeset base** is resolvable (`HC_BASE` empty) or
-     the diff cannot be computed, the function returns `SKIP` and the gate does
-     **not** block on coverage — a no-regression degrade (there was no coverage
-     check before). Every other computation error with a real changeset returns
-     the full changed set (block), never `SKIP` — fail toward block.
+   - **the review-log's `files_reviewed` covers every changed file** — structural
+     coverage, computed **per-(file, blob) across the task's review-log chain**
+     (#1/P5). The gate computes the changed set from `git diff --name-only
+     <HC_BASE>..HEAD` and, via the shared `hc_review_coverage_gap` (same function
+     the writer uses), marks a changed file COVERED iff **some** chain-log attested
+     it **at its current blob** (its content at HEAD). The chain is every
+     `review-log/<sha>.json` in the directory whose `<sha>` is an ancestor of HEAD
+     but not of HC_BASE (task-side, up to and including HEAD); the attested blob is
+     recomputed live from each log's `reviewed_sha`. So a **follow-up commit only
+     needs re-attestation of the files whose blobs it changed** — untouched files
+     carry their earlier attestation forward for free, which ends the "re-review
+     the whole changeset on every HEAD move" churn. A deleted file (no blob at
+     HEAD) is covered by simple path-attestation in some chain-log. A changed file
+     not attested at its current blob → non-empty gap → **BLOCK** ("review did not
+     cover changed files: …"). A missing/non-array `files_reviewed`, a jq error, or
+     a rebase/gc making an old `reviewed_sha` unreachable all leave the file in the
+     gap → block (fail toward block: prefer an unnecessary re-review to trusting an
+     attestation whose commit no longer exists). When **no changeset base** is
+     resolvable (`HC_BASE` empty) or the diff cannot be computed, the function
+     returns `SKIP` and the gate does **not** block on coverage — a no-regression
+     degrade.
    - every `task_checks[]` status `passed`
 
    Otherwise block, naming the failed outcome.
@@ -445,12 +475,37 @@ Block output (stdout, exit 0):
 
 ---
 
-## `/done` skill: `skills/done/SKILL.md`
+## `/done` skill: `skills/done/SKILL.md` + `dod-protocol.md`
 
 User-invocable. Steps run in order, blocking on each (stated once, globally — a failing
 step means fix and re-run from Step 2).
 
-**Deterministic work lives in scripts, not prose.** The skill body carries only the
+**Split for progressive disclosure (#7).** The skill is two files: a **thin
+`SKILL.md`** entry point and the full **`dod-protocol.md`** reference. `SKILL.md`
+runs the deterministic triage (`done-detect.sh | done-triage.sh`), which computes
+**exactly which DoD steps apply** to this changeset and prints them as
+`[id] <intent> → dod-protocol.md#<anchor>` lines; the agent then reads each
+applicable step's section from `dod-protocol.md` **on demand** rather than
+pre-reading the whole protocol.
+
+**The triage + audit plan (`done-triage.sh` → `done-plan/<task_key>.json`).**
+`done-triage.sh` reads the effective config (from `done-detect.sh` on stdin, else
+recomputed), decides applicability with a **fail-safe direction — a step is
+excluded only when a deterministic config signal proves it vacuously N/A; any
+uncertainty INCLUDES it** — and writes the **full** ordered plan (applicable
+*and* excluded, each with a reason) to `done-plan/<task_key>.json`, self-validated
+against `done-plan.schema.json` before anything is emitted. Currently only two
+steps are conditionally excluded: `2-lint` (no lint command configured) and `3`
+(no `start` / `start_check_cmd` / `deploy_check_cmd` configured); every other step
+is always applicable. The plan is **audit-only** — Step 7 folds it into done-state
+as a `.plan` field, but the **gate gains NO precondition on it**. On any hard error
+(jq missing, unreadable config, self-validation failure) triage exits non-zero with
+empty stdout and the SKILL **fallback runs ALL steps** — a wrongly-excluded step is
+the one unacceptable outcome. **Honest framing:** the primary value is
+*deterministic applicability + an auditable plan* (and progressive-disclosure
+reading); token savings are secondary.
+
+**Deterministic work lives in scripts, not prose.** The protocol body carries only the
 judgment steps (run/read/decide/fix/escalate). Everything mechanical — config detection,
 fingerprinting, session-id resolution, `git rev-parse`, tree-clean, done-state assembly —
 is delegated to helper scripts so it is testable and can't be hallucinated. The two
@@ -631,6 +686,15 @@ never bypasses structural validity); an invalid state is refused, never reaches 
 The `review` outcome is **not** a payload field — it is the separate review-log artifact
 (Step 5), which the gate and the writer both read.
 
+The writer also (a) **folds the triage plan as evidence** — if a valid
+`done-plan/<task_key>.json` exists it is merged into the done-state as a `.plan`
+field (additive, non-blocking: an absent/malformed plan simply yields no field);
+and (b) when the payload carries a **non-null escalation**, writes the SHA-keyed
+sidecar `escalation-accept/<verified_sha>.json` so a later session at the same HEAD
+honours the acceptance (Step 3d) even without the task's done-state. The `tests`
+green-refusal now also rejects `status:"not_run"` without an escalation and a green
+`tests` object lacking a non-empty `command` or `output_tail`.
+
 ```json
 {
   "contract_version": 1,
@@ -641,7 +705,7 @@ The `review` outcome is **not** a payload field — it is the separate review-lo
     "sources": ["base", "agent-instructions", "task", "session"],
     "items": ["tests green", "lint green", "app starts", "changeset-scoped independent review", "re-verified after fixes", "verification real not synthetic", "deploy target stated", "visually verify button"]
   },
-  "tests": {"exit_code": 0, "newly_red": [], "pre_existing_red": []},
+  "tests": {"exit_code": 0, "command": "<the exact test command you ran>", "output_tail": "<last ~20 lines>", "newly_red": [], "pre_existing_red": []},
   "lint": {"exit_code": 0},
   "app_started": true,
   "task_checks": [{"desc": "visually verify button", "status": "passed", "how": "browser screenshot vs Figma"}],
@@ -649,6 +713,13 @@ The `review` outcome is **not** a payload field — it is the separate review-lo
   "escalation": null
 }
 ```
+
+Green `tests` is **un-forgeable**: it must record `exit_code: 0` **and** a
+non-empty `command` **and** a non-empty `output_tail` (the writer and gate refuse a
+bare `{"exit_code": 0}`). When tests genuinely cannot run, encode
+`tests: {"status": "not_run", "reason": "…"}` — accepted **only** alongside a
+non-null `escalation`. The `.plan` (audit) field is injected by the writer from
+`done-plan/<task_key>.json`, not supplied in the payload.
 
 `review_rounds` (integer, optional) is an **informational** judgment field — how many
 review rounds were used (Step 6). Neither the writer nor the gate enforces it (no new
@@ -750,6 +821,22 @@ the *user's* decision plus the attempts made.
 "escalation":{"type":"user_accepted","finding":"...","attempts":["...","..."],
   "user_decision":"accept, tracked separately"}
 ```
+
+> **Cross-turn: the pending-escalation one-shot (#6).** Before calling
+> `AskUserQuestion` for a Category-C or `user_halt` escalation, `/done` writes
+> `pending-escalation/<task_key>.json`. Otherwise the AskUserQuestion turn ends
+> with a Stop the gate would block (no green done-state yet) — trapping the very
+> question meant for the user. The gate consumes that marker **once** (Step 2b:
+> `rm` + allow), so the question reaches the user; the next Stop finds no marker
+> and re-gates normally. It is a one-shot pass, **not** a disarm.
+>
+> **Cross-session: the escalation-accept sidecar (#6).** An accepted escalation is
+> persisted twice — in the done-state (`.escalation`, honored at Step 7) **and** as
+> `escalation-accept/<HEAD>.json` keyed to the exact committed HEAD (written by
+> `done-write-state.sh`, honored at Step 3d **before** the done-state checks). The
+> sidecar lets a *fresh* session — which has no done-state under the task key — still
+> pass at that unchanged HEAD. Both disarm only that exact sha: a new/amended commit
+> moves HEAD → no match → re-block.
 
 **`user_halt` — the user spontaneously stops the task mid-work.** Unlike A/B/C (each
 check-blocked), this records the user halting before the gate is green. It routes through
@@ -875,13 +962,15 @@ global use.
 | `completion-harness/scripts/done-gate.sh` | Stop hook gate |
 | `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) + `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
 | `completion-harness/scripts/harness-resolve.sh` | `/done` Step 1: executable resolver wrapper — prints a self-validated JSON object (resolver-output contract), `jq`-parsed by the skill |
-| `completion-harness/contracts/*.json` | Hard-contract schema store: 5 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
+| `completion-harness/contracts/*.json` | Hard-contract schema store: 6 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod, done-plan) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
 | `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
 | `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
 | `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
-| `completion-harness/scripts/done-detect.sh` | `/done` Step 0: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
-| `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses on introduced blockers) |
-| `completion-harness/skills/done/SKILL.md` | `/done` skill (judgment steps only) |
+| `completion-harness/scripts/done-detect.sh` | `/done` config: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
+| `completion-harness/scripts/done-triage.sh` | `/done` triage: compute applicable steps, write self-validated audit `done-plan/<task_key>.json`, print applicable steps; fail-safe → run all |
+| `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses on introduced blockers, `not_run`-without-escalation, evidence-less green); folds `.plan`; writes `escalation-accept` sidecar |
+| `completion-harness/skills/done/SKILL.md` | `/done` skill — thin entry point (runs triage, routes to `dod-protocol.md`) |
+| `completion-harness/skills/done/dod-protocol.md` | `/done` full protocol reference (all step sections + escalation rules) |
 | `completion-harness/dod/base-dod.md` | Base DoD (assembled into the effective DoD) |
 | `completion-harness/DOD.md` | The harness project's own DoD (meta) |
 | `completion-harness/install.sh` | Idempotent installer → target `.claude/` + `settings.local.json` |
