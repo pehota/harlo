@@ -39,9 +39,8 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
      stale `.claude/.harness/` left by a `completion-harness` install is regenerated-
      on-SessionStart session state — safe to delete by hand. Note it in the README;
      don't write code for it.
-   - **Open:** `.claude/done-config.json` keeps its name. It maps to the `/done`
-     skill, not to the plugin, and it is the one file engineers author by hand.
-     Say if you want `done-gate-config.json` instead.
+   - `.claude/done-config.json` renames to `.claude/done-gate-config.json` on the
+     same rationale — see Step 3c.
 5. **`package.json` needs no change** — target's test script globs
    `plugins/*/tests/test-*.sh`, which picks `done-gate` up automatically.
 6. **`done-gate` would be the first plugin in coding-agents that ships `hooks/`.**
@@ -109,7 +108,7 @@ Audited what else it did, and whether the plugin path already covers it:
 |---|---|
 | Merge 3 hooks into `settings.local.json` | Yes — `hooks/hooks.json` is the plugin's native mechanism |
 | sed-rewrite `${CLAUDE_PLUGIN_ROOT}` in SKILL.md / dod refs | Moot — the token resolves natively under a plugin |
-| Seed `.claude/done-config.json` | Yes — `done-detect.sh:192-222` writes it if absent, and SessionStart runs it |
+| Seed the config json | Yes — `done-detect.sh:192-222` writes it if absent, and SessionStart runs it |
 | `mkdir -p` the state dirs | Yes — every writer already does `mkdir -p "$(dirname …)"` |
 | **Add `.claude/.harness/` to the project `.gitignore`** | **NO — this is the gap** |
 
@@ -122,18 +121,18 @@ review-log, done-plan), i.e. after the baseline snapshot, so without the ignore
 the harness sees its own writes as unexplained dirt at Stop time.
 Confirmed: harlo's own `.gitignore:8` carries `.claude/.harness/` for exactly this.
 
-**Replacement — self-ignoring state dir (3 lines, verified):**
+**Replacement — self-ignoring state dir (1 line, verified):**
+
+`baseline-snapshot.sh:40` already creates the state dir unconditionally:
 
 ```sh
-# in hc_resolve(), harness-common.sh:62, right after HARNESS_DIR=
-[ -f "$HARNESS_DIR/.gitignore" ] || {
-  mkdir -p "$HARNESS_DIR" 2>/dev/null && printf '*\n' > "$HARNESS_DIR/.gitignore"
-}
+mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalation" 2>/dev/null
+printf '*\n' > "$HARNESS_DIR/.gitignore" 2>/dev/null          # <- add this
 ```
 
 A nested `.gitignore` containing `*` ignores the directory's whole contents
 *including itself*, so the dir never appears in porcelain. Verified empirically in
-a throwaway repo: `git status --porcelain` → 0 lines.
+a throwaway repo: `git status --porcelain` -> 0 lines.
 
 Strictly better than what install.sh did:
 - Touches **no consumer file** — install.sh edited the project's `.gitignore`.
@@ -141,18 +140,45 @@ Strictly better than what install.sh did:
   installs the plugin without ever running an installer.
 - No install step to forget.
 
-- [ ] Placement: inside `hc_resolve()` (`harness-common.sh:62`), **not** top-level.
-      All 8 runtime scripts source `harness-common.sh` and go through `hc_resolve`,
-      so one site covers every entry path — including `PreToolUse: auto-branch`
-      firing before SessionStart. Top-level would fire on `source` and create dirs
-      in tests that only want the functions.
-- [ ] Guarded by `[ -f ]` — idempotent, one `stat` on the hot path.
+- [ ] Placement: `baseline-snapshot.sh:40`, immediately after the existing `mkdir -p`.
+      **Not** in `hc_resolve()` — that is a pure resolver (computes branch, task key,
+      baseline paths) with no disk writes; adding one there would put a side effect in
+      a function all 8 scripts call, and cost a guard `stat` on every invocation.
+      Line 40 is unconditional and runs *before* the no-git early exit at `:83` and
+      before `harness-common.sh` is sourced at `:98`, so it always fires.
+- [ ] Ordering is safe: `SessionStart` precedes `PreToolUse` within a session, so
+      `auto-branch.sh` can never write state ahead of this line.
+- [ ] Known edge, accepted: a project that installs the plugin *mid-session* has no
+      `.gitignore` in its state dir until the next SessionStart. Self-heals; no code.
 - [ ] This is **new behavior, not a port.** Its own commit, its own verification.
 - [ ] Verify with `test-tree-status.sh` (the suite that would catch a regression)
       plus one new assertion: state written mid-session leaves porcelain clean in a
       repo whose `.gitignore` says nothing about the harness.
 - [ ] `test-abi.sh` / `contracts/shell-abi.json` checked — **no reference to
       `install.sh`**. Deleting it breaks no other suite. 15 suites port, not 16.
+
+### 3c. Rename `done-config.json` -> `done-gate-config.json` (user call)
+
+Same rationale as the state dir: the one file an engineer opens by hand should name
+its owner. 150 refs across 26 files; ~12 are the real path definition
+(`CONFIG_FILE=` in 5 scripts, inline `jq` reads in `done-gate.sh:329`,
+`done-write-state.sh:161,194`, `harness-common.sh:34,363,503,1588`).
+
+- [ ] Global `sed 's#done-config#done-gate-config#g'` across
+      `scripts/ tests/ contracts/ skills/ dod/ README.md DOD.md docs/`.
+- [ ] `git mv contracts/done-config.schema.json contracts/done-gate-config.schema.json`
+      — the same sed already fixes every reference to it. Leaving the schema named
+      `done-config` while it validates `done-gate-config.json` is the same
+      traceability defect one level in.
+- [ ] **Do not miss `harness-common.sh:382`** — a bare `'.claude/done-config.json'`
+      string in the tree-status whitelist (the config is allowed to change *during*
+      `/done`). It is a literal, not a variable; a rename that skips it makes the
+      gate flag its own config write as unexplained dirt. The global sed covers it —
+      this line is the reason to sed rather than hand-edit the `CONFIG_FILE=` sites.
+- [ ] No migration shim — 0.1.0, no install base. A project carrying an old
+      `done-config.json` gets a fresh one seeded by `done-detect.sh` and can delete
+      the orphan. README note.
+- [ ] Verify: `grep -rn 'done-config' plugins/done-gate/` returns nothing.
 
 ### 4. Register — dev marketplace ONLY
 - [ ] Add to `.dev-marketplace/.claude-plugin/marketplace.json`:
@@ -175,9 +201,9 @@ Strictly better than what install.sh did:
   > **Only step with side effects outside `plugins/done-gate/`.** A live install
   > arms three hooks *in the target repo*: `Stop` (blocks completion),
   > `SessionStart` (`baseline-snapshot.sh` writes `.claude/.done-gate/` and seeds
-  > `.claude/done-config.json`), `PreToolUse: Write|Edit` (`auto-branch.sh` can
+  > `.claude/done-gate-config.json`), `PreToolUse: Write|Edit` (`auto-branch.sh` can
   > create a branch). Afterwards: (a) `rm -rf .claude/.done-gate/`, (b) remove the
-  > seeded `done-config.json` unless the repo genuinely wants the gate on itself.
+  > seeded `done-gate-config.json` unless the repo genuinely wants the gate on itself.
   > Target `.gitignore` needs **no** entry — Step 3b's self-ignoring dir handles it,
   > and that is itself part of what this step verifies.
   > Because Step 1 puts us on `main`, this cleanup is mandatory, not optional —
@@ -213,7 +239,7 @@ Strictly better than what install.sh did:
   is the majority pattern in that repo — only `dev-toolkit` ships an install.sh.
 - The two lines that used to touch a consumer project (`.gitignore` edit, state
   `mkdir`) are gone. The plugin now writes nothing outside `.claude/.done-gate/`
-  and `.claude/done-config.json`.
+  and `.claude/done-gate-config.json`.
 - Plugin `README.md` loses its "Install without the plugin system" section.
 
 ---
