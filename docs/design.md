@@ -22,7 +22,7 @@ Three parts. No single one is sufficient.
 
 **Hard contracts underneath.** Every JSON artifact the harness passes between a
 producer and a consumer (done-state, review-log, done-config, resolver-output,
-base-dod) has a declared JSON-Schema under `contracts/` and carries a
+done-plan, base-dod) has a declared JSON-Schema under `contracts/` and carries a
 `contract_version` (const `1`). This exists so the gate never trusts a field of a
 malformed or forged-but-invalid artifact: producers **stamp** the version and
 validate before writing; consumers **assert** it via `hc_validate` before reading
@@ -83,7 +83,7 @@ matching `baselines/<id>.sha` (see the writer's dead-id rejection below), so a
 mismatch fails loudly at `/done` time instead of blocking forever.
 
 `harness-common.sh` also houses `hc_tree_status` — the **single shared
-baseline-relative working-tree classifier** used by the gate (Step 6), the `/done`
+baseline-relative working-tree classifier** used by the gate (Step 3b), the `/done`
 writer, and the preflight; **none of them reimplements it.** It classifies each
 `git status --porcelain` line relative to a pinned tree baseline (path in
 `HC_TREE_BASE_FILE`, set by `hc_resolve`): a line **introduced since the baseline**
