@@ -23,7 +23,8 @@
       "name": "hc_tree_status",
       "globals": [
         "HC_TREE_BLOCKERS",
-        "HC_TREE_WARNINGS"
+        "HC_TREE_WARNINGS",
+        "HC_TREE_BASELINE_MISSING"
       ],
       "stdout": "none (sets globals)",
       "return_codes": "always 0",

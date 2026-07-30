@@ -338,6 +338,12 @@ EOF
 # direction): every current change is "introduced" → blocks. Never silently
 # passes. Requires PROJECT_DIR/HARNESS_DIR set (hc_resolve, or set by caller).
 #
+#   HC_TREE_BASELINE_MISSING — 1 when there is no baseline file to classify
+#                      against, else 0. The VERDICT is unaffected (still strict,
+#                      still blocks); it only tells the caller that authorship is
+#                      unknowable, so the message must not assert the session
+#                      introduced those paths. Always set, even on a clean tree.
+#
 # Returns 0 always; callers test `[ -n "$HC_TREE_BLOCKERS" ]`.
 hc_tree_status() {
   local session_id="$1"
@@ -345,18 +351,35 @@ hc_tree_status() {
   # Reset outputs so a repeat call never leaks stale values.
   HC_TREE_BLOCKERS=""
   HC_TREE_WARNINGS=""
+  HC_TREE_BASELINE_MISSING=0
 
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
   local hdir="${HARNESS_DIR:-$proj/.claude/.harness}"
+
+  # Baseline path is the resolver-pinned HC_TREE_BASE_FILE (task- or session-
+  # scoped). Empty (resolver not run) → `[ -f "" ]` is false → treated as
+  # missing → strict direction.
+  local baseline_file="${HC_TREE_BASE_FILE:-}"
+
+  # DEGRADED-BASELINE flag. The CLASSIFICATION is unchanged (see the header): no
+  # baseline file → EMPTY baseline set → every current change blocks. What it
+  # changes is the CLAIM: without a baseline the harness cannot know who authored
+  # a path, so the message must not assert the session introduced it (see
+  # hc_tree_remediation). Set BEFORE the clean-tree early return so it is always
+  # defined for the caller.
+  #
+  # Keyed on the file being ABSENT only — a ZERO-LENGTH .dirty is NOT degraded.
+  # baseline-snapshot.sh writes `git status --porcelain > "$HC_TREE_BASE_FILE"`
+  # and documents "always create the file (even when empty) so 'missing' (→
+  # strict) is distinguishable from 'clean at baseline'": a clean repo at
+  # SessionStart legitimately yields 0 bytes, and an EMPTY baseline set means
+  # nothing was pre-existing — there "you introduced this" is TRUE.
+  [ -f "$baseline_file" ] || HC_TREE_BASELINE_MISSING=1
 
   # Current tree state (guarded).
   local current
   current=$(git -C "$proj" status --porcelain 2>/dev/null)
   [ -z "$current" ] && return 0
-
-  # Baseline path is the resolver-pinned HC_TREE_BASE_FILE (task- or session-
-  # scoped). Empty (resolver not run) → treated as missing → strict direction.
-  local baseline_file="${HC_TREE_BASE_FILE:-}"
 
   # untracked_policy override (default "baseline").
   local policy="baseline"
@@ -1025,10 +1048,26 @@ tree: ${nb:-0} pre-existing, ${ni:-0} new"
 # the most recent hc_tree_status call. Names ONLY the blocking (introduced)
 # files. Pre-existing (warned-only) entries are intentionally NOT surfaced —
 # they are irrelevant to the task. Prints to stdout.
+#
+# DEGRADED BASELINE (HC_TREE_BASELINE_MISSING=1). Without a baseline file the
+# classifier has no way to tell the session's own work from a two-month-old
+# worktree, so "changes you introduced" would be an assertion the harness cannot
+# support — and a false one destroys trust in the gate. The verdict is unchanged
+# (these paths still block); only the CLAIM is softened, and the remediation
+# names the real repair: restart the session so SessionStart rewrites the
+# baseline. Kept as a drop-in replacement for the parenthetical, so every caller
+# ("finish the slice (...)", the preflight problem line, the writer's refusal)
+# inherits the honest wording without its own branch.
 hc_tree_remediation() {
   local msg=""
+  local list
   if [ -n "$HC_TREE_BLOCKERS" ]; then
-    msg="commit or stash these changes you introduced: $(printf '%s' "$HC_TREE_BLOCKERS" | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g')"
+    list=$(printf '%s' "$HC_TREE_BLOCKERS" | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g')
+    if [ "${HC_TREE_BASELINE_MISSING:-0}" = "1" ]; then
+      msg="no session baseline is recorded, so authorship cannot be determined — these changes MAY predate this session: ${list}; restart the session (SessionStart rewrites the baseline), then commit or stash whatever is yours"
+    else
+      msg="commit or stash these changes you introduced: ${list}"
+    fi
   fi
   printf '%s' "$msg"
 }
