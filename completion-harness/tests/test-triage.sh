@@ -8,7 +8,7 @@ SCRIPTS="$(cd "$(dirname "$0")/../scripts" && pwd)"
 SCRIPT="$SCRIPTS/done-triage.sh"
 PROTO="$(cd "$(dirname "$0")/../skills/done" && pwd)/dod-protocol.md"
 OLD_SKILL_HEADINGS=(
-  "Step 0 (Preflight)" "Step 0 — Config" "Step 0.5" "Step 1" "Step 2"
+  "Step 0 — Preflight" "Config detection" "Step 0.5" "Step 1" "Step 2"
   "Step 3" "Step 4" "Step 5" "Step 6" "Step 7" "Step 8" "Escalation rules"
 )
 

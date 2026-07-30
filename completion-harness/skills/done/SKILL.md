@@ -1,8 +1,7 @@
 ---
 name: done
 description: "Completion harness executor. Runs the Definition-of-Done checklist in order — config detect, tests with before/after checkpoint, app startup, task-specific checks, changeset-scoped code review — then writes the per-session done-state that clears the Stop gate. Invoke when finishing a task or when the Stop hook blocks with 'Run /done'."
-user-invocable: true
-argument-hint: '(no args) — verifies the current changeset and writes done-state'
+user-invocable: false
 ---
 
 # /done — Completion Harness Executor (thin entry point)
@@ -12,14 +11,8 @@ protocol lives in the sibling reference [`dod-protocol.md`](dod-protocol.md); th
 entry point routes you to the steps that actually apply so you read only what you
 need.
 
-**Global rules (brief — full text in `dod-protocol.md`):**
-
-- Run the applicable steps **in order, blocking on each**. Any step that fails
-  means *fix it, then return to Step 2* and re-verify with the fix in place —
-  never proceed past a failing step.
-- **Deterministic work lives in scripts, not here.** Config detect (Step 0) and
-  git facts + done-state assembly (Step 7) are delegated to helper scripts.
-- **Parallel work must use separate git worktrees.**
+Global rules, escalation policy, and every step live in `dod-protocol.md` — read
+each step's section on demand.
 
 ## Compute the applicable steps (triage)
 
