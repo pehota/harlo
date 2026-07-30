@@ -89,6 +89,29 @@ if [ ! -f "$DIRTY_FILE" ]; then
   prob "no pinned tree baseline ($DIRTY_FILE) — the SessionStart hook has not recorded it, so tree classification degrades to STRICT: the gate will treat ALL pre-existing files as yours and block forever (guaranteed deadlock). Remediation: restart the session so SessionStart (baseline-snapshot.sh) records the tree baseline before you edit; preflight will NOT seed it (it may run after edits, which would whitelist your own work)."
 fi
 
+# --- Check 3.5: session-mode HEAD diverged with NO session commits (P2-a, #6) -
+# In SESSION mode, if the baseline .sha is present, HEAD has moved PAST it, yet
+# NONE of the commits in BASELINE_SHA..HEAD are session-authored (Chunk-A
+# predicate), then the session is sitting atop foreign work it did not author —
+# a diverged baseline. Warn LOUDLY with the author list so the operator knows the
+# changeset the gate resolves is NOT this session's work. NON-BLOCKING (HARD
+# stays 0; the verdict stays winnable) — it is guidance, not a deadlock.
+if [ "${HC_MODE:-}" = "session" ] && [ -f "$SHA_FILE" ]; then
+  PF_BASE=$(cat "$SHA_FILE" 2>/dev/null)
+  PF_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
+  if [ -n "$PF_BASE" ] && [ -n "$PF_HEAD" ] && [ "$PF_BASE" != "$PF_HEAD" ]; then
+    PF_AUTHORED="0"
+    if command -v hc__session_authored_count >/dev/null 2>&1 || type hc__session_authored_count >/dev/null 2>&1; then
+      PF_AUTHORED=$(hc__session_authored_count "$PF_BASE" "$PF_HEAD" "$SESSION_ID" 2>/dev/null)
+    fi
+    if [ "$PF_AUTHORED" = "0" ]; then
+      PF_AUTHORS=$(git -C "$PROJECT_DIR" log --format='%cn' "$PF_BASE..$PF_HEAD" 2>/dev/null \
+        | sort | uniq -c | sort -rn | sed -E 's/^[[:space:]]*([0-9]+)[[:space:]]+(.*)$/\2 \1/' | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+      warn "DIVERGED BASELINE: HEAD has moved past this session's baseline ($(printf '%s' "$PF_BASE" | cut -c1-7)..$(printf '%s' "$PF_HEAD" | cut -c1-7)) but 0 of those commits were authored this session — the changeset the gate resolves is NOT your work (authors: ${PF_AUTHORS:-unknown}). If you intend to verify only your own slice, commit it on a fresh branch or restart the session so the baseline tracks your work."
+    fi
+  fi
+fi
+
 # --- Check 4: baseline_snapshot enabled but no effective test command -------
 CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 SNAPSHOT_ENABLED="false"

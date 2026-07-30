@@ -299,6 +299,40 @@ else
 fi
 rm -rf "$R"
 
+# PREFLIGHT DIVERGED BASELINE (P2-a, #6) — session mode, HEAD moved past the
+# baseline but 0 commits are session-authored → WARN loudly + author list, yet
+# still WINNABLE (non-blocking). Build a FOREIGN commit atop the baseline so the
+# Chunk-A attribution counts 0 authored this session.
+R=$(make_repo); SID=pf-diverged
+PF_BASE=$(git -C "$R" rev-parse HEAD)          # baseline = c1
+# Foreign commit (different committer identity) atop the baseline.
+GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign Dev" \
+  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign Dev" \
+  bash -c "cd '$R' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+printf '%s\n' "$PF_BASE" > "$R/.claude/.harness/baselines/$SID.sha"
+git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"   # clean baseline
+cat > "$R/.claude/done-config.json" <<'JSON'
+{"detected":{"test":"true"},"overrides":{},"baseline_snapshot":false,"untracked_policy":"baseline"}
+JSON
+OUT=$(CLAUDE_PROJECT_DIR="$R" bash "$PREFLIGHT" "$SID" 2>&1)
+RC=$?
+if [ "$RC" -eq 0 ] && echo "$OUT" | grep -qi "winnable"; then
+  ok "PREFLIGHT DIVERGED: verdict stays winnable (non-blocking)"
+else
+  bad "preflight diverged-baseline blocked unexpectedly (rc=$RC): $OUT"
+fi
+if echo "$OUT" | grep -qi "DIVERGED BASELINE"; then
+  ok "PREFLIGHT DIVERGED: emits the divergence warning"
+else
+  bad "preflight did not warn on diverged baseline: $OUT"
+fi
+if echo "$OUT" | grep -qi "Foreign Dev"; then
+  ok "PREFLIGHT DIVERGED: warning names the foreign author"
+else
+  bad "preflight divergence warning missing author list: $OUT"
+fi
+rm -rf "$R"
+
 # ============================================================================
 # BASELINE-SNAPSHOT — records <sid>.dirty; when enabled-but-no-test → inert
 # marker + systemMessage. Uses a repo where done-detect finds NO test command.
