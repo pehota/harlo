@@ -289,9 +289,15 @@ run_session_start "$DIR" "sess-g2" >/dev/null   # pin baseline so gate resolves
 OUT=$(run_stop_gate "$DIR" "sess-g2")
 assert_eq "S2 decision==block" \
   "$(printf '%s' "$OUT" | jq -r '.decision // ""' 2>/dev/null)" "block"
-assert_eq "S2 reason == canonical" \
+# P1-a (#6) now PREPENDS a content-ful changeset summary to the gate's S2 block
+# reason, so it is no longer byte-equal to the canonical /done string — assert it
+# CONTAINS the canonical string (relaxed from exact equality) plus the summary.
+assert_contains "S2 reason contains canonical /done string" \
   "$(printf '%s' "$OUT" | jq -r '.reason // ""' 2>/dev/null)" \
   "run /done to verify the changeset (owns the Step-5 review)"
+assert_contains "S2 reason contains changeset summary (authored this session)" \
+  "$(printf '%s' "$OUT" | jq -r '.reason // ""' 2>/dev/null)" \
+  "authored this session"
 
 # --- S1 (natural: introduced uncommitted, no done-state) → block "finish...". -
 echo

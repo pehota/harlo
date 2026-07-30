@@ -555,11 +555,27 @@ assert_reason_prefix "R1 introduced-dirty + no done-state -> reason 'finish the 
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}" "finish the slice"
 ensure_clean
 
-# R2 — committed-clean + no done-state → reason is the exact /done S2 string.
+# R2 — committed-clean + no done-state → S2 family reason. P1-a (#6) now PREPENDS
+# a content-ful changeset summary to the bare /done string, so this asserts the
+# reason CONTAINS both the /done instruction AND the summary's "authored this
+# session" line (relaxed from the exact-string equality it used before).
 SID=rp2; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-assert_reason_eq "R2 committed-clean + no done-state -> reason is /done S2 string" \
-  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}" \
-  "run /done to verify the changeset (owns the Step-5 review)"
+R2_REASON=$(gate_reason "{\"session_id\":\"$SID\",\"stop_hook_active\":false}")
+case "$R2_REASON" in
+  *"run /done to verify the changeset (owns the Step-5 review)"*)
+    case "$R2_REASON" in
+      *"authored this session"*)
+        printf 'PASS  %s\n' "R2 committed-clean + no done-state -> /done reason + changeset summary (authored this session)"; PASS=$((PASS+1)) ;;
+      *) printf 'FAIL  %s  [reason missing summary: %s]\n' "R2 summary" "$R2_REASON"; FAIL=$((FAIL+1)) ;;
+    esac ;;
+  *) printf 'FAIL  %s  [reason: %s]\n' "R2 /done family" "${R2_REASON:-<empty>}"; FAIL=$((FAIL+1)) ;;
+esac
+# Chunk D: the summary must also carry the changeset stat + an author list.
+case "$R2_REASON" in
+  *"changeset "*"files"*) ok=1 ;;
+  *) printf 'FAIL  %s  [no changeset stat line: %s]\n' "R2 changeset stat" "$R2_REASON"; FAIL=$((FAIL+1)); ok=0 ;;
+esac
+[ "${ok:-0}" -eq 1 ] && { printf 'PASS  %s\n' "R2 block reason includes changeset stat + author list"; PASS=$((PASS+1)); }
 
 # ============================================================================
 # Floor↔steering PARITY — the gate's reason FAMILY must agree with hc_state's
@@ -599,7 +615,9 @@ parity_assert() {
   local name="$1" state="$2" reason="$3" expect_state="$4" expect_prefix="$5"
   local ok=1 detail=""
   [ "$state" = "$expect_state" ] || { ok=0; detail="hc_state=$state (want $expect_state)"; }
-  case "$reason" in "$expect_prefix"*) : ;; *) ok=0; detail="$detail; reason=${reason:-<empty>} (want prefix $expect_prefix)";; esac
+  # Substring (not prefix) match: P1-a (#6) prepends a changeset summary to the
+  # S2 reason, so the /done family string is no longer at the START of the reason.
+  case "$reason" in *"$expect_prefix"*) : ;; *) ok=0; detail="$detail; reason=${reason:-<empty>} (want substring $expect_prefix)";; esac
   if [ "$ok" -eq 1 ]; then printf 'PASS  %s\n' "$name"; PASS=$((PASS+1))
   else printf 'FAIL  %s  [%s]\n' "$name" "$detail"; FAIL=$((FAIL+1)); fi
 }

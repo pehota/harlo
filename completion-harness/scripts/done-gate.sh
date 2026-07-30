@@ -138,9 +138,25 @@ if [ -n "$HC_BASE" ] && git -C "$PROJECT_DIR" diff --quiet "$HC_BASE" "$HEAD_SHA
   exit 0
 fi
 
+# --- changeset-missing block reason (P1-a, #6): prepend a content-ful summary -
+# The S2 "/done" reason below (Steps 4/4b/5) is a bare instruction. Prepend a
+# one-shot changeset summary so the message says WHAT is being gated — file/commit
+# counts and how many commits were authored THIS session (HC_BASE_ORIG, the
+# unadvanced base, so it can honestly read "0 authored this session" when every
+# commit is foreign). Guarded: if the helper is unavailable, S2_REASON degrades to
+# the bare string. HC_SESSION_ID lets hc_changeset_summary find the baseline mtime
+# for its session-authorship tally.
+S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
+if command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; then
+  HC_SESSION_ID="$SESSION_ID"
+  CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$HC_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+  [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
+$S2_REASON"
+fi
+
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
 if [ ! -f "$DONE_STATE_FILE" ]; then
-  block "run /done to verify the changeset (owns the Step-5 review)"
+  block "$S2_REASON"
 fi
 
 # --- Step 4b: done-state must satisfy the hard contract (schema) -> BLOCK ----
@@ -151,10 +167,10 @@ fi
 # this never fires on a jq-less host.
 if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
   if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" >/dev/null 2>&1; then
-    block "run /done to verify the changeset (owns the Step-5 review)"
+    block "$S2_REASON"
   fi
 else
-  block "run /done to verify the changeset (owns the Step-5 review)"
+  block "$S2_REASON"
 fi
 
 # --- Step 5: verified_sha != HEAD -> BLOCK ----------------------------------
@@ -163,7 +179,7 @@ fi
 # gate once HEAD has moved past the changeset it was recorded against.
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
-  block "run /done to verify the changeset (owns the Step-5 review)"
+  block "$S2_REASON"
 fi
 
 # --- Step 7: valid escalation present -> exit 0 -----------------------------
@@ -236,10 +252,10 @@ fi
 # A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
 if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
   if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
-    block "run /done to verify the changeset (owns the Step-5 review)"
+    block "$S2_REASON"
   fi
 else
-  block "run /done to verify the changeset (owns the Step-5 review)"
+  block "$S2_REASON"
 fi
 MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"

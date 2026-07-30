@@ -11,6 +11,7 @@
         "HC_MODE",
         "HC_TASK_KEY",
         "HC_BASE",
+        "HC_BASE_ORIG",
         "HC_WARN",
         "HC_TREE_BASE_FILE"
       ],
@@ -20,7 +21,10 @@
     },
     {
       "name": "hc_tree_status",
-      "globals": ["HC_TREE_BLOCKERS", "HC_TREE_WARNINGS"],
+      "globals": [
+        "HC_TREE_BLOCKERS",
+        "HC_TREE_WARNINGS"
+      ],
       "stdout": "none (sets globals)",
       "return_codes": "always 0",
       "sentinels": []
@@ -33,18 +37,29 @@
       "sentinels": []
     },
     {
+      "name": "hc_changeset_summary",
+      "globals": [],
+      "stdout": "multi-line changeset summary (stat + session-authorship + tree breakdown)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
       "name": "hc_review_blocking",
       "globals": [],
       "stdout": "integer count of blocking findings, or ERR",
       "return_codes": "always 0",
-      "sentinels": ["ERR"]
+      "sentinels": [
+        "ERR"
+      ]
     },
     {
       "name": "hc_review_coverage_gap",
       "globals": [],
       "stdout": "newline-separated uncovered files, empty=full coverage, or SKIP",
       "return_codes": "always 0",
-      "sentinels": ["SKIP"]
+      "sentinels": [
+        "SKIP"
+      ]
     },
     {
       "name": "hc_live_task_keys",
@@ -65,18 +80,26 @@
       "globals": [],
       "stdout": "OK on success, or ERR: <path>: <what>",
       "return_codes": "0 valid, 1 invalid/error",
-      "sentinels": ["OK", "ERR"]
+      "sentinels": [
+        "OK",
+        "ERR"
+      ]
     },
     {
       "name": "hc_state",
-      "globals": ["HC_STATE", "HC_NEXT"],
+      "globals": [
+        "HC_STATE",
+        "HC_NEXT"
+      ],
       "stdout": "none (sets globals; HC_STATE is S0/S1/S2/S4/S5)",
       "return_codes": "always 0",
       "sentinels": []
     },
     {
       "name": "hc_done_state_blocked",
-      "globals": ["HC_DONE_BLOCKED_REASON"],
+      "globals": [
+        "HC_DONE_BLOCKED_REASON"
+      ],
       "stdout": "none (sets globals)",
       "return_codes": "always 0",
       "sentinels": []

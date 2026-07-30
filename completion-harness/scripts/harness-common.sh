@@ -778,6 +778,90 @@ EOF
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc_changeset_summary <base_orig> <head> [proj]
+#
+# Human-readable one-shot summary of the changeset the gate is about to block
+# on, so a block message says WHAT is in the range instead of a bare "/done".
+# Uses base_orig (the UNADVANCED base — HC_BASE_ORIG) so it can honestly report
+# "0 authored this session" when every commit in the range is foreign (P1-a,
+# #6). Reuses the Chunk-A attribution predicate (hc__commit_authored).
+#
+# Prints up to three newline-joined lines:
+#   changeset <b7>..<h7> — N files, +add/-del
+#   C commits, A authored this session (Name n, ...)
+#   tree: B pre-existing, I new
+# The third line is emitted only when hc_tree_status globals are populated.
+#
+# Fail-safe: on any git failure it emits whatever partial lines it can and STILL
+# returns 0 — the caller always still blocks; this only enriches the reason.
+hc_changeset_summary() {
+  local base_orig="$1" head="$2"
+  local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local session_id="${HC_SESSION_ID:-}"
+
+  local b7 h7 out=""
+  b7=$(printf '%s' "$base_orig" | cut -c1-7 2>/dev/null)
+  h7=$(printf '%s' "$head" | cut -c1-7 2>/dev/null)
+
+  # Line 1: files + insertions/deletions from --shortstat.
+  local nfiles adds dels shortstat
+  if [ -n "$base_orig" ]; then
+    shortstat=$(git -C "$proj" diff --shortstat "$base_orig" "$head" 2>/dev/null)
+    nfiles=$(printf '%s' "$shortstat" | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' | head -1)
+    adds=$(printf '%s' "$shortstat" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' | head -1)
+    dels=$(printf '%s' "$shortstat" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' | head -1)
+  fi
+  [ -z "$nfiles" ] && nfiles=0
+  [ -z "$adds" ] && adds=0
+  [ -z "$dels" ] && dels=0
+  out="changeset ${b7}..${h7} — ${nfiles} files, +${adds}/-${dels}"
+
+  # Line 2: commit count + session-authored count with a compact author list.
+  if [ -n "$base_orig" ]; then
+    local revs c total=0 authored=0 authors="" name
+    revs=$(git -C "$proj" rev-list --reverse "$base_orig..$head" 2>/dev/null)
+    if [ -n "$revs" ]; then
+      # Tally committer names for the author list (all commits in range).
+      local names_raw
+      names_raw=$(git -C "$proj" log --format='%cn' "$base_orig..$head" 2>/dev/null | sort | uniq -c | sort -rn)
+      while IFS= read -r c; do
+        [ -z "$c" ] && continue
+        total=$((total + 1))
+        if hc__commit_authored "$c" "$session_id"; then
+          authored=$((authored + 1))
+        fi
+      done <<EOF
+$revs
+EOF
+      # Compact "Name n, ..." list from the tally.
+      local cnt nm
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        cnt=$(printf '%s' "$line" | awk '{print $1}')
+        nm=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
+        authors="${authors:+$authors, }${nm} ${cnt}"
+      done <<EOF
+$names_raw
+EOF
+    fi
+    out="$out
+${total} commits, ${authored} authored this session${authors:+ ($authors)}"
+  fi
+
+  # Line 3: tree breakdown from the last hc_tree_status call (if populated).
+  if [ -n "${HC_TREE_BLOCKERS+x}" ] || [ -n "${HC_TREE_WARNINGS+x}" ]; then
+    local nb ni
+    nb=$(printf '%s' "$HC_TREE_WARNINGS" | grep -c . 2>/dev/null)
+    ni=$(printf '%s' "$HC_TREE_BLOCKERS" | grep -c . 2>/dev/null)
+    out="$out
+tree: ${nb:-0} pre-existing, ${ni:-0} new"
+  fi
+
+  printf '%s' "$out"
+  return 0
+}
+
 # hc_tree_remediation — build the exact remediation text from the globals set by
 # the most recent hc_tree_status call. Names ONLY the blocking (introduced)
 # files. Pre-existing (warned-only) entries are intentionally NOT surfaced —
