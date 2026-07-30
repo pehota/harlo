@@ -5,6 +5,10 @@
 # history and can freely exercise both the clean-tree and dirty-tree branches.
 
 SCRIPT="$(cd "$(dirname "$0")/../scripts" && pwd)/done-write-state.sh"
+# Source harness-common.sh for hc_validate + HC_CONTRACTS_DIR (used by the plan-
+# fold cases to validate the extended done-state schema).
+# shellcheck source=/dev/null
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh" 2>/dev/null
 PASS=0
 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -405,6 +409,62 @@ if [ "$RC" -eq 0 ] && [ -f "$OUT13A" ] && [ "$OUTPATH" = "$OUT13A" ]; then
   ok "matching id (session mode, .sha present) writes normally"
 else
   bad "matching-id write failed (rc=$RC, out=$OUTPATH)"
+fi
+
+# --- 14. plan fold: valid done-plan for the task_key → done-state gets .plan --
+# Seed a valid done-plan keyed by the session task_key and confirm the writer
+# folds it into the done-state as .plan (evidence). Uses sess-abc123 (base=REAL..
+# well, COV_HEAD is HEAD now; its files_reviewed covers the changeset).
+mkdir -p "$TMP/.claude/.harness/done-plan"
+PLAN_TASK_KEY="session-sess-plan"
+seed_sha "sess-plan"
+echo "$COV_HEAD" > "$TMP/.claude/.harness/baselines/sess-plan.sha"
+cat > "$TMP/.claude/.harness/done-plan/${PLAN_TASK_KEY}.json" <<JSON
+{"contract_version":1,"task_key":"${PLAN_TASK_KEY}","steps":[{"id":"0","title":"Preflight","status":"applicable","ref":"dod-protocol.md#step-0"},{"id":"2-lint","title":"Lint","status":"excluded","ref":"dod-protocol.md#step-2-lint","reason":"no lint command configured"}]}
+JSON
+printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["cov1.txt","cov2.txt"],"findings":[]}\n' "$COV_HEAD" > "$TMP/.claude/.harness/review-log/$COV_HEAD.json"
+PLAN_DONE="$TMP/.claude/.harness/done-state/${PLAN_TASK_KEY}.json"
+rm -f "$PLAN_DONE"
+OUTPATH=$(printf '%s' "$cov_payload" | bash "$SCRIPT" "sess-plan")
+RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$PLAN_DONE" ] && jq -e '.plan.contract_version == 1 and (.plan.steps|length==2)' "$PLAN_DONE" >/dev/null 2>&1; then
+  ok "valid done-plan folded into done-state .plan"
+else
+  bad "plan fold failed (rc=$RC, out=$OUTPATH, plan=$(jq -c '.plan' "$PLAN_DONE" 2>/dev/null))"
+fi
+# the folded done-state still validates against the (extended) done-state schema.
+if hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$PLAN_DONE" >/dev/null 2>&1; then
+  ok "done-state WITH .plan validates against done-state schema"
+else
+  bad "done-state with plan failed schema: $(hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$PLAN_DONE" 2>&1)"
+fi
+
+# --- 15. NO plan file → writer succeeds, NO .plan (fail-safe) ---------------
+seed_sha "sess-noplan"
+echo "$COV_HEAD" > "$TMP/.claude/.harness/baselines/sess-noplan.sha"
+rm -f "$TMP/.claude/.harness/done-plan/session-sess-noplan.json"
+NOPLAN_DONE="$TMP/.claude/.harness/done-state/session-sess-noplan.json"
+rm -f "$NOPLAN_DONE"
+OUTPATH=$(printf '%s' "$cov_payload" | bash "$SCRIPT" "sess-noplan")
+RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$NOPLAN_DONE" ] && jq -e 'has("plan") | not' "$NOPLAN_DONE" >/dev/null 2>&1; then
+  ok "no plan file → writer succeeds, no .plan field (fail-safe)"
+else
+  bad "no-plan case failed (rc=$RC, has_plan=$(jq -c 'has("plan")' "$NOPLAN_DONE" 2>/dev/null))"
+fi
+
+# --- 16. malformed plan file → writer succeeds, NO .plan --------------------
+seed_sha "sess-badplan"
+echo "$COV_HEAD" > "$TMP/.claude/.harness/baselines/sess-badplan.sha"
+printf 'not json{' > "$TMP/.claude/.harness/done-plan/session-sess-badplan.json"
+BADPLAN_DONE="$TMP/.claude/.harness/done-state/session-sess-badplan.json"
+rm -f "$BADPLAN_DONE"
+OUTPATH=$(printf '%s' "$cov_payload" | bash "$SCRIPT" "sess-badplan")
+RC=$?
+if [ "$RC" -eq 0 ] && [ -f "$BADPLAN_DONE" ] && jq -e 'has("plan") | not' "$BADPLAN_DONE" >/dev/null 2>&1; then
+  ok "malformed plan file → writer succeeds, no .plan field (evidence, never precondition)"
+else
+  bad "malformed-plan case failed (rc=$RC, has_plan=$(jq -c 'has("plan")' "$BADPLAN_DONE" 2>/dev/null))"
 fi
 
 echo

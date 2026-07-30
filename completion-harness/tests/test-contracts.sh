@@ -101,6 +101,38 @@ if ! vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-noncode-bad.json
   ok "done-config noncode_globs non-string items → nonzero"
 else bad "done-config noncode_globs non-string items → nonzero"; fi
 
+# --- done-plan schema (computed /done plan, #7) -----------------------------
+cat > "$TMP/done-plan.json" <<'JSON'
+{"contract_version":1,"task_key":"session-x","steps":[{"id":"0","title":"Preflight","status":"applicable","ref":"dod-protocol.md#step-0"},{"id":"2-lint","title":"Lint","status":"excluded","ref":"dod-protocol.md#step-2-lint","reason":"no lint command configured"}]}
+JSON
+if vok "$CONTRACTS/done-plan.schema.json" "$TMP/done-plan.json"; then
+  ok "done-plan minimal valid (applicable + excluded+reason) → 0"
+else bad "done-plan minimal valid → 0"; fi
+
+# done-plan INVALID: a step with a bad status enum → nonzero.
+cat > "$TMP/done-plan-bad.json" <<'JSON'
+{"contract_version":1,"task_key":"session-x","steps":[{"id":"0","title":"P","status":"maybe","ref":"dod-protocol.md#step-0"}]}
+JSON
+if ! vok "$CONTRACTS/done-plan.schema.json" "$TMP/done-plan-bad.json"; then
+  ok "done-plan bad status enum → nonzero"
+else bad "done-plan bad status enum → nonzero"; fi
+
+# done-plan INVALID: a step missing the required ref → nonzero.
+cat > "$TMP/done-plan-noref.json" <<'JSON'
+{"contract_version":1,"task_key":"session-x","steps":[{"id":"0","title":"P","status":"applicable"}]}
+JSON
+if ! vok "$CONTRACTS/done-plan.schema.json" "$TMP/done-plan-noref.json"; then
+  ok "done-plan step missing ref → nonzero"
+else bad "done-plan step missing ref → nonzero"; fi
+
+# done-state WITH a .plan field → still valid (optional evidence, #7).
+cat > "$TMP/done-state-plan.json" <<'JSON'
+{"contract_version":1,"session_id":"s","verified_sha":"h","tree_clean":true,"dod":{"sources":["b"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[],"plan":{"contract_version":1,"steps":[{"id":"0","title":"P","status":"applicable","ref":"dod-protocol.md#step-0"}]}}
+JSON
+if vok "$CONTRACTS/done-state.schema.json" "$TMP/done-state-plan.json"; then
+  ok "done-state WITH plan → 0"
+else bad "done-state WITH plan → 0"; fi
+
 cat > "$TMP/resolver.json" <<'JSON'
 {"contract_version":1,"mode":"task","task_key":"br-x","base":"abc","trunk":"main","branch":"x","warn":""}
 JSON

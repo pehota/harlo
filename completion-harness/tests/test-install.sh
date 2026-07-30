@@ -51,7 +51,7 @@ CL="$TMP/.claude"
 
 # --- scripts present + executable -------------------------------------------
 for s in done-gate.sh baseline-snapshot.sh done-detect.sh done-write-state.sh \
-         done-preflight.sh harness-common.sh harness-resolve.sh auto-branch.sh; do
+         done-triage.sh done-preflight.sh harness-common.sh harness-resolve.sh auto-branch.sh; do
   if [ -f "$CL/scripts/$s" ]; then
     ok "shipped scripts/$s"
   else
@@ -62,7 +62,7 @@ done
 # Executable bit — every shipped script EXCEPT harness-common.sh (SOURCED, stays
 # non-exec by install.sh's chmod list).
 for s in done-gate.sh baseline-snapshot.sh done-detect.sh done-write-state.sh \
-         done-preflight.sh harness-resolve.sh auto-branch.sh; do
+         done-triage.sh done-preflight.sh harness-resolve.sh auto-branch.sh; do
   if [ -x "$CL/scripts/$s" ]; then
     ok "scripts/$s is executable"
   else
@@ -73,7 +73,7 @@ done
 # --- contracts present + valid JSON -----------------------------------------
 for c in shell-abi.json base-dod.schema.json done-config.schema.json \
          done-state.schema.json resolver-output.schema.json review-log.schema.json \
-         base-dod.json; do
+         done-plan.schema.json base-dod.json; do
   if [ -f "$CL/contracts/$c" ]; then
     if jq empty "$CL/contracts/$c" >/dev/null 2>&1; then
       ok "shipped contracts/$c (valid JSON)"
@@ -112,8 +112,45 @@ if [ -f "$SKILL" ]; then
   else
     bad "installed SKILL.md references \$CLAUDE_PROJECT_DIR/.claude/scripts/" "not found"
   fi
+
+  # Thin SKILL.md must carry the FALLBACK clause (#7): references dod-protocol.md
+  # + instructs running ALL steps when triage fails / prints nothing.
+  if grep -q 'dod-protocol.md' "$SKILL"; then
+    ok "thin SKILL.md references dod-protocol.md"
+  else
+    bad "thin SKILL.md references dod-protocol.md" "not found"
+  fi
+  if grep -qi 'ALL steps' "$SKILL"; then
+    ok "thin SKILL.md fallback names 'ALL steps'"
+  else
+    bad "thin SKILL.md fallback names 'ALL steps'" "not found"
+  fi
+  if grep -q 'done-triage.sh' "$SKILL"; then
+    ok "thin SKILL.md invokes done-triage.sh"
+  else
+    bad "thin SKILL.md invokes done-triage.sh" "not found"
+  fi
 else
   bad "shipped skills/done/SKILL.md" "missing"
+fi
+
+# --- dod-protocol.md present + path rewrite applied -------------------------
+PROTO="$CL/skills/done/dod-protocol.md"
+if [ -f "$PROTO" ]; then
+  ok "shipped skills/done/dod-protocol.md"
+  if grep -q 'CLAUDE_PLUGIN_ROOT' "$PROTO"; then
+    bad "installed dod-protocol.md has NO \${CLAUDE_PLUGIN_ROOT} (rewrite applied)" \
+      "$(grep -c 'CLAUDE_PLUGIN_ROOT' "$PROTO") occurrences remain"
+  else
+    ok "installed dod-protocol.md has NO \${CLAUDE_PLUGIN_ROOT} (rewrite applied)"
+  fi
+  if grep -q '\$CLAUDE_PROJECT_DIR/.claude/' "$PROTO"; then
+    ok "installed dod-protocol.md references \$CLAUDE_PROJECT_DIR/.claude/ (resolved root)"
+  else
+    bad "installed dod-protocol.md references \$CLAUDE_PROJECT_DIR/.claude/" "not found"
+  fi
+else
+  bad "shipped skills/done/dod-protocol.md" "missing"
 fi
 
 # ---------------------------------------------------------------------------
