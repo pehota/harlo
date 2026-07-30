@@ -1,7 +1,8 @@
 ---
 name: done
 description: "Completion harness executor. Runs the Definition-of-Done checklist in order — config detect, tests with before/after checkpoint, app startup, task-specific checks, changeset-scoped code review — then writes the per-session done-state that clears the Stop gate. Invoke when finishing a task or when the Stop hook blocks with 'Run /done'."
-user-invocable: false
+user-invocable: true
+argument-hint: '(no args) — verifies the current changeset and writes done-state'
 ---
 
 # /done — Completion Harness Executor (thin entry point)
