@@ -233,6 +233,20 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   fi
 fi
 
+# --- fold the triage plan as evidence (additive, non-blocking) --------------
+# If a triage plan exists for this task_key AND is valid JSON, fold it into the
+# done-state as a `.plan` field — audit-only proof of which steps applied. It is
+# NEVER a precondition: an absent/malformed plan yields null → no plan field, and
+# the write still succeeds.
+PLAN_JSON="null"
+PLAN_FILE="$PROJECT_DIR/.claude/.harness/done-plan/${HC_TASK_KEY}.json"
+if [ -f "$PLAN_FILE" ]; then
+  CAND=$(jq -c '.' "$PLAN_FILE" 2>/dev/null)
+  if [ -n "$CAND" ]; then
+    PLAN_JSON="$CAND"
+  fi
+fi
+
 # --- merge injected facts over the payload (facts win) ----------------------
 DONE_STATE_DIR="$PROJECT_DIR/.claude/.harness/done-state"
 mkdir -p "$DONE_STATE_DIR" 2>/dev/null
@@ -241,8 +255,10 @@ OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 RESULT=$(printf '%s' "$PAYLOAD" | jq \
   --arg sid "$SESSION_ID" \
   --arg sha "$VERIFIED_SHA" \
-  --argjson clean "$TREE_CLEAN" '
+  --argjson clean "$TREE_CLEAN" \
+  --argjson plan "$PLAN_JSON" '
   . * {contract_version: 1, session_id: $sid, verified_sha: $sha, tree_clean: $clean}
+  | (if $plan != null then .plan = $plan else . end)
 ' 2>/dev/null)
 
 if [ -z "$RESULT" ]; then

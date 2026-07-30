@@ -41,6 +41,7 @@ cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
 cp "$SCRIPT_DIR/scripts/baseline-snapshot.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh"
 cp "$SCRIPT_DIR/scripts/done-detect.sh"       "$CLAUDE_DIR/scripts/done-detect.sh"
 cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-state.sh"
+cp "$SCRIPT_DIR/scripts/done-triage.sh"       "$CLAUDE_DIR/scripts/done-triage.sh"
 cp "$SCRIPT_DIR/scripts/done-preflight.sh"    "$CLAUDE_DIR/scripts/done-preflight.sh"
 # Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
 # harness-resolve.sh is the executable wrapper; auto-branch.sh is the
@@ -57,6 +58,11 @@ cp "$SCRIPT_DIR/scripts/auto-branch.sh"       "$CLAUDE_DIR/scripts/auto-branch.s
 # State refs ($CLAUDE_PROJECT_DIR/.claude/.harness/...) are untouched.
 sed 's#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g' \
     "$SCRIPT_DIR/skills/done/SKILL.md" > "$CLAUDE_DIR/skills/done/SKILL.md"
+# The full DoD reference (dod-protocol.md) ships beside SKILL.md, with the same
+# plugin-root rewrite so its ${CLAUDE_PLUGIN_ROOT}/scripts/... references resolve
+# under the mirrored .claude/ layout in the non-plugin install.
+sed 's#${CLAUDE_PLUGIN_ROOT}#$CLAUDE_PROJECT_DIR/.claude#g' \
+    "$SCRIPT_DIR/skills/done/dod-protocol.md" > "$CLAUDE_DIR/skills/done/dod-protocol.md"
 # Base DoD → committed, portable artifact under .claude/dod/ (mirrors the
 # plugin's dod/; NOT the gitignored .claude/.harness/). Step 0.5 of /done reads
 # it. DOD.md (the harness project's own meta DoD) is intentionally NOT copied —
@@ -68,6 +74,7 @@ cp "$SCRIPT_DIR/contracts/"*.json "$CLAUDE_DIR/contracts/"
 echo "  copied contracts/"
 chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
          "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
+         "$CLAUDE_DIR/scripts/done-triage.sh" \
          "$CLAUDE_DIR/scripts/done-preflight.sh" \
          "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"

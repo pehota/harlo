@@ -82,6 +82,29 @@
     "escalation": {
       "type": ["object", "null"],
       "additionalProperties": true
+    },
+    "plan": {
+      "type": "object",
+      "required": ["contract_version", "steps"],
+      "properties": {
+        "contract_version": { "const": 1 },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "status", "ref"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "status": { "enum": ["applicable", "excluded"] },
+              "ref": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
