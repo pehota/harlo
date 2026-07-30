@@ -44,6 +44,17 @@
       "sentinels": []
     },
     {
+      "name": "hc_changeset_is_code",
+      "globals": [],
+      "stdout": "code | noncode | empty",
+      "return_codes": "0 code (or any error), 1 noncode, 2 empty",
+      "sentinels": [
+        "code",
+        "noncode",
+        "empty"
+      ]
+    },
+    {
       "name": "hc_review_blocking",
       "globals": [],
       "stdout": "integer count of blocking findings, or ERR",

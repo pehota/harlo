@@ -32,7 +32,7 @@ make_repo() {
   git -C "$r" config user.email t@t
   git -C "$r" config user.name t
   printf '.claude/\n' > "$r/.gitignore"
-  printf 'a\n' > "$r/a.txt"
+  printf 'a\n' > "$r/a.js"
   git -C "$r" add -A
   git -C "$r" commit -qm c1
   mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" "$r/.claude/.harness/review-log"
@@ -68,7 +68,7 @@ echo "== test-tree-status =="
 # ============================================================================
 R=$(make_repo); SID=deadlock
 # pre-existing untracked file (top-level, NOT under .claude/)
-printf 'pre\n' > "$R/preexisting.txt"
+printf 'pre\n' > "$R/preexisting.js"
 # baseline .dirty records it as present at session start
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"
 seed_green_done "$R" "$SID"
@@ -79,7 +79,7 @@ else
   ok "DEADLOCK RESOLVED: pre-existing untracked file at baseline → gate ALLOWs"
 fi
 # NEW: the ALLOW output must not mention the pre-existing file (never surfaced).
-if printf '%s' "$OUT" | grep -q "preexisting.txt"; then
+if printf '%s' "$OUT" | grep -q "preexisting.js"; then
   bad "ALLOW output surfaced the pre-existing file (should be silent). out=$OUT"
 else
   ok "NO-SURFACE: ALLOW output makes no mention of the pre-existing file"
@@ -94,17 +94,17 @@ rm -rf "$R"
 # it FAILS on the old code (clause present) and PASSES on the new.
 # ============================================================================
 R=$(make_repo); SID=nosurface
-printf 'pre\n' > "$R/preexisting.txt"                        # pre-existing untracked
+printf 'pre\n' > "$R/preexisting.js"                        # pre-existing untracked
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"  # recorded at baseline
 seed_green_done "$R" "$SID"
-printf 'introduced\n' > "$R/introduced.txt"                  # introduced blocker (after baseline)
+printf 'introduced\n' > "$R/introduced.js"                  # introduced blocker (after baseline)
 OUT=$(run_gate "$R" "$SID")
-if is_block "$OUT" && printf '%s' "$OUT" | grep -q "introduced.txt"; then
+if is_block "$OUT" && printf '%s' "$OUT" | grep -q "introduced.js"; then
   ok "NO-SURFACE: gate BLOCKs and block reason names the introduced file"
 else
   bad "gate did not block/name introduced file with a coexisting pre-existing entry. out=$OUT"
 fi
-if printf '%s' "$OUT" | grep -qi "pre-existing\|only warned\|preexisting.txt"; then
+if printf '%s' "$OUT" | grep -qi "pre-existing\|only warned\|preexisting.js"; then
   bad "block reason surfaced the pre-existing entry (should be silent). out=$OUT"
 else
   ok "NO-SURFACE: block reason makes NO mention of the pre-existing entry"
@@ -119,7 +119,7 @@ R=$(make_repo); SID=newuntracked
 : > "$R/.claude/.harness/baselines/$SID.dirty"
 seed_green_done "$R" "$SID"
 # agent introduces a new untracked file AFTER baseline
-printf 'new\n' > "$R/introduced.txt"
+printf 'new\n' > "$R/introduced.js"
 OUT=$(run_gate "$R" "$SID")
 if is_block "$OUT"; then
   ok "NOT EASIER: new untracked file (introduced this session) → gate BLOCKs"
@@ -134,7 +134,7 @@ rm -rf "$R"
 R=$(make_repo); SID=trackedmod
 : > "$R/.claude/.harness/baselines/$SID.dirty"   # clean at baseline
 seed_green_done "$R" "$SID"
-printf 'modified\n' > "$R/a.txt"                 # modify a tracked file now
+printf 'modified\n' > "$R/a.js"                 # modify a tracked file now
 OUT=$(run_gate "$R" "$SID")
 if is_block "$OUT"; then
   ok "NOT EASIER: tracked-modified-since-baseline file → gate BLOCKs"
@@ -147,7 +147,7 @@ rm -rf "$R"
 # untracked_policy = "strict" → ANY untracked file blocks even if pre-existing
 # ============================================================================
 R=$(make_repo); SID=strict
-printf 'pre\n' > "$R/preexisting.txt"
+printf 'pre\n' > "$R/preexisting.js"
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"  # recorded at baseline
 # set strict policy
 cat > "$R/.claude/done-config.json" <<'JSON'
@@ -179,7 +179,7 @@ printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","fil
 cat > "$R/.claude/done-config.json" <<'JSON'
 {"detected":{},"overrides":{},"baseline_snapshot":false,"untracked_policy":"baseline"}
 JSON
-printf 'introduced\n' > "$R/new.txt"              # introduced blocker
+printf 'introduced\n' > "$R/new.js"              # introduced blocker
 ERR=$(printf '%s' "$GREEN_PAYLOAD" | CLAUDE_PROJECT_DIR="$R" bash "$WRITER" "$SID" 2>&1)
 RC=$?
 if [ "$RC" -ne 0 ] && [ ! -f "$R/.claude/.harness/done-state/session-$SID.json" ] && echo "$ERR" | grep -qi "dirty"; then
@@ -191,7 +191,7 @@ rm -rf "$R"
 
 # 5b — writer WRITES when only a pre-existing (warned) entry is present.
 R=$(make_repo); SID=wr-ok
-printf 'pre\n' > "$R/preexisting.txt"             # pre-existing untracked file
+printf 'pre\n' > "$R/preexisting.js"             # pre-existing untracked file
 HEAD=$(git -C "$R" rev-parse HEAD)
 printf '%s\n' "$HEAD" > "$R/.claude/.harness/baselines/$SID.sha"
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"  # recorded at baseline
@@ -251,7 +251,7 @@ rm -rf "$R"
 # NOT be surfaced in the report. Winnable, and output has NO "pre-existing" /
 # "warned" line. FAILS on old code (it printed the warning line), PASSES on new.
 R=$(make_repo); SID=pf-nosurface
-printf 'pre\n' > "$R/preexisting.txt"                        # pre-existing untracked
+printf 'pre\n' > "$R/preexisting.js"                        # pre-existing untracked
 printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/$SID.sha"
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"  # recorded at baseline
 cat > "$R/.claude/done-config.json" <<'JSON'
@@ -264,7 +264,7 @@ if [ "$RC" -eq 0 ] && echo "$OUT" | grep -qi "winnable"; then
 else
   bad "preflight not winnable with pre-existing entry (rc=$RC): $OUT"
 fi
-if echo "$OUT" | grep -qi "pre-existing\|warned\|preexisting.txt"; then
+if echo "$OUT" | grep -qi "pre-existing\|warned\|preexisting.js"; then
   bad "PREFLIGHT surfaced the pre-existing entry (should be silent). out=$OUT"
 else
   ok "PREFLIGHT NO-SURFACE: report makes NO mention of pre-existing entries"
@@ -308,7 +308,7 @@ PF_BASE=$(git -C "$R" rev-parse HEAD)          # baseline = c1
 # Foreign commit (different committer identity) atop the baseline.
 GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign Dev" \
   GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign Dev" \
-  bash -c "cd '$R' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+  bash -c "cd '$R' && echo x > foreign.js && git add foreign.js && git commit -qm foreign"
 printf '%s\n' "$PF_BASE" > "$R/.claude/.harness/baselines/$SID.sha"
 git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$SID.dirty"   # clean baseline
 cat > "$R/.claude/done-config.json" <<'JSON'
@@ -413,10 +413,10 @@ rm -rf "$R"
 #
 # The tree baseline is pinned ONCE per task (tree-base/br-<branch>.dirty) at the
 # first session on the branch and is NEVER re-seeded by later sessions — so a
-# session-B SessionStart cannot whitelist foo.txt as "pre-existing".
+# session-B SessionStart cannot whitelist foo.js as "pre-existing".
 #
 # OLD (buggy) code keyed .dirty by raw session id and re-seeded it every
-# SessionStart → session B's snapshot recorded `?? foo.txt` as pre-existing →
+# SessionStart → session B's snapshot recorded `?? foo.js` as pre-existing →
 # WARNING → gate ALLOWED. This case FAILS on the old code and PASSES on the new.
 # ============================================================================
 # make_task_repo: fresh repo, trunk main + confident-trunk config, on branch feat
@@ -427,7 +427,7 @@ make_task_repo() {
   git -C "$r" config user.email t@t
   git -C "$r" config user.name t
   printf '.claude/\n' > "$r/.gitignore"
-  printf 'a\n' > "$r/a.txt"
+  printf 'a\n' > "$r/a.js"
   git -C "$r" add -A
   git -C "$r" commit -qm c1
   mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" "$r/.claude/.harness/review-log"
@@ -459,34 +459,34 @@ seed_green_done_task() {
 
 R=$(make_task_repo)
 # Session A: SessionStart pins the task tree-base (clean tree at fork), then the
-# agent creates foo.txt (its own work) and leaves it uncommitted.
+# agent creates foo.js (its own work) and leaves it uncommitted.
 run_snapshot "$R" sessA
-printf 'foo\n' > "$R/foo.txt"
-# Session B: a DIFFERENT session id runs SessionStart AFTER foo.txt exists. On
-# old code this re-seeds sessB.dirty with `?? foo.txt`; on new code the pinned
+printf 'foo\n' > "$R/foo.js"
+# Session B: a DIFFERENT session id runs SessionStart AFTER foo.js exists. On
+# old code this re-seeds sessB.dirty with `?? foo.js`; on new code the pinned
 # tree-base/br-feat.dirty is untouched.
 run_snapshot "$R" sessB
-# The pin must remain task-scoped and must NOT contain foo.txt.
+# The pin must remain task-scoped and must NOT contain foo.js.
 if [ -f "$R/.claude/.harness/tree-base/br-feat.dirty" ] \
-   && ! grep -q 'foo.txt' "$R/.claude/.harness/tree-base/br-feat.dirty" 2>/dev/null; then
-  ok "TASK PIN: tree-base/br-feat.dirty pinned once at fork, does NOT contain foo.txt"
+   && ! grep -q 'foo.js' "$R/.claude/.harness/tree-base/br-feat.dirty" 2>/dev/null; then
+  ok "TASK PIN: tree-base/br-feat.dirty pinned once at fork, does NOT contain foo.js"
 else
-  bad "task tree-base missing or re-seeded with foo.txt: $(cat "$R/.claude/.harness/tree-base/br-feat.dirty" 2>/dev/null)"
+  bad "task tree-base missing or re-seeded with foo.js: $(cat "$R/.claude/.harness/tree-base/br-feat.dirty" 2>/dev/null)"
 fi
 # Session B commits some REAL work (moves HEAD past the fork so the gate reaches
 # Step 6), writes a green done-state under br-feat + a HEAD review-log, and
-# leaves foo.txt uncommitted.
-printf 'real\n' > "$R/real.txt"
-git -C "$R" add real.txt
+# leaves foo.js uncommitted.
+printf 'real\n' > "$R/real.js"
+git -C "$R" add real.js
 git -C "$R" commit -qm "real work"
 printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/sessB.sha"
 seed_green_done_task "$R" sessB
-# The gate MUST block on the agent's own uncommitted foo.txt.
+# The gate MUST block on the agent's own uncommitted foo.js.
 OUT=$(run_gate "$R" sessB)
 if is_block "$OUT"; then
-  ok "TASK INVARIANT 2: agent's own uncommitted foo.txt (introduced after fork) BLOCKS across sessions"
+  ok "TASK INVARIANT 2: agent's own uncommitted foo.js (introduced after fork) BLOCKS across sessions"
 else
-  bad "CARRYOVER BUG: foo.txt whitelisted by session B → gate ALLOWED. out=$OUT"
+  bad "CARRYOVER BUG: foo.js whitelisted by session B → gate ALLOWED. out=$OUT"
 fi
 rm -rf "$R"
 
@@ -500,7 +500,7 @@ run_snapshot "$R" sA
 PIN="$R/.claude/.harness/tree-base/br-feat.dirty"
 BEFORE=$(cat "$PIN" 2>/dev/null)
 # Dirty the tree, then run a second session's SessionStart.
-printf 'x\n' > "$R/introduced-later.txt"
+printf 'x\n' > "$R/introduced-later.js"
 run_snapshot "$R" sB
 AFTER=$(cat "$PIN" 2>/dev/null)
 if [ "$BEFORE" = "$AFTER" ]; then
@@ -545,20 +545,20 @@ if [ -f "$R/.claude/.harness/tree-base/$KEY.dirty" ] && [ ! -s "$R/.claude/.harn
 else
   bad "auto-branch did not pin a clean task tree-base ($KEY): $(cat "$R/.claude/.harness/tree-base/$KEY.dirty" 2>/dev/null)"
 fi
-# Agent now creates foo.txt (its own work), uncommitted.
-printf 'foo\n' > "$R/foo.txt"
+# Agent now creates foo.js (its own work), uncommitted.
+printf 'foo\n' > "$R/foo.js"
 # Session B: a DIFFERENT session's first task-mode SessionStart. Must NOT re-seed
-# the pin (it already exists) → foo.txt stays absent from the pin.
+# the pin (it already exists) → foo.js stays absent from the pin.
 run_snapshot "$R" sidB
-if [ -f "$R/.claude/.harness/tree-base/$KEY.dirty" ] && ! grep -q 'foo.txt' "$R/.claude/.harness/tree-base/$KEY.dirty" 2>/dev/null; then
-  ok "AUTO-BRANCH: session B did NOT re-seed the pin with foo.txt"
+if [ -f "$R/.claude/.harness/tree-base/$KEY.dirty" ] && ! grep -q 'foo.js' "$R/.claude/.harness/tree-base/$KEY.dirty" 2>/dev/null; then
+  ok "AUTO-BRANCH: session B did NOT re-seed the pin with foo.js"
 else
-  bad "session B re-seeded the auto-branch pin with foo.txt: $(cat "$R/.claude/.harness/tree-base/$KEY.dirty" 2>/dev/null)"
+  bad "session B re-seeded the auto-branch pin with foo.js: $(cat "$R/.claude/.harness/tree-base/$KEY.dirty" 2>/dev/null)"
 fi
 # Commit real work (move HEAD past fork), seed green done-state keyed by the
-# auto-branch KEY + a HEAD review-log, leave foo.txt uncommitted.
-printf 'real\n' > "$R/real.txt"
-git -C "$R" add real.txt
+# auto-branch KEY + a HEAD review-log, leave foo.js uncommitted.
+printf 'real\n' > "$R/real.js"
+git -C "$R" add real.js
 git -C "$R" commit -qm "real work"
 HEADB=$(git -C "$R" rev-parse HEAD)
 printf '%s\n' "$HEADB" > "$R/.claude/.harness/baselines/sidB.sha"
@@ -568,9 +568,9 @@ printf '{"session_id":"sidB","verified_sha":"%s","tree_clean":true,"tests":{"exi
   > "$R/.claude/.harness/done-state/$KEY.json"
 OUT=$(run_gate "$R" sidB)
 if is_block "$OUT"; then
-  ok "AUTO-BRANCH INVARIANT 2: agent's own uncommitted foo.txt BLOCKS across sessions"
+  ok "AUTO-BRANCH INVARIANT 2: agent's own uncommitted foo.js BLOCKS across sessions"
 else
-  bad "AUTO-BRANCH CARRYOVER BUG: foo.txt whitelisted → gate ALLOWED. out=$OUT"
+  bad "AUTO-BRANCH CARRYOVER BUG: foo.js whitelisted → gate ALLOWED. out=$OUT"
 fi
 rm -rf "$R"
 
@@ -585,7 +585,7 @@ git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/.harness/\n' > "$R/.gitignore"   # track .claude/done-config.json
 mkdir -p "$R/.claude/.harness/baselines"
 printf '{"untracked_policy":"baseline"}\n' > "$R/.claude/done-config.json"
-printf 'a\n' > "$R/a.txt"
+printf 'a\n' > "$R/a.js"
 git -C "$R" add -A; git -C "$R" commit -qm c1
 : > "$R/.claude/.harness/baselines/sidC.dirty"                     # empty tree baseline
 printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/sidC.sha"
@@ -606,12 +606,12 @@ case $? in
   *) bad "D1: done-config.json not classified as warning" ;;
 esac
 # a real introduced file still blocks even with done-config.json also dirty
-printf 'new\n' > "$R/introduced.txt"
+printf 'new\n' > "$R/introduced.js"
 (
   cd "$R"; export CLAUDE_PROJECT_DIR="$R"
   source "$SCRIPTS/harness-common.sh"
   hc_resolve sidC; hc_tree_status sidC
-  printf '%s' "$HC_TREE_BLOCKERS" | grep -Fq 'introduced.txt'
+  printf '%s' "$HC_TREE_BLOCKERS" | grep -Fq 'introduced.js'
 ) && ok "D1: genuine introduced file STILL blocks (exemption is scoped)" \
    || bad "D1: introduced file no longer blocks (exemption too broad)"
 rm -rf "$R"

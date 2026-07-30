@@ -112,6 +112,31 @@ if [ -n "$HC_BASE" ] && [ "$HC_BASE" = "$HEAD_SHA" ]; then
   fi
 fi
 
+# --- Step 3a: out-of-scope non-code changeset -> silent stand down (#5) ------
+# The harness governs CODING changesets only. If a changeset EXISTS (committed
+# range base..HEAD non-empty OR introduced tree dirt) but EVERY changed file is
+# recognised non-code (prose/docs/images per noncode_globs), the harness stands
+# down completely: exit 0 with EMPTY stdout (no block JSON) — mirroring hc_state
+# S_OOS. Placed AFTER Step 3 (empty-changeset quiet-exit) and BEFORE Step 3b so
+# that introduced CODE dirt still blocks: hc_changeset_is_code returns NON-CODE
+# ONLY when the WHOLE changeset (union of committed range + introduced paths) is
+# non-code, so any code file — committed or introduced-uncommitted — keeps us in
+# the gate. hc_tree_status must run first (populates HC_TREE_BLOCKERS, the
+# introduced set the predicate unions in); the result is reused by Step 3b below.
+# Fail-safe: hc_changeset_is_code returns "code" on ANY error → we do NOT exit →
+# normal gating. An unavailable predicate/classifier also falls through (safe).
+TREE_STATUS_DONE=0
+if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+  hc_tree_status "$SESSION_ID" 2>/dev/null
+  TREE_STATUS_DONE=1
+fi
+if command -v hc_changeset_is_code >/dev/null 2>&1 || type hc_changeset_is_code >/dev/null 2>&1; then
+  SCOPE=$(hc_changeset_is_code "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+  if [ "$SCOPE" = "noncode" ]; then
+    exit 0
+  fi
+fi
+
 # --- Step 3b: working tree has INTRODUCED changes -> BLOCK ------------------
 # Re-check the tree live at gate time via the shared baseline-relative
 # classifier (hc_tree_status). Only changes INTRODUCED this session (not present
@@ -122,8 +147,13 @@ fi
 # with the S1 ("finish the slice") reason — aligned with hc_state, which
 # evaluates the introduced-dirty guard FIRST. A clean tree makes this a no-op and
 # the done-state checks below proceed exactly as before. Also enforced before
-# escalation (Step 7).
-if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+# escalation (Step 7). hc_tree_status already ran in Step 3a (TREE_STATUS_DONE);
+# only call it here if that path was unavailable.
+if [ "$TREE_STATUS_DONE" -eq 1 ]; then
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    block "finish the slice ($(hc_tree_remediation)), then commit"
+  fi
+elif command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     block "finish the slice ($(hc_tree_remediation)), then commit"

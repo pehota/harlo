@@ -213,7 +213,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
         auto_branch: true,
         branch_prefix: "task/",
         untracked_policy: "baseline",
-        min_review_level: "high"
+        min_review_level: "high",
+        noncode_globs: ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"]
       }
     ' > "$TMP" 2>/dev/null
     # Write-time gate: only publish a contract-valid config.
@@ -267,6 +268,7 @@ else
         | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
         | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
         | (if has("min_review_level") then . else .min_review_level = "high" end)
+        | (if has("noncode_globs") then . else .noncode_globs = ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"] end)
         | (if has("start_check_cmd") then . else .start_check_cmd = null end)
         | (if has("start_timeout") then . else .start_timeout = 30 end)
       ' "$CONFIG_FILE" > "$TMP" 2>/dev/null

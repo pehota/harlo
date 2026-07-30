@@ -190,6 +190,67 @@ OUT=$(run_state "$DIR" "sess-s0")
 assert_eq   "S0 state"     "$(split_state "$OUT")" "S0"
 assert_empty "S0 next"     "$(split_next "$OUT")"
 
+# enable_noncode_globs <dir> — turn ON the scope allowlist for THIS repo (the
+# shared fixture config ships noncode_globs=[] so every OTHER case keeps the
+# pre-#5 "everything is code" behavior). Committed onto the BASE (main) so the
+# config edit is part of the anchor, not the changeset under test (a
+# .claude/done-config.json edit is not matched by the globs and would otherwise
+# show up as a code file in base..HEAD). Covers the extensions used below.
+enable_noncode_globs() {
+  local dir="$1"
+  git -C "$dir" checkout -q main
+  jq '.noncode_globs = ["*.md","*.txt"]' "$dir/.claude/done-config.json" \
+    > "$dir/.claude/done-config.json.tmp" && mv "$dir/.claude/done-config.json.tmp" "$dir/.claude/done-config.json"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "config: noncode_globs"
+  git -C "$dir" checkout -q feature/x
+  git -C "$dir" rebase -q main >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# CASE S_OOS-commit — committed changeset of ONLY non-code files → out-of-scope.
+#   Exercises the committed-range branch of the predicate and the S_OOS
+#   placement (after S0, before S1/S2). noncode_globs enabled for this repo.
+# ---------------------------------------------------------------------------
+echo
+echo "--- CASE S_OOS-commit: out-of-scope (committed .md/.txt only) ---"
+DIR=$(make_repo task)
+enable_noncode_globs "$DIR"
+commit_change "$DIR" "notes.md"   "# notes"   >/dev/null
+commit_change "$DIR" "readme.txt" "hello"     >/dev/null
+OUT=$(run_state "$DIR" "sess-oos-commit")
+assert_eq    "S_OOS-commit state" "$(split_state "$OUT")" "S_OOS"
+assert_empty "S_OOS-commit next"  "$(split_next "$OUT")"
+
+# ---------------------------------------------------------------------------
+# CASE S_OOS-dirt — introduced-tree .md dirt only (uncommitted) → out-of-scope.
+#   Proves the introduced-set (HC_TREE_BLOCKERS) branch of the predicate and
+#   that non-code dirt stands down instead of landing in S1.
+# ---------------------------------------------------------------------------
+echo
+echo "--- CASE S_OOS-dirt: out-of-scope (introduced .md dirt only) ---"
+DIR=$(make_repo task)
+enable_noncode_globs "$DIR"
+echo "# wip notes" > "$DIR/wip.md"   # untracked non-code → introduced blocker, but non-code
+OUT=$(run_state "$DIR" "sess-oos-dirt")
+assert_eq    "S_OOS-dirt state" "$(split_state "$OUT")" "S_OOS"
+assert_empty "S_OOS-dirt next"  "$(split_next "$OUT")"
+
+# ---------------------------------------------------------------------------
+# CASE S1-mixed — introduced dirt with a .sh among .md → CODE → S1 (still gates).
+#   Any code file keeps the changeset in scope; scope check must NOT swallow it
+#   even though noncode_globs would classify the .md alone as non-code.
+# ---------------------------------------------------------------------------
+echo
+echo "--- CASE S1-mixed: code file among non-code dirt → S1 ---"
+DIR=$(make_repo task)
+enable_noncode_globs "$DIR"
+echo "# doc"       > "$DIR/doc.md"
+echo "echo hi"     > "$DIR/script.sh"
+OUT=$(run_state "$DIR" "sess-s1-mixed")
+assert_eq       "S1-mixed state" "$(split_state "$OUT")" "S1"
+assert_nonempty "S1-mixed next"  "$(split_next "$OUT")"
+
 # ---------------------------------------------------------------------------
 # CASE S1 — introduced tree blocker (uncommitted new file) → working.
 # ---------------------------------------------------------------------------

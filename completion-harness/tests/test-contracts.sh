@@ -85,6 +85,22 @@ if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config.json"; then
   ok "done-config minimal valid → 0"
 else bad "done-config minimal valid → 0"; fi
 
+# done-config WITH noncode_globs (array of strings) → valid (#5).
+cat > "$TMP/done-config-noncode.json" <<'JSON'
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","noncode_globs":["*.md","LICENSE","*.png"]}
+JSON
+if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-noncode.json"; then
+  ok "done-config with noncode_globs (string array) → 0"
+else bad "done-config with noncode_globs (string array) → 0"; fi
+
+# done-config with noncode_globs of WRONG item type (numbers) → nonzero.
+cat > "$TMP/done-config-noncode-bad.json" <<'JSON'
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","noncode_globs":[1,2]}
+JSON
+if ! vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-noncode-bad.json"; then
+  ok "done-config noncode_globs non-string items → nonzero"
+else bad "done-config noncode_globs non-string items → nonzero"; fi
+
 cat > "$TMP/resolver.json" <<'JSON'
 {"contract_version":1,"mode":"task","task_key":"br-x","base":"abc","trunk":"main","branch":"x","warn":""}
 JSON

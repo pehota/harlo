@@ -85,6 +85,13 @@ if jq -e 'has("min_review_level") and .min_review_level == "high"' "$CONFIG" >/d
 else
   bad "min_review_level not seeded correctly; got: $(jq -c '{min_review_level}' "$CONFIG" 2>/dev/null)"
 fi
+# noncode_globs sticky key seeded with the conservative default set (#5). has()
+# proves presence; the spot-checks prove the prose/docs/image defaults landed.
+if jq -e 'has("noncode_globs") and (.noncode_globs | index("*.md")) != null and (.noncode_globs | index("*.png")) != null and (.noncode_globs | index("LICENSE")) != null' "$CONFIG" >/dev/null 2>&1; then
+  ok "seeded noncode_globs = default set (contains *.md, *.png, LICENSE)"
+else
+  bad "noncode_globs not seeded correctly; got: $(jq -c '{noncode_globs}' "$CONFIG" 2>/dev/null)"
+fi
 # start_check_cmd sticky key seeded null (default — safe: no readiness probe until
 # a human sets one). has() proves the key is present (== null alone would also be
 # true for an ABSENT key).

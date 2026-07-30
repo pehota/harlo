@@ -61,7 +61,7 @@ trap 'rm -rf "$PROJECT_DIR" "$NONGIT_DIR"' EXIT
 git -C "$PROJECT_DIR" init -q
 git -C "$PROJECT_DIR" config user.name t
 git -C "$PROJECT_DIR" config user.email t@t
-printf 'a\n' > "$PROJECT_DIR/a.txt"
+printf 'a\n' > "$PROJECT_DIR/a.js"
 # Harness state is git-ignored in a real install; mirror that so the porcelain
 # check does not see .harness state as a dirty/untracked tree.
 printf '.claude/\n' > "$PROJECT_DIR/.gitignore"
@@ -70,7 +70,7 @@ git -C "$PROJECT_DIR" commit -q -m c1
 BASELINE_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
 
 # advance HEAD so HEAD != baseline for the "commits happened" cases
-printf 'b\n' > "$PROJECT_DIR/b.txt"
+printf 'b\n' > "$PROJECT_DIR/b.js"
 git -C "$PROJECT_DIR" add -A
 git -C "$PROJECT_DIR" commit -q -m c2
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
@@ -102,14 +102,14 @@ clear_state() { rm -f "$HDIR/baselines/$1.sha" "$HDIR/done-state/session-$1.json
 # fail schema and block; this helper therefore models "open findings" via the
 # array itself, which is exactly how hc_review_blocking counts them.
 # All review-log helpers include files_reviewed covering the main-repo
-# changeset (BASELINE_SHA..HEAD == b.txt) so the STRUCTURAL coverage check (gate
+# changeset (BASELINE_SHA..HEAD == b.js) so the STRUCTURAL coverage check (gate
 # Step 8) is satisfied and cases gate on the axis they mean to test (severity /
 # outcomes), not on coverage. Cases that specifically exercise coverage set
 # files_reviewed explicitly via write_raw_review_log.
 write_review_log() {
   local findings
-  findings=$(jq -cn --argjson n "$1" '[range(0;$n) | {severity:"high",file:"b.txt",line:1,desc:"finding"}]')
-  printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["b.txt"],"findings":%s,"open_findings":%s}\n' "$HEAD_SHA" "$findings" "$1" > "$HDIR/review-log/$HEAD_SHA.json"
+  findings=$(jq -cn --argjson n "$1" '[range(0;$n) | {severity:"high",file:"b.js",line:1,desc:"finding"}]')
+  printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["b.js"],"findings":%s,"open_findings":%s}\n' "$HEAD_SHA" "$findings" "$1" > "$HDIR/review-log/$HEAD_SHA.json"
 }
 clear_review_log() { rm -f "$HDIR/review-log/$HEAD_SHA.json"; }
 # write_review_findings <findings_json_array>  → severity-tagged review-log.
@@ -117,7 +117,7 @@ clear_review_log() { rm -f "$HDIR/review-log/$HEAD_SHA.json"; }
 # from findings[].severity and does NOT trust the self-reported open_findings.
 # files_reviewed covers the changeset so coverage passes and the case gates on
 # severity alone.
-write_review_findings() { printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["b.txt"],"findings":%s,"open_findings":0}\n' "$HEAD_SHA" "$1" > "$HDIR/review-log/$HEAD_SHA.json"; }
+write_review_findings() { printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["b.js"],"findings":%s,"open_findings":0}\n' "$HEAD_SHA" "$1" > "$HDIR/review-log/$HEAD_SHA.json"; }
 # write_raw_review_log <raw_json>  → write arbitrary (possibly malformed) content.
 write_raw_review_log() { printf '%s\n' "$1" > "$HDIR/review-log/$HEAD_SHA.json"; }
 # set_min_level <low|medium|high|critical>  → per-case done-config.json.
@@ -168,7 +168,7 @@ run_case "5 verified_sha != HEAD -> block" block \
 # ============================================================================
 SID=s6; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":null}"
-printf 'dirty\n' > "$PROJECT_DIR/a.txt"   # make tree dirty
+printf 'dirty\n' > "$PROJECT_DIR/a.js"   # make tree dirty
 run_case "6 dirty tree -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 ensure_clean
@@ -198,7 +198,7 @@ run_case "8 HEAD == baseline (no commits) + clean -> allow" allow \
 # done-state) which blocks. An uncommitted "done" is therefore gated.
 # ============================================================================
 SID=s8b; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
-printf 'dirty\n' > "$PROJECT_DIR/a.txt"   # make tree dirty, HEAD unchanged
+printf 'dirty\n' > "$PROJECT_DIR/a.js"   # make tree dirty, HEAD unchanged
 run_case "8b HEAD == baseline + dirty + no done-state -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 ensure_clean
@@ -219,7 +219,7 @@ run_case "9 escalation + stale sha -> block" block \
 # ============================================================================
 SID=s10; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 write_done "$SID" "{\"contract_version\":1,\"session_id\":\"$SID\",\"verified_sha\":\"$HEAD_SHA\",\"tree_clean\":true,\"dod\":{\"sources\":[\"base\"],\"items\":[\"x\"]},\"tests\":{\"exit_code\":0,\"command\":\"t\",\"output_tail\":\"ok\"},\"task_checks\":[],\"escalation\":{\"type\":\"environment\",\"captured_error\":\"docker down\"}}"
-printf 'dirty\n' > "$PROJECT_DIR/a.txt"   # make tree dirty
+printf 'dirty\n' > "$PROJECT_DIR/a.js"   # make tree dirty
 run_case "10 escalation + sha==HEAD + dirty -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 ensure_clean
@@ -401,16 +401,16 @@ run_case "17k findings is STRING + open_findings:0 -> block (anti-forgery)" bloc
 # Case 17l — findings PRESENT and an EMPTY array → ALLOW (reviewer found
 # nothing; empty is a legitimate green, must NOT be forced to the fallback).
 SID=s17l; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-set_min_level high; write_raw_review_log "{\"contract_version\":1,\"reviewed_sha\":\"$HEAD_SHA\",\"min_review_level\":\"high\",\"files_reviewed\":[\"b.txt\"],\"findings\":[]}"; GREEN_DONE "$SID"
+set_min_level high; write_raw_review_log "{\"contract_version\":1,\"reviewed_sha\":\"$HEAD_SHA\",\"min_review_level\":\"high\",\"files_reviewed\":[\"b.js\"],\"findings\":[]}"; GREEN_DONE "$SID"
 run_case "17l findings is EMPTY array -> allow (nothing found)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # ============================================================================
 # Coverage-contract cases (structural: files_reviewed ⊇ changed files).
 # The main-repo changeset is BASELINE_SHA..HEAD, which touches exactly ONE file
-# (b.txt). To exercise the "missing one changed file" gap we need ≥2 changed
+# (b.js). To exercise the "missing one changed file" gap we need ≥2 changed
 # files, so these cases run in a dedicated isolated repo whose base..HEAD touches
-# TWO files (f1.txt, f2.txt). Findings are empty (severity passes) so the ONLY
+# TWO files (f1.js, f2.js). Findings are empty (severity passes) so the ONLY
 # gating axis is coverage. done-state is branch-keyed (feature branch → task
 # mode) so the pinned merge-base is the changeset base the gate diffs against.
 # ============================================================================
@@ -419,12 +419,12 @@ git -C "$COV_REPO" init -q -b main
 git -C "$COV_REPO" config user.name t
 git -C "$COV_REPO" config user.email t@t
 printf '.claude/\n' > "$COV_REPO/.gitignore"
-printf 'base\n' > "$COV_REPO/base.txt"
+printf 'base\n' > "$COV_REPO/base.js"
 git -C "$COV_REPO" add -A
 git -C "$COV_REPO" commit -q -m base
 git -C "$COV_REPO" checkout -q -b feat/cov
-printf '1\n' > "$COV_REPO/f1.txt"
-printf '2\n' > "$COV_REPO/f2.txt"      # TWO changed files in base..HEAD
+printf '1\n' > "$COV_REPO/f1.js"
+printf '2\n' > "$COV_REPO/f2.js"      # TWO changed files in base..HEAD
 git -C "$COV_REPO" add -A
 git -C "$COV_REPO" commit -q -m work
 COV_HEAD=$(git -C "$COV_REPO" rev-parse HEAD)
@@ -438,13 +438,13 @@ printf '{"contract_version":1,"session_id":"c","verified_sha":"%s","tree_clean":
 cov_log() { printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[]}\n' "$COV_HEAD" "$1" > "$CHDIR/review-log/$COV_HEAD.json"; }
 
 # Case COV-1 — files_reviewed covers ALL changed files → ALLOW.
-cov_log '["f1.txt","f2.txt"]'
+cov_log '["f1.js","f2.js"]'
 run_case "COV1 files_reviewed covers all changed -> allow" allow \
   '{"session_id":"c","stop_hook_active":false}' "$COV_REPO"
 
 # Case COV-2 — files_reviewed MISSING one changed file → BLOCK ("did not cover").
-cov_log '["f1.txt"]'
-run_case "COV2 files_reviewed missing f2.txt -> block (did not cover)" block \
+cov_log '["f1.js"]'
+run_case "COV2 files_reviewed missing f2.js -> block (did not cover)" block \
   '{"session_id":"c","stop_hook_active":false}' "$COV_REPO"
 
 # Case COV-3 — review-log has NO files_reviewed field, changes exist → BLOCK.
@@ -456,7 +456,7 @@ run_case "COV3 no files_reviewed field, changes exist -> block (schema)" block \
   '{"session_id":"c","stop_hook_active":false}' "$COV_REPO"
 
 # Case COV-4 — files_reviewed is a SUPERSET (extra unchanged file) → ALLOW.
-cov_log '["f1.txt","f2.txt","unrelated.txt"]'
+cov_log '["f1.js","f2.js","unrelated.js"]'
 run_case "COV4 files_reviewed superset -> allow" allow \
   '{"session_id":"c","stop_hook_active":false}' "$COV_REPO"
 
@@ -478,12 +478,12 @@ git -C "$FEAT_REPO" init -q -b main
 git -C "$FEAT_REPO" config user.name t
 git -C "$FEAT_REPO" config user.email t@t
 printf '.claude/\n' > "$FEAT_REPO/.gitignore"
-printf 'base\n' > "$FEAT_REPO/base.txt"
+printf 'base\n' > "$FEAT_REPO/base.js"
 git -C "$FEAT_REPO" add -A
 git -C "$FEAT_REPO" commit -q -m base
 # branch off main, commit feature work → HEAD moves past the fork base
 git -C "$FEAT_REPO" checkout -q -b feat/x
-printf 'work\n' > "$FEAT_REPO/work.txt"
+printf 'work\n' > "$FEAT_REPO/work.js"
 git -C "$FEAT_REPO" add -A
 git -C "$FEAT_REPO" commit -q -m work
 FEAT_HEAD=$(git -C "$FEAT_REPO" rev-parse HEAD)
@@ -494,9 +494,9 @@ mkdir -p "$FHDIR/done-state" "$FHDIR/review-log"
 printf '{"contract_version":1,"session_id":"whatever","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' "$FEAT_HEAD" \
   > "$FHDIR/done-state/br-feat-x.json"
 # independent review-log for the feature HEAD, no open findings. files_reviewed
-# covers the feature changeset (merge-base(main,feat/x)..HEAD == work.txt) so the
+# covers the feature changeset (merge-base(main,feat/x)..HEAD == work.js) so the
 # STRUCTURAL coverage check passes and the cross-session-resume assertion holds.
-printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["work.txt"],"findings":[],"open_findings":0}\n' "$FEAT_HEAD" \
+printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["work.js"],"findings":[],"open_findings":0}\n' "$FEAT_HEAD" \
   > "$FHDIR/review-log/$FEAT_HEAD.json"
 
 run_case "16a feat/x branch-keyed state ALLOWs for session A" allow \
@@ -546,7 +546,7 @@ assert_reason_eq() {
 # gate blocked with the S2 /done string (missing-done-state checked first); after,
 # the tree-check fires first with the S1 reason.
 SID=rp1; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
-printf 'introduced\n' > "$PROJECT_DIR/a.txt"
+printf 'introduced\n' > "$PROJECT_DIR/a.js"
 assert_reason_prefix "R1 introduced-dirty + no done-state -> reason 'finish the slice' (S1)" \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}" "finish the slice"
 ensure_clean
@@ -600,7 +600,7 @@ parity_repo() {
   git -C "$d" init -q -b main
   git -C "$d" config user.name t; git -C "$d" config user.email t@t
   printf '.claude/\n' > "$d/.gitignore"
-  printf 'root\n' > "$d/root.txt"
+  printf 'root\n' > "$d/root.js"
   git -C "$d" add -A; git -C "$d" commit -q -m root
   git -C "$d" checkout -q -b feat/parity
   mkdir -p "$d/.claude/.harness/done-state" "$d/.claude/.harness/review-log" \
@@ -625,7 +625,7 @@ PDIR=$(parity_repo)
 : > "$PDIR/.claude/.harness/tree-base/br-feat-parity.dirty"
 printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha" 2>/dev/null \
   || { mkdir -p "$PDIR/.claude/.harness/task-base"; printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha"; }
-printf 'wip\n' > "$PDIR/wip.txt"
+printf 'wip\n' > "$PDIR/wip.js"
 P_STATE=$(hc_state_for "$PDIR" "p1")
 P_REASON=$(gate_reason '{"session_id":"p1","stop_hook_active":false}' "$PDIR")
 parity_assert "PARITY dirty+no-done-state: hc_state S1 == gate 'finish the slice'" \
@@ -636,7 +636,7 @@ rm -rf "$PDIR"
 PDIR=$(parity_repo)
 mkdir -p "$PDIR/.claude/.harness/task-base"
 printf '%s\n' "$(git -C "$PDIR" merge-base main HEAD)" > "$PDIR/.claude/.harness/task-base/br-feat-parity.sha"
-printf 'work\n' > "$PDIR/work.txt"; git -C "$PDIR" add -A; git -C "$PDIR" commit -q -m work
+printf 'work\n' > "$PDIR/work.js"; git -C "$PDIR" add -A; git -C "$PDIR" commit -q -m work
 # pin the tree baseline AFTER committing so the tree is clean (no blockers).
 : > "$PDIR/.claude/.harness/tree-base/br-feat-parity.dirty"
 P_STATE=$(hc_state_for "$PDIR" "p2")
@@ -656,7 +656,7 @@ AUTOBRANCH="$(cd "$(dirname "$0")/../scripts" && pwd)/auto-branch.sh"
 # exit 0 AND stdout carries no deny/decision key.
 assert_no_deny() {
   local name="$1" dir="$2" out code
-  out=$(printf '{"session_id":"pb","tool_name":"Write","tool_input":{"file_path":"x.txt","content":"y"}}' \
+  out=$(printf '{"session_id":"pb","tool_name":"Write","tool_input":{"file_path":"x.js","content":"y"}}' \
     | CLAUDE_PROJECT_DIR="$dir" bash "$AUTOBRANCH" 2>/dev/null)
   code=$?
   local ok=1 detail=""
@@ -672,7 +672,7 @@ assert_no_deny() {
 PBDIR=$(mktemp -d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
-printf 'root\n' > "$PBDIR/root.txt"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
+printf 'root\n' > "$PBDIR/root.js"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
 mkdir -p "$PBDIR/.claude"; printf '{"trunk":"main"}\n' > "$PBDIR/.claude/done-config.json"
 assert_no_deny "PB1 PreToolUse on trunk -> exit 0, no deny/decision" "$PBDIR"
 rm -rf "$PBDIR"
@@ -681,7 +681,7 @@ rm -rf "$PBDIR"
 PBDIR=$(mktemp -d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
-printf 'root\n' > "$PBDIR/root.txt"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
+printf 'root\n' > "$PBDIR/root.js"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
 git -C "$PBDIR" checkout -q -b feat/pb
 mkdir -p "$PBDIR/.claude"; printf '{"trunk":"main"}\n' > "$PBDIR/.claude/done-config.json"
 assert_no_deny "PB2 PreToolUse off trunk -> exit 0, no deny/decision" "$PBDIR"
@@ -695,12 +695,12 @@ rm -rf "$PBDIR"
 # dirt still blocks first (Step 3b precedes Step 3c).
 # ----------------------------------------------------------------------------
 # EB1 — empty range + PRE-EXISTING dirt only → allow (Step 3c).
-# Baseline pinned at HEAD (empty range). Dirty a.txt, but record that exact
+# Baseline pinned at HEAD (empty range). Dirty a.js, but record that exact
 # porcelain line in the session .dirty baseline so hc_tree_status classifies it
 # as pre-existing (a warning, not a blocker) → Step 3b does not block → Step 3c
 # sees the empty range and allows.
 SID=eb1; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
-printf 'preexisting\n' > "$PROJECT_DIR/a.txt"   # tree now dirty (tracked-modified)
+printf 'preexisting\n' > "$PROJECT_DIR/a.js"   # tree now dirty (tracked-modified)
 DIRTY_LINE=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
 printf '%s\n' "$DIRTY_LINE" > "$HDIR/baselines/$SID.dirty"   # pre-existing at baseline
 run_case "EB1 empty range + pre-existing dirt only -> allow (Step 3c)" allow \
@@ -711,7 +711,7 @@ rm -f "$HDIR/baselines/$SID.dirty"; ensure_clean
 # Same empty range, but NO .dirty baseline (empty baseline set → the dirty line
 # is INTRODUCED) → Step 3b blocks with the S1 reason before Step 3c can allow.
 SID=eb2; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
-printf 'introduced\n' > "$PROJECT_DIR/a.txt"
+printf 'introduced\n' > "$PROJECT_DIR/a.js"
 : > "$HDIR/baselines/$SID.dirty"   # empty baseline set → line is introduced
 run_case "EB2 empty range + INTRODUCED dirt -> still block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
@@ -763,7 +763,7 @@ printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$HEAD_SHA.json"
 run_case "EG2 no done-state + sidecar at HEAD -> allow (cross-session disarm)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 #   (b) move HEAD (+1 commit) → sidecar is for the OLD sha → BLOCK (no disarm).
-printf 'eg2\n' > "$PROJECT_DIR/eg2.txt"; git -C "$PROJECT_DIR" add -A; git -C "$PROJECT_DIR" commit -q -m eg2
+printf 'eg2\n' > "$PROJECT_DIR/eg2.js"; git -C "$PROJECT_DIR" add -A; git -C "$PROJECT_DIR" commit -q -m eg2
 EG2_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD)
 run_case "EG2 HEAD moved, sidecar for old sha -> block (keyed to exact HEAD)" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
@@ -773,11 +773,11 @@ git -C "$PROJECT_DIR" reset -q --hard "$HEAD_SHA"
 #       precedes 3d): an accepted escalation disarms the committed changeset, not
 #       new uncommitted work.
 ensure_clean
-printf 'introduced\n' > "$PROJECT_DIR/eg2dirt.txt"
+printf 'introduced\n' > "$PROJECT_DIR/eg2dirt.js"
 : > "$HDIR/baselines/$SID.dirty"   # empty baseline set → the untracked line is introduced
 run_case "EG2 introduced dirt + sidecar -> still block on tree (3b precedes 3d)" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
-rm -f "$HDIR/baselines/$SID.dirty" "$PROJECT_DIR/eg2dirt.txt"
+rm -f "$HDIR/baselines/$SID.dirty" "$PROJECT_DIR/eg2dirt.js"
 rm -f "$HDIR/escalation-accept/$HEAD_SHA.json" "$HDIR/escalation-accept/$EG2_HEAD.json"
 ensure_clean
 
@@ -788,7 +788,7 @@ EG_REPO=$(mktemp -d)
 git -C "$EG_REPO" init -q -b main
 git -C "$EG_REPO" config user.name t; git -C "$EG_REPO" config user.email t@t
 printf '.claude/\n' > "$EG_REPO/.gitignore"
-printf 'r\n' > "$EG_REPO/r.txt"; git -C "$EG_REPO" add -A; git -C "$EG_REPO" commit -qm init
+printf 'r\n' > "$EG_REPO/r.js"; git -C "$EG_REPO" add -A; git -C "$EG_REPO" commit -qm init
 EG_HEAD=$(git -C "$EG_REPO" rev-parse HEAD)
 mkdir -p "$EG_REPO/.claude/.harness/baselines"
 printf '%s\n' "$EG_HEAD" > "$EG_REPO/.claude/.harness/baselines/eg-esc.sha"

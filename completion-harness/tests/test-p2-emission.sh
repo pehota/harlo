@@ -200,6 +200,27 @@ OUT=$(run_session_start "$DIR" "sess-s0")
 CTX=$(addl_ctx "$OUT")
 assert_empty "S0 additionalContext absent" "$CTX"
 
+# --- S_OOS: non-code changeset → SessionStart silent (no additionalContext). -
+# Design #5 §5: S_OOS has empty HC_NEXT and is not in the actionable set
+# {S1,S2,S4}, so the steering emission must stay silent. Enable noncode_globs on
+# the base (committed on main, then rebase feature/x) so a committed .md-only
+# changeset classifies as out-of-scope.
+echo
+echo "--- SessionStart S_OOS: non-code changeset → silent (no additionalContext) ---"
+DIR=$(make_repo)
+git -C "$DIR" checkout -q main
+jq '.noncode_globs = ["*.md"]' "$DIR/.claude/done-config.json" \
+  > "$DIR/.claude/done-config.json.tmp" && mv "$DIR/.claude/done-config.json.tmp" "$DIR/.claude/done-config.json"
+git -C "$DIR" add -A; git -C "$DIR" commit -q -m "config: noncode_globs"
+git -C "$DIR" checkout -q feature/x; git -C "$DIR" rebase -q main >/dev/null 2>&1
+commit_change "$DIR" "notes.md" "# notes" >/dev/null
+OUT=$(run_session_start "$DIR" "sess-oos")
+CTX=$(addl_ctx "$OUT")
+assert_empty "S_OOS additionalContext absent (silent stand-down)" "$CTX"
+# And the Stop gate stands down too (empty stdout, no block).
+GOUT=$(run_stop_gate "$DIR" "sess-oos")
+assert_empty "S_OOS Stop gate silent (no block JSON)" "$GOUT"
+
 # --- S1: introduced uncommitted file → additionalContext w/ remedy + D4. ----
 # Realistic flow: SessionStart pins a CLEAN baseline first, THEN the agent
 # introduces a file; a subsequent SessionStart (task mode never re-seeds the

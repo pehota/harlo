@@ -19,5 +19,6 @@
   "untracked_policy": "baseline",
   "min_review_level": "high",
   "auto_branch": false,
-  "branch_prefix": "task/"
+  "branch_prefix": "task/",
+  "noncode_globs": []
 }

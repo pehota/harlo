@@ -318,10 +318,12 @@ flowchart TD
   C -->|no HEAD| ALLOW2["exit 0 (non-git)"]
   C -->|HEAD_SHA| D["source lib; hc_resolve<br/>DONE_STATE = done-state/&lt;task_key&gt;.json"]
   D --> E{"Step 3: HC_BASE set AND<br/>HC_BASE == HEAD?"}
-  E -->|no| G
+  E -->|no| SCOPE
   E -->|yes| F{"working tree clean?<br/>(git status --porcelain empty)"}
   F -->|clean| ALLOW3["exit 0 (nothing happened)"]
-  F -->|dirty| G["Step 4: done-state file exists?"]
+  F -->|dirty| SCOPE{"Step 3a: hc_changeset_is_code(HC_BASE, HEAD)<br/>(committed range ∪ introduced tree paths;<br/>NON-CODE iff EVERY file matches noncode_globs;<br/>unknown ext / any error → CODE)"}
+  SCOPE -->|noncode| ALLOW3s["exit 0 (out-of-scope — non-code changeset, #5)"]
+  SCOPE -->|code / error| G["Step 4: done-state file exists?"]
   G -->|missing| BLK4["BLOCK: run /done"]
   G -->|exists| G4b{"Step 4b: hc_validate(done-state.schema)?<br/>(invalid / no schema / no validator → BLOCK)"}
   G4b -->|invalid| BLK4b["BLOCK: done-state fails contract"]
@@ -351,7 +353,7 @@ flowchart TD
   classDef block fill:#ffe0e0,stroke:#c00;
   classDef allow fill:#e0ffe0,stroke:#0a0;
   class BLK4,BLK4b,BLK5,BLK6,BLK8a,BLK8b,BLK8c,BLK8v,BLK8d,BLK8cov,BLK8e block;
-  class ALLOW0,ALLOW1,ALLOW2,ALLOW3,ALLOW7,ALLOW9 allow;
+  class ALLOW0,ALLOW1,ALLOW2,ALLOW3,ALLOW3s,ALLOW7,ALLOW9 allow;
 ```
 
 **How to read this / key decisions.**
@@ -651,6 +653,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Non-git repo** | Gate Step 2 exit 0 (allow); SessionStart writes `no-git` baseline; preflight "harness inactive"; auto-branch no-ops | `done-gate.sh` Step 2; `baseline-snapshot.sh`; `done-preflight.sh` Check 1; `auto-branch.sh` `is-inside-work-tree` |
 | **Stop-hook loop guard** | `stop_hook_active==true` → exit 0 immediately (a block never traps forever) | `done-gate.sh` Step 1 |
 | **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 4 BLOCK | `done-gate.sh` Step 3 |
+| **Non-code changeset (#5)** | A changeset whose files are **all** non-code (match `noncode_globs`: prose/docs/images) → harness fully stands down: Stop gate exits 0 silently (Step 3a), SessionStart emits nothing (hc_state `S_OOS`). **Fail toward gating:** union of committed range ∪ introduced tree paths; ≥1 unknown-ext/code file or ANY error → CODE → normal gate. Absent/empty `noncode_globs` → everything is code | `done-gate.sh` Step 3a; `hc_changeset_is_code`; `hc_state` S_OOS; `baseline-snapshot.sh` emission set {S1,S2,S4} |
 | **Auto-branch fallback (empty pin)** | Branch created but no clean SessionStart `.dirty` snapshot → pin **empty** tree-base → everything blocks (safe) | `auto-branch.sh` `: > HC_TREE_BASE_FILE` |
 | **Mid-rebase/merge** | Auto-branch no-ops (MERGE_HEAD / rebase-apply / rebase-merge present) | `auto-branch.sh` git-dir guard |
 | **14-day reap** | SessionStart deletes `.harness/*` files older than 14d, **excluding** `task-base/*` and `tree-base/*` | `baseline-snapshot.sh` `find -mtime +14 -delete -not -path` |

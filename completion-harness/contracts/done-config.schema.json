@@ -38,7 +38,11 @@
     "untracked_policy": { "enum": ["baseline", "strict"] },
     "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
     "auto_branch": { "type": "boolean" },
-    "branch_prefix": { "type": "string" }
+    "branch_prefix": { "type": "string" },
+    "noncode_globs": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
   },
   "additionalProperties": true
 }
