@@ -730,6 +730,15 @@ hc_review_coverage_gap() {
   for f in "$dir"/*.json; do
     [ -e "$f" ] || continue
     fname=$(basename "$f" .json)
+    # The basename MUST be a raw object id — 40 (sha1) or 64 (sha256) lowercase
+    # hex chars. Anything else is not a sha the harness ever wrote, and feeding
+    # it to git as a rev is a coverage HOLE: a symbolic name (HEAD, main,
+    # HEAD@{0}) satisfies `merge-base --is-ancestor` and then resolves its
+    # attested blob via `rev-parse HEAD:<path>` — i.e. against the CURRENT tree,
+    # so its attestation self-validates and never expires. Skipped BEFORE the
+    # two merge-base calls, so junk basenames also cost zero forks.
+    case "${#fname}" in 40|64) ;; *) continue ;; esac
+    case "$fname" in *[!0-9a-f]*) continue ;; esac
     # Filename sha must be an ancestor of head and NOT of base (task-side).
     git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
     git -C "$proj" merge-base --is-ancestor "$fname" "$base" 2>/dev/null && continue
