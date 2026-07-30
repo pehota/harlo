@@ -81,6 +81,22 @@ fi
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
+# --- Step 2b: pending-escalation one-shot pass (P1-b, #6) -------------------
+# When /done needs to AskUserQuestion for a Category-C / user_halt escalation, it
+# writes pending-escalation/<task_key>.json FIRST. The AskUserQuestion turn ends
+# with a Stop the gate would otherwise BLOCK (no green done-state yet) — trapping
+# the very question meant for the user. So: if a pending file exists, consume it
+# (rm) and allow EXACTLY ONCE, letting that turn reach the user. The next Stop
+# finds no pending file and re-gates normally. One file → one allow; it cannot
+# indefinitely disarm the gate. Placed after the loop-guard + git checks but
+# BEFORE the tree/done-state checks. Reaping is covered by the default age-reap
+# (no exclusion needed). Guarded; a missing dir is a no-op.
+PENDING="$HARNESS_DIR/pending-escalation/$HC_TASK_KEY.json"
+if [ -f "$PENDING" ]; then
+  rm -f "$PENDING" 2>/dev/null
+  exit 0
+fi
+
 # --- Step 3: no commits on this changeset (HEAD == base) AND clean tree ------
 # Quiet exit ONLY when nothing was committed since the base AND the working tree
 # is clean. HC_BASE is the resolver's anchor: in task mode it is the pinned fork

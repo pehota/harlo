@@ -727,6 +727,30 @@ run_case "EB3 empty range + clean tree -> allow (Step 3 quiet-exit)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # ============================================================================
+# Chunk E (P1-b, #6) — pending-escalation one-shot pass (Step 2b).
+# A state that WOULD block (committed work past baseline, no done-state → S2)
+# is allowed EXACTLY ONCE when a pending-escalation/<task_key>.json exists; the
+# file is consumed (rm) so the second Stop re-blocks.
+# ----------------------------------------------------------------------------
+SID=pe1; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+# task_key in session mode = session-<id>.
+PEND_DIR="$HDIR/pending-escalation"; mkdir -p "$PEND_DIR"
+PEND_FILE="$PEND_DIR/session-$SID.json"
+printf '{"reason":"asking user"}\n' > "$PEND_FILE"
+# First Stop: pending present → allow, file consumed.
+run_case "PE1 pending-escalation present -> one-shot allow" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+if [ ! -f "$PEND_FILE" ]; then
+  printf 'PASS  %s\n' "PE1 pending file consumed after one allow"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [file still present]\n' "PE1 pending file consumed"; FAIL=$((FAIL+1))
+fi
+# Second Stop: no pending file → re-gate normally → S2 block (committed, no done-state).
+run_case "PE1 second Stop after consume -> block (re-gated)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+ensure_clean
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

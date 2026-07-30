@@ -37,7 +37,7 @@ IS_COMPACT=0
 
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
-mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" 2>/dev/null
+mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalation" 2>/dev/null
 
 # --- reap stale harness state -----------------------------------------------
 # Reap stale harness state (older than 14 days). Fresh files (this session's

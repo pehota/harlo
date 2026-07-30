@@ -503,6 +503,22 @@ is NOT your call.** Stop and **ask the user** via AskUserQuestion: "Test X
 fails, attempts A/B/C didn't fix it — accept and proceed, or keep working?"
 Record the *user's* decision plus the attempts made.
 
+> **Before you call AskUserQuestion for a Category-C or `user_halt` escalation,
+> write a pending-escalation marker** so the question turn is not trapped by the
+> Stop gate (which would otherwise block that turn — no green done-state exists
+> yet — and the user never sees the question):
+>
+> ```bash
+> mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/pending-escalation"
+> printf '{"reason":"<why you are asking>"}\n' \
+>   > "$CLAUDE_PROJECT_DIR/.claude/.harness/pending-escalation/<task_key>.json"
+> ```
+>
+> (`<task_key>` is the one resolved in Step 1.) The gate consumes this marker
+> **once** — the AskUserQuestion turn's Stop is allowed exactly once so the
+> question reaches the user; the very next Stop re-gates normally. This is a
+> one-shot pass, not a disarm.
+
 ```json
 "escalation":{"type":"user_accepted","finding":"...","attempts":["...","..."],
   "user_decision":"accept, tracked separately"}
