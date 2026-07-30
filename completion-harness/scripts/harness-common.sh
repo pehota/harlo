@@ -153,47 +153,41 @@ hc__resolve_task_base() {
 }
 
 # ---------------------------------------------------------------------------
-# hc__commit_authored <commit_sha> <session_id>
+# hc__commit_confidently_foreign <commit_sha> <session_id>
 #
-# Session-authorship attribution predicate (shared by Chunks A / P1-a / P2-a).
-# Returns 0 (SESSION-AUTHORED) iff BOTH signals POSITIVELY agree:
-#   1. the commit's committer_email equals `git config user.email` AND both are
-#      non-empty, AND
-#   2. the commit's committer_date (epoch) is >= mtime(baselines/<sid>.sha).
-# Returns 1 (FOREIGN) otherwise. FAIL-SAFE: any git error, empty user.email,
-# unreadable baseline mtime, or unparseable date makes this return 1 (FOREIGN)
-# — but the CALLER (base-advance) treats FOREIGN as "advance past", so the
-# fail-safe direction for base resolution is handled at the call site by only
-# advancing on a leading run of FOREIGN commits and NEVER advancing when the
-# authorship signal is untrustworthy. See hc__resolve_session_base.
+# CONFIDENTLY-FOREIGN attribution predicate (shared by base-advance / P1-a /
+# P2-a). Returns 0 (CONFIDENTLY-FOREIGN — provably NOT this session's work) iff
+# ALL of:
+#   - `git config user.email` (session_email) is NON-EMPTY, AND
+#   - the commit's committer_email is NON-EMPTY, AND
+#   - they DIFFER.
+# Returns 1 (NOT confidently foreign) on ANY other outcome — same email, either
+# email empty, session_email empty, or any git error.
 #
-# Because "uncertain" must NOT silently advance the base, this predicate is
-# ONLY consulted through hc__resolve_session_base, which refuses to advance at
-# all unless user.email is non-empty and the baseline mtime is readable (the
-# positive-agreement gate). This function itself answers the narrow question
-# "is THIS commit positively session-authored?" and returns 1 on any doubt.
-hc__commit_authored() {
+# This is deliberately EMAIL-ONLY. The old predicate also required the commit's
+# committer_date >= mtime(baselines/<sid>.sha); that mtime is MUTABLE (a
+# touch/copy-without-`-p`/clock-skew can advance it past a genuinely-authored
+# commit's date), which would misclassify a real session commit as FOREIGN, let
+# the base advance past it, and allow the gate to PASS with real work unverified
+# — a false-PASS (the exact bug #6 prevents). The commit range orig_base..HEAD
+# already guarantees "after the session baseline" by ancestry, so the mtime
+# signal added only risk, no signal, and is dropped.
+#
+# FAIL-SAFE: the caller (hc__resolve_session_base) advances the base ONLY while
+# the leading commit is CONFIDENTLY-FOREIGN and STOPS on the first commit that is
+# NOT — so any uncertainty (this predicate returning 1) keeps the commit (and
+# everything after) in the changeset and the gate engages. NEVER advances past a
+# commit that might be the session's.
+hc__commit_confidently_foreign() {
   local sha="$1" session_id="$2"
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
-  local hdir="${HARNESS_DIR:-$proj/.claude/.harness}"
 
-  # Signal 1: committer_email must equal a NON-EMPTY user.email.
-  local my_email committer_email
-  my_email=$(git -C "$proj" config user.email 2>/dev/null)
-  [ -z "$my_email" ] && return 1
+  local session_email committer_email
+  session_email=$(git -C "$proj" config user.email 2>/dev/null)
+  [ -z "$session_email" ] && return 1
   committer_email=$(git -C "$proj" show -s --format='%ce' "$sha" 2>/dev/null)
   [ -z "$committer_email" ] && return 1
-  [ "$committer_email" = "$my_email" ] || return 1
-
-  # Signal 2: committer_date epoch must be >= baseline .sha mtime.
-  local base_file="$hdir/baselines/${session_id}.sha"
-  [ -f "$base_file" ] || return 1
-  local base_mtime commit_epoch
-  base_mtime=$(stat -c '%Y' "$base_file" 2>/dev/null || stat -f '%m' "$base_file" 2>/dev/null)
-  case "$base_mtime" in ''|*[!0-9]*) return 1 ;; esac
-  commit_epoch=$(git -C "$proj" show -s --format='%ct' "$sha" 2>/dev/null)
-  case "$commit_epoch" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$commit_epoch" -ge "$base_mtime" ] || return 1
+  [ "$committer_email" = "$session_email" ] && return 1
 
   return 0
 }
@@ -202,9 +196,10 @@ hc__commit_authored() {
 # hc__session_authored_count <orig_base> <head> <session_id>
 #
 # Prints the integer count of SESSION-AUTHORED commits in orig_base..HEAD
-# (oldest→newest), per hc__commit_authored. Guarded; on any git failure or an
-# empty range it prints 0. Shared by P2-a (preflight divergence warn) and the
-# changeset summary (P1-a).
+# (oldest→newest). AUTHORED (email-only, consistent with the confidently-foreign
+# predicate): committer_email non-empty AND == session_email (git config
+# user.email). Guarded; on any git failure or an empty range it prints 0. Shared
+# by P2-a (preflight divergence warn) and the changeset summary (P1-a).
 hc__session_authored_count() {
   local orig_base="$1" head="$2" session_id="$3"
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -214,7 +209,7 @@ hc__session_authored_count() {
   [ -z "$revs" ] && { printf '0'; return 0; }
   while IFS= read -r c; do
     [ -z "$c" ] && continue
-    if hc__commit_authored "$c" "$session_id"; then
+    if hc__commit_session_authored "$c" "$session_id"; then
       n=$((n + 1))
     fi
   done <<EOF
@@ -224,21 +219,46 @@ EOF
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc__commit_session_authored <commit_sha> <session_id>
+#
+# Positive session-authorship predicate (email-only). Returns 0 iff the commit's
+# committer_email is NON-EMPTY AND == session_email (git config user.email, which
+# must itself be non-empty). Returns 1 otherwise. This is the summary/preflight
+# counterpart to hc__commit_confidently_foreign — a commit can be neither (either
+# email empty) so the two are NOT strict negations; this one answers "is THIS
+# commit positively the session's?" for the human-readable authored tally.
+hc__commit_session_authored() {
+  local sha="$1" session_id="$2"
+  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  local session_email committer_email
+  session_email=$(git -C "$proj" config user.email 2>/dev/null)
+  [ -z "$session_email" ] && return 1
+  committer_email=$(git -C "$proj" show -s --format='%ce' "$sha" 2>/dev/null)
+  [ -z "$committer_email" ] && return 1
+  [ "$committer_email" = "$session_email" ] || return 1
+  return 0
+}
+
 # Session-mode base: read the SessionStart baseline if present, else empty.
-# Then ADVANCE past any LEADING run of FOREIGN commits (P0-a, #6): a foreign
-# commit (different committer email, or committed before this session's
-# baseline) that HEAD sits atop must not be re-verified as this session's work.
+# Then ADVANCE past any LEADING run of CONFIDENTLY-FOREIGN commits (P0-a, #6): a
+# commit whose committer email PROVABLY differs from the session's (both emails
+# non-empty) that HEAD sits atop must not be re-verified as this session's work.
 #
 # Advance rule: walk orig_base..HEAD oldest→newest; while the leading commit is
-# FOREIGN, set the new base to that commit; STOP at the FIRST session-authored
-# commit. HC_BASE becomes the new (advanced) base; HC_BASE_ORIG stays the
-# original unadvanced baseline.
+# CONFIDENTLY-FOREIGN (hc__commit_confidently_foreign), set the new base to that
+# commit; STOP at the FIRST commit that is NOT confidently-foreign (same email,
+# OR either email empty, OR session_email empty, OR any git error). HC_BASE
+# becomes the new (advanced) base; HC_BASE_ORIG stays the original unadvanced
+# baseline.
 #
-# FAIL-SAFE (only POSITIVE agreement advances): if the baseline file is
-# absent/unreadable, user.email is empty, or any git call fails, we leave
-# HC_BASE == HC_BASE_ORIG (the FULL changeset). We only ever advance while the
-# positive session-authorship signal is TRUSTWORTHY and the leading commit is
-# provably FOREIGN.
+# FAIL-SAFE: session_email empty → nothing is confidently-foreign → NO advance
+# (full changeset). Any uncertainty → STOP → keep the commit (and everything
+# after) in the changeset → gate engages. We NEVER advance past a commit that
+# might be the session's. Note we do NOT consult the baseline .sha mtime at all
+# any more — it is MUTABLE and was the M1 false-PASS risk (see
+# hc__commit_confidently_foreign); ancestry (orig_base..HEAD) already bounds the
+# range to commits after the baseline.
 hc__resolve_session_base() {
   local session_id="$1"
   local base_file="$HARNESS_DIR/baselines/${session_id}.sha"
@@ -257,27 +277,20 @@ hc__resolve_session_base() {
   head=$(git -C "$proj" rev-parse HEAD 2>/dev/null)
   [ -z "$head" ] && return 0
 
-  # POSITIVE-AGREEMENT gate: only advance when BOTH authorship signals can be
-  # trusted at all — a non-empty user.email AND a readable baseline mtime.
-  # Absent either, leave HC_BASE == orig_base (full changeset, safe direction).
-  local my_email base_mtime
-  my_email=$(git -C "$proj" config user.email 2>/dev/null)
-  [ -z "$my_email" ] && return 0
-  base_mtime=$(stat -c '%Y' "$base_file" 2>/dev/null || stat -f '%m' "$base_file" 2>/dev/null)
-  case "$base_mtime" in ''|*[!0-9]*) return 0 ;; esac
-
   local revs c
   revs=$(git -C "$proj" rev-list --reverse "$HC_BASE_ORIG..$head" 2>/dev/null) || return 0
   [ -z "$revs" ] && return 0
 
   while IFS= read -r c; do
     [ -z "$c" ] && continue
-    if hc__commit_authored "$c" "$session_id"; then
-      # First session-authored commit → STOP; base sits just below it.
+    if hc__commit_confidently_foreign "$c" "$session_id"; then
+      # Leading CONFIDENTLY-FOREIGN commit → advance the base to it.
+      HC_BASE="$c"
+    else
+      # NOT confidently foreign (same email, empty email, or any doubt) → STOP;
+      # base sits just below it. Keep it (and everything after) in the changeset.
       break
     fi
-    # Leading FOREIGN commit → advance the base to it.
-    HC_BASE="$c"
   done <<EOF
 $revs
 EOF
@@ -785,7 +798,7 @@ EOF
 # on, so a block message says WHAT is in the range instead of a bare "/done".
 # Uses base_orig (the UNADVANCED base — HC_BASE_ORIG) so it can honestly report
 # "0 authored this session" when every commit in the range is foreign (P1-a,
-# #6). Reuses the Chunk-A attribution predicate (hc__commit_authored).
+# #6). Reuses the email-only authorship predicate (hc__commit_session_authored).
 #
 # Prints up to three newline-joined lines:
 #   changeset <b7>..<h7> — N files, +add/-del
@@ -828,7 +841,7 @@ hc_changeset_summary() {
       while IFS= read -r c; do
         [ -z "$c" ] && continue
         total=$((total + 1))
-        if hc__commit_authored "$c" "$session_id"; then
+        if hc__commit_session_authored "$c" "$session_id"; then
           authored=$((authored + 1))
         fi
       done <<EOF

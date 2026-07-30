@@ -206,20 +206,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Chunk A (P0-a): session-mode base advances past FOREIGN commits.
-# These drive hc__resolve_session_base directly (session mode = on trunk, no
-# feature branch). We source harness-common.sh (already sourced above) and set a
-# per-session baseline .sha at a chosen fork point, then assert HC_BASE.
-#
-# Helper: write the session baseline .sha at $1 (sha) with mtime $2 (epoch), so
-# the committer-date >= baseline-mtime signal is controllable.
+# Chunk A (P0-a, M1 fix): session-mode base advances past CONFIDENTLY-FOREIGN
+# commits ONLY — email-only predicate, NO mutable mtime signal. These drive
+# hc__resolve_session_base directly (session mode = on trunk, no feature branch).
+# We source harness-common.sh (already sourced above) and set a per-session
+# baseline .sha at a chosen fork point, then assert HC_BASE. A leading commit is
+# CONFIDENTLY-FOREIGN iff session_email non-empty AND commit committer_email
+# non-empty AND they DIFFER; the base advances past it. Anything else (same
+# email, empty email) STOPS the advance — the commit is KEPT in the changeset.
+# The baseline .sha mtime is NO LONGER consulted (it was a mutable false-PASS
+# risk); its date is irrelevant to every case below (case A10 locks that in).
 seed_baseline() {
-  local sha="$1" mtime_epoch="$2"
+  local sha="$1"
   mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
   printf '%s\n' "$sha" > "$REPO/.claude/.harness/baselines/${SID}.sha"
-  # Set mtime deterministically (touch -d @epoch is GNU; -t fallback).
-  touch -d "@$mtime_epoch" "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null \
-    || touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
 }
 
 # Run hc_resolve in-process against $REPO for session $SID; sets HC_BASE etc.
@@ -229,38 +229,39 @@ printf '== Case 7 (P0-a): different-email commit → base advances past it ==\n'
 new_repo; CLEANUP+=("$REPO"); SID="A7"
 commit_file base.txt                                   # c0 (orig base)
 C0=$(git -C "$REPO" rev-parse HEAD)
-# Foreign commit: different committer identity, dated in the past.
+# Foreign commit: different committer identity.
 GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
   GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
   bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
 CF=$(git -C "$REPO" rev-parse HEAD)
-# Baseline pinned at c0, mtime NOW (so foreign's past date is < mtime anyway).
-seed_baseline "$C0" "$(date +%s)"
+seed_baseline "$C0"
 resolve_inproc
 eq "case7 mode session" "session" "$HC_MODE"
 eq "case7 base advanced past foreign commit" "$CF" "$HC_BASE"
 eq "case7 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
 
-printf '== Case 8 (P0-a): session-email post-mtime commit → base stops there ==\n'
+printf '== Case 8 (P0-a): SAME-email commit → base STOPS (not dropped), any mtime ==\n'
 new_repo; CLEANUP+=("$REPO"); SID="A8"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-# Baseline mtime in the PAST so the upcoming session commit is post-mtime.
-seed_baseline "$C0" "$(( $(date +%s) - 3600 ))"
-commit_file mine.txt                                   # session identity (test@example.com), now
+commit_file mine.txt                                   # session identity (test@example.com)
+seed_baseline "$C0"
+# Advance the baseline .sha mtime to NOW (well AFTER the commit): under the old
+# AND-mtime logic this could misclassify the commit; under email-only it must NOT.
+touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
 resolve_inproc
-eq "case8 base unchanged (stops at first authored)" "$C0" "$HC_BASE"
+eq "case8 base unchanged (same-email commit stays in changeset)" "$C0" "$HC_BASE"
 
 printf '== Case 9 (P0-a): leading-foreign-then-authored → base at first authored ==\n'
 new_repo; CLEANUP+=("$REPO"); SID="A9"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-seed_baseline "$C0" "$(( $(date +%s) - 3600 ))"
 GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
   GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
   bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
 CF=$(git -C "$REPO" rev-parse HEAD)
-commit_file mine.txt                                   # session-authored, after foreign
+commit_file mine.txt                                   # session-authored (same email), after foreign
+seed_baseline "$C0"
 resolve_inproc
 eq "case9 base lands just below first authored (= foreign sha)" "$CF" "$HC_BASE"
 eq "case9 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
@@ -269,14 +270,35 @@ printf '== Case 10 (P0-a): unset user.email → base UNCHANGED (full range) ==\n
 new_repo; CLEANUP+=("$REPO"); SID="A10"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-seed_baseline "$C0" "$(date +%s)"
+seed_baseline "$C0"
 GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
   GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
   bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
-git -C "$REPO" config --unset user.email 2>/dev/null                 # no identity → cannot attribute
+git -C "$REPO" config --unset user.email 2>/dev/null                 # no identity → nothing confidently foreign
 resolve_inproc
 eq "case10 base UNCHANGED with empty user.email (full range)" "$C0" "$HC_BASE"
 git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1   # restore
+
+printf '== Case 11 (M1 regression lock): same-email commit older than baseline mtime → KEPT ==\n'
+# The M1 bug: the old AND-mtime logic would misclassify a genuinely session-
+# authored commit as FOREIGN when the baseline .sha mtime is advanced past the
+# commit's committer-date (touch/clock-skew), advancing the base past it and
+# letting the gate PASS with real work unverified. This case backdates the
+# commit's committer-date to WELL BEFORE the baseline .sha mtime. Under the old
+# logic the base would wrongly advance to the commit (base == C1); under the new
+# email-only logic the same-email commit is NOT confidently foreign → base STAYS
+# at C0 → the commit remains in the changeset. Fails under old logic, passes now.
+new_repo; CLEANUP+=("$REPO"); SID="A11"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+# Same-email commit, but committer-date backdated far into the past.
+GIT_COMMITTER_DATE="2001-01-01T00:00:00" GIT_AUTHOR_DATE="2001-01-01T00:00:00" \
+  bash -c "cd '$REPO' && echo m > mine.txt && git add mine.txt && git commit -qm mine"
+seed_baseline "$C0"
+# Force the baseline .sha mtime to NOW — far AFTER the commit's 2001 date.
+touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
+resolve_inproc
+eq "case11 base UNCHANGED (same-email commit kept despite older date)" "$C0" "$HC_BASE"
 
 # ---------------------------------------------------------------------------
 printf '\n== Summary: %d passed, %d failed ==\n' "$PASS" "$FAIL"

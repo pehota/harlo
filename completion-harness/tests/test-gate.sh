@@ -79,16 +79,12 @@ HDIR="$PROJECT_DIR/.claude/.harness"
 mkdir -p "$HDIR/baselines" "$HDIR/done-state" "$HDIR/review-log"
 
 # helper to set the baseline file for a session (still keyed by raw session id).
-# Backdate the .sha mtime to BEFORE the session commits (as SessionStart does in
-# reality — it writes the baseline at session start, before the agent commits),
-# so the P0-a session-authorship attribution (committer_date >= baseline mtime)
-# sees the session commits (email t@t, dated now) as SESSION-AUTHORED and does
-# NOT advance the base past them. Without this backdate the .sha is touched at
-# test-run time (mtime "now", after the commits), which would wrongly classify
-# the session's own commits as pre-baseline foreign and advance the base to HEAD.
+# P0-a attribution is now EMAIL-ONLY (M1 fix): the session commits here carry the
+# repo identity (email t@t) so they are NOT confidently-foreign → base-advance
+# STOPS at them → they stay in the changeset. The baseline .sha mtime is no
+# longer consulted, so its value is irrelevant; we do not backdate it.
 set_baseline() {
   printf '%s\n' "$2" > "$HDIR/baselines/$1.sha"
-  touch -d "@$(( $(date +%s) - 86400 ))" "$HDIR/baselines/$1.sha" 2>/dev/null || true
 }
 # Done-state is now keyed by HC_TASK_KEY. These fixtures run on `main` (the
 # repo's trunk) → session mode → task_key = "session-<session_id>". So the
@@ -727,10 +723,10 @@ run_case "EB3 empty range + clean tree -> allow (Step 3 quiet-exit)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
 # ============================================================================
-# Chunk G (P2-b, #6) — SHA-keyed escalation sidecar honored at Step 7.
+# Chunk G (P2-b, #6) — SHA-keyed escalation sidecar honored EARLY (Step 3d).
 # A done-state VALID at HEAD but with a RED outcome (tests exit 1) and NULL
 # escalation would block at Step 8. With a sidecar escalation-accept/<HEAD>.json
-# present, the gate honors it at Step 7 and ALLOWS — proving a session whose
+# present, the gate honors it at Step 3d and ALLOWS — proving a session whose
 # done-state lacks the escalation copy still honors the SHA-keyed acceptance.
 # ----------------------------------------------------------------------------
 SID=eg1; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
@@ -741,10 +737,10 @@ write_review_log 0
 rm -f "$HDIR/escalation-accept/$HEAD_SHA.json"
 run_case "EG1 red done-state, no sidecar -> block (control)" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
-# Seed the sidecar for THIS HEAD → gate honors it at Step 7 → ALLOW.
+# Seed the sidecar for THIS HEAD → gate honors it at Step 3d → ALLOW.
 mkdir -p "$HDIR/escalation-accept"
 printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$HEAD_SHA.json"
-run_case "EG1 red done-state + SHA sidecar -> allow (Step 7 honors sidecar)" allow \
+run_case "EG1 red done-state + SHA sidecar -> allow (Step 3d honors sidecar)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 # Sidecar disarms ONLY this HEAD: a sidecar for a DIFFERENT sha does NOT help.
 rm -f "$HDIR/escalation-accept/$HEAD_SHA.json"
@@ -752,6 +748,38 @@ printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$BASELINE_SHA.jso
 run_case "EG1 sidecar for OTHER sha -> block (disarms only this HEAD)" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 rm -f "$HDIR/escalation-accept/$BASELINE_SHA.json"
+
+# ----------------------------------------------------------------------------
+# EG2 (P2-b, #6, L2 fix) — CROSS-SESSION disarm: sidecar honored with NO
+# done-state. The whole point of the SHA-keyed sidecar is a DIFFERENT session
+# (a fresh session-<id> key that has no done-state for this task). Previously
+# the sidecar sat at Step 7, AFTER the Step-4 done-state-missing block, so it was
+# dead code cross-session. With the check at Step 3d it is reached first.
+#   (a) no done-state, clean committed tree at HEAD, sidecar for HEAD → ALLOW.
+SID=eg2; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+clear_review_log   # NO done-state, NO review-log for this fresh session key
+mkdir -p "$HDIR/escalation-accept"
+printf '{"type":"user_accepted"}\n' > "$HDIR/escalation-accept/$HEAD_SHA.json"
+run_case "EG2 no done-state + sidecar at HEAD -> allow (cross-session disarm)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+#   (b) move HEAD (+1 commit) → sidecar is for the OLD sha → BLOCK (no disarm).
+printf 'eg2\n' > "$PROJECT_DIR/eg2.txt"; git -C "$PROJECT_DIR" add -A; git -C "$PROJECT_DIR" commit -q -m eg2
+EG2_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+run_case "EG2 HEAD moved, sidecar for old sha -> block (keyed to exact HEAD)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+# rewind HEAD back and clean up so later cases see the original HEAD_SHA.
+git -C "$PROJECT_DIR" reset -q --hard "$HEAD_SHA"
+#   (c) introduced dirt + sidecar present → still BLOCK on the tree (Step 3b
+#       precedes 3d): an accepted escalation disarms the committed changeset, not
+#       new uncommitted work.
+ensure_clean
+printf 'introduced\n' > "$PROJECT_DIR/eg2dirt.txt"
+: > "$HDIR/baselines/$SID.dirty"   # empty baseline set → the untracked line is introduced
+run_case "EG2 introduced dirt + sidecar -> still block on tree (3b precedes 3d)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -f "$HDIR/baselines/$SID.dirty" "$PROJECT_DIR/eg2dirt.txt"
+rm -f "$HDIR/escalation-accept/$HEAD_SHA.json" "$HDIR/escalation-accept/$EG2_HEAD.json"
+ensure_clean
 
 # Writer: an escalated /done writes the SHA-keyed sidecar. Uses the WRITE script
 # against a self-contained repo to assert the sidecar file is created at HEAD.

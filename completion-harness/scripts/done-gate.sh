@@ -154,6 +154,23 @@ if [ -n "$HC_BASE" ] && git -C "$PROJECT_DIR" diff --quiet "$HC_BASE" "$HEAD_SHA
   exit 0
 fi
 
+# --- Step 3d: SHA-keyed escalation sidecar (cross-session disarm, P2-b #6) ----
+# An accepted escalation is persisted as escalation-accept/<HEAD_SHA>.json,
+# keyed to the EXACT committed HEAD. A DIFFERENT session (a fresh session-<id>
+# key) has no done-state for this task, so the Step-4 done-state-missing check
+# below would block first — the Step-7 sidecar honoring would then be dead code
+# for the cross-session case. Honoring it HERE — AFTER the tree-check (3b) and
+# empty-changeset check (3c) but BEFORE the done-state checks (Step 4) — lets an
+# accepted escalation survive across sessions on an unchanged trunk HEAD.
+#
+# Fail-safe: placed AFTER Step 3b so INTRODUCED uncommitted dirt still blocks
+# first — an accepted escalation disarms the COMMITTED changeset at this exact
+# HEAD, not new uncommitted work. Invariant: keyed to the exact HEAD sha, so any
+# new/amended commit → different sha → no sidecar → re-block.
+if [ -f "$HARNESS_DIR/escalation-accept/$HEAD_SHA.json" ]; then
+  exit 0
+fi
+
 # --- changeset-missing block reason (P1-a, #6): prepend a content-ful summary -
 # The S2 "/done" reason below (Steps 4/4b/5) is a bare instruction. Prepend a
 # one-shot changeset summary so the message says WHAT is being gated — file/commit
@@ -208,16 +225,12 @@ ESCALATION=$(jq -r '.escalation // "null"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ -n "$ESCALATION" ] && [ "$ESCALATION" != "null" ]; then
   exit 0
 fi
-# P2-b (#6): also honour a SHA-keyed escalation sidecar written for THIS exact
-# HEAD (session-independent). Reached only after Step 5 (verified_sha == HEAD),
-# so the done-state is already valid at HEAD; the sidecar simply lets a DIFFERENT
-# session — one whose done-state lacks the escalation copy — honour the same
-# acceptance for the same commit. Disarms ONLY this HEAD: a new commit → new sha
-# → no sidecar → re-block.
-ESC_SIDECAR="$HARNESS_DIR/escalation-accept/$HEAD_SHA.json"
-if [ -f "$ESC_SIDECAR" ]; then
-  exit 0
-fi
+# NOTE: the SHA-keyed escalation sidecar (escalation-accept/<HEAD>.json) is
+# honoured EARLY at Step 3d — BEFORE the done-state checks (Step 4) — so the
+# cross-session disarm path is reachable even when no done-state exists for the
+# new session key. It is therefore intentionally NOT re-checked here (a check at
+# this point would be dead code: Step 4/5 already required a valid done-state at
+# HEAD). This same-session path is the .escalation-field check above.
 
 # --- Step 8: recorded checklist outcomes must all be green -> else BLOCK -----
 # With no escalation (step 7 already returned if one was present), the gate
