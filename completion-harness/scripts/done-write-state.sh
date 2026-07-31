@@ -141,6 +141,7 @@ HAS_ESCALATION=$(printf '%s' "$PAYLOAD" | jq -r '
 # validated there, so there is nothing to anchor and nothing to claim.
 REVIEW_ANCHOR_SHA=""
 EXTRA_ADMIT=""
+CHAIN_ADMIT=""
 if [ "$HAS_ESCALATION" != "yes" ]; then
   # tests must be GREEN AND carry evidence. tests.status=="not_run" is allowed
   # ONLY with an escalation (handled by the outer branch — we are in the no-
@@ -187,43 +188,81 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # refuse. HEAD is the live rev-parse computed above (VERIFIED_SHA). A missing
   # log, or a jq crash / unknown severity ("ERR"), all refuse (fail toward block).
   #
-  # CARRY. The HEAD-exact log is preferred. If it is absent, the PRIOR
-  # done-state for this task may still point at a log that describes exactly
-  # this content: accept its review_anchor_sha, but ONLY when that prior state
-  # recorded a head_tree equal to the live HEAD_TREE — i.e. the HEAD move
-  # changed no blob and no mode. That is the same tree-equality proof the gate
-  # requires; nothing weaker (ancestry in particular) is accepted. The anchor
-  # must be a raw object id, or it would resolve against the current tree and
-  # self-validate. The resolved anchor is recorded below as this state's own
-  # review_anchor_sha, so the chain does not break at the next HEAD move.
+  # CARRY. The HEAD-exact log is preferred. The PRIOR done-state for this task
+  # may ALSO point at a log that still attests part of the changeset, and which
+  # of the two admission modes it earns is decided by the SAME discriminator the
+  # gate uses — whether a HEAD-exact log exists (see the gate's Step-8 comment
+  # and hc_review_coverage_gap's header). Writer and gate must resolve an
+  # IDENTICAL candidate set; that symmetry is the requirement, because a
+  # divergence means one of them refuses exactly what the other accepts.
+  #
+  #   NO HEAD-exact log → the prior anchor becomes THIS write's review-log, but
+  #     ONLY when the prior state recorded a head_tree equal to the live
+  #     HEAD_TREE — i.e. the HEAD move changed no blob and no mode. That is the
+  #     same tree-equality proof the gate requires; nothing weaker (ancestry in
+  #     particular) is accepted. Passed as EXTRA_ADMIT (blobs resolve at HEAD,
+  #     byte-identical under equal trees, and gc-robust).
+  #
+  #   HEAD-exact log EXISTS → the tree HAS moved on, so the prior anchor is an
+  #     ORPHAN: an amend rewrote its sha, so ancestry can no longer see it, yet
+  #     it still attests files this commit did not touch. Without admitting it,
+  #     the carry's benefit expires at the very next real commit — a file whose
+  #     content nothing changed since the anchor reviewed it falls into the
+  #     coverage gap and must be pointlessly re-reviewed. Passed as CHAIN_ADMIT
+  #     (blobs resolve at the ANCHOR's own sha), so it can only cover files that
+  #     genuinely still hold the reviewed content. It does NOT become this
+  #     write's review-log — severity still comes from the HEAD-exact log.
+  #
+  # Only an ORPHAN is worth admitting: an anchor that is still an ancestor of
+  # HEAD is already in the chain on its own merits. The anchor must be a raw
+  # object id, or it would resolve against the current tree and self-validate.
+  # The resolved anchor is recorded below as this state's own review_anchor_sha,
+  # so the chain does not break at the next HEAD move — and so the gate, reading
+  # that field back, admits exactly what this write did.
   REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${VERIFIED_SHA}.json"
   REVIEW_ANCHOR_SHA="$VERIFIED_SHA"
-  if [ ! -f "$REVIEW_LOG" ] && [ -n "$HEAD_TREE" ]; then
-    PRIOR_STATE="$PROJECT_DIR/.claude/.harness/done-state/${HC_TASK_KEY}.json"
-    if [ -f "$PRIOR_STATE" ]; then
-      PRIOR_TREE=$(jq -r '.head_tree // ""' "$PRIOR_STATE" 2>/dev/null)
-      PRIOR_ANCHOR=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
-      # LEGACY prior state (written before head_tree existed): recompute its
-      # tree live from its verified_sha, exactly as the gate's Step 5 does. Both
-      # must use the same fallback or they diverge — the gate would carry a
-      # reworded HEAD and the writer would then refuse the very write the gate
-      # is about to accept, which is the churn this whole change removes. The
-      # outer `[ -n "$HEAD_TREE" ]` guard keeps two empties from matching.
-      if [ -z "$PRIOR_TREE" ]; then
-        PRIOR_VERIFIED=$(jq -r '.verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
-        if [ -n "$PRIOR_VERIFIED" ]; then
-          PRIOR_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify "${PRIOR_VERIFIED}^{tree}" 2>/dev/null)
-        fi
-      fi
-      if [ "$PRIOR_TREE" = "$HEAD_TREE" ] && [ -n "$PRIOR_ANCHOR" ] \
-         && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
-         && hc__is_object_id "$PRIOR_ANCHOR" \
-         && [ -f "$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json" ]; then
-        REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json"
-        REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
-        EXTRA_ADMIT="$PRIOR_ANCHOR"
+  CHAIN_ADMIT=""
+  HEAD_LOG_EXISTS=0
+  [ -f "$REVIEW_LOG" ] && HEAD_LOG_EXISTS=1
+  PRIOR_STATE="$PROJECT_DIR/.claude/.harness/done-state/${HC_TASK_KEY}.json"
+  PRIOR_ANCHOR=""
+  PRIOR_TREE=""
+  if [ -f "$PRIOR_STATE" ]; then
+    PRIOR_TREE=$(jq -r '.head_tree // ""' "$PRIOR_STATE" 2>/dev/null)
+    PRIOR_ANCHOR=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
+    # LEGACY prior state (written before head_tree existed): recompute its tree
+    # live from its verified_sha, exactly as the gate's Step 5 does. Both must
+    # use the same fallback or they diverge — the gate would carry a reworded
+    # HEAD and the writer would then refuse the very write the gate is about to
+    # accept, which is the churn this whole change removes.
+    if [ -z "$PRIOR_TREE" ]; then
+      PRIOR_VERIFIED=$(jq -r '.verified_sha // ""' "$PRIOR_STATE" 2>/dev/null)
+      if [ -n "$PRIOR_VERIFIED" ]; then
+        PRIOR_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify "${PRIOR_VERIFIED}^{tree}" 2>/dev/null)
       fi
     fi
+  fi
+  # A usable prior anchor: a raw object id with a review-log on disk.
+  PRIOR_ANCHOR_OK=0
+  if [ -n "$PRIOR_ANCHOR" ] \
+     && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
+     && hc__is_object_id "$PRIOR_ANCHOR" \
+     && [ -f "$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json" ]; then
+    PRIOR_ANCHOR_OK=1
+  fi
+  if [ "$HEAD_LOG_EXISTS" -eq 0 ]; then
+    # Tree-equality carry. `[ -n "$HEAD_TREE" ]` keeps two empties from matching.
+    if [ -n "$HEAD_TREE" ] && [ "$PRIOR_TREE" = "$HEAD_TREE" ] && [ "$PRIOR_ANCHOR_OK" -eq 1 ]; then
+      REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json"
+      REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
+      EXTRA_ADMIT="$PRIOR_ANCHOR"
+    fi
+  elif [ "$PRIOR_ANCHOR_OK" -eq 1 ] && [ "$PRIOR_ANCHOR" != "$VERIFIED_SHA" ] \
+       && ! git -C "$PROJECT_DIR" merge-base --is-ancestor "$PRIOR_ANCHOR" "$VERIFIED_SHA" 2>/dev/null; then
+    # Orphaned anchor alongside a HEAD-exact log: keep it in the chain, and
+    # RECORD it so the gate at this same HEAD admits the same log.
+    CHAIN_ADMIT="$PRIOR_ANCHOR"
+    REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
   fi
   if [ ! -f "$REVIEW_LOG" ]; then
     echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} (.claude/.harness/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
@@ -263,7 +302,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # fail-toward-block discipline: a computation error with a real changeset returns
   # the full changed set (non-empty → refuse), never SKIP.
   if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
-    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT")
+    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
   else
     # Library failed to source — the review-log refusal above already exited via
     # the ERR path, so we never reach here without the function; but guard anyway

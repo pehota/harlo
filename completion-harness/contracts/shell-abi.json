@@ -67,10 +67,10 @@
     {
       "name": "hc_review_coverage_gap",
       "globals": [],
-      "args": "<review_log_file> <base> <head> [proj] [extra_admit]",
+      "args": "<review_log_file> <base> <head> [proj] [extra_admit] [chain_admit]",
       "stdout": "newline-separated uncovered files, empty=full coverage, or SKIP",
       "return_codes": "always 0",
-      "notes": "extra_admit (5th, optional) is a carried review-anchor sha admitted to the chain by name and resolved at <head>; callers must pass it only after proving the anchor's tree equals HEAD's tree.",
+      "notes": "extra_admit (5th, optional) is a carried review-anchor sha admitted to the chain by name and resolved at <head>; callers must pass it only after proving the anchor's tree equals HEAD's tree. chain_admit (6th, optional) is an ORPHANED review-anchor sha admitted by name but resolved at ITS OWN sha, so its attestations are blob-checked against <head> instead of self-validating; it needs no tree-equality proof, and an unresolvable sha contributes nothing (fail toward block).",
       "sentinels": [
         "SKIP"
       ]

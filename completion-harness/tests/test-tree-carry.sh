@@ -287,6 +287,92 @@ else
   bad "6 anchored sha $HEAD0 NOT kept — the next SessionStart would reap it"
 fi
 
+# ===========================================================================
+# 7. THE NEXT REAL COMMIT — the carry must not expire one commit later.
+#
+#    BASE -> A (a.js) -> tree-identical amend to B -> real commit C touching
+#    ONLY b.js, with a fresh delta review-log attesting only b.js.
+#
+#    The amend orphaned log A: its sha is no longer an ancestor of C, so the
+#    coverage chain's ancestry test cannot see it, and a.js — whose content NO
+#    commit has touched since A reviewed it — falls into the gap. The writer
+#    then refuses, demanding a pointless re-review of an unchanged file, and the
+#    gate refuses the same changeset. Admitting the recorded anchor to the chain
+#    (resolved at its OWN sha) fixes both.
+#
+#    7b is the negative control WITHOUT which 7 would also pass for a
+#    self-validating implementation: if C had actually CHANGED a.js, the orphaned
+#    anchor must NOT cover it.
+# ===========================================================================
+# write_log <basename_sha> <reviewed_sha> <files_json>
+write_log() {
+  printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[],"open_findings":0}\n' \
+    "$2" "$3" > "$HDIR/review-log/$1.json"
+}
+
+mk_verified
+git -C "$REPO" commit -q --amend -m "reworded" >/dev/null 2>&1   # A -> B, same tree
+printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITER" "$SID" >/dev/null 2>&1
+printf 'b2\n' > "$REPO/b.js"                                     # real commit C
+git -C "$REPO" add -A >/dev/null 2>&1
+git -C "$REPO" commit -qm "C touches only b.js" >/dev/null 2>&1
+C=$(git -C "$REPO" rev-parse HEAD)
+write_log "$C" "$C" '["b.js"]'
+if git -C "$REPO" merge-base --is-ancestor "$HEAD0" "$C" 2>/dev/null; then
+  bad "7 setup: log A is still an ancestor of C — the case would be vacuous"
+else
+  ok "7 setup: the amend orphaned log A (not an ancestor of C)"
+fi
+if [ "$(git -C "$REPO" rev-parse "$HEAD0:a.js")" = "$(git -C "$REPO" rev-parse "$C:a.js")" ]; then
+  ok "7 setup: a.js holds exactly the content log A attested"
+else
+  bad "7 setup: a.js content differs from what log A attested"
+fi
+WOUT=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITER" "$SID" 2>&1)
+WRC=$?
+if [ "$WRC" -eq 0 ]; then
+  ok "7 writer accepts at C: the orphaned anchor still covers the unchanged a.js"
+else
+  bad "7 writer REFUSED at C — the carry expired at the next real commit (rc=$WRC): $WOUT"
+fi
+if [ "$(jq -r '.review_anchor_sha // ""' "$HDIR/done-state/session-$SID.json")" = "$HEAD0" ]; then
+  ok "7 the orphaned anchor is RECORDED, so the gate admits the same log"
+else
+  bad "7 anchor not recorded (got $(jq -r '.review_anchor_sha // ""' "$HDIR/done-state/session-$SID.json"), want $HEAD0)"
+fi
+OUT=$(run_gate)
+if is_block "$OUT"; then
+  bad "7 gate BLOCKed at C though the writer accepted — writer/gate DIVERGE. out=$OUT"
+else
+  ok "7 gate ALLOWs at C (writer and gate resolve the same candidate set)"
+fi
+
+# 7b. NEGATIVE CONTROL — C also CHANGES a.js. The orphaned anchor attested the
+#     OLD content, so it must NOT cover it: blobs resolve at the anchor's own
+#     sha, never at HEAD (which would self-validate every path it ever listed).
+mk_verified
+git -C "$REPO" commit -q --amend -m "reworded" >/dev/null 2>&1
+printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITER" "$SID" >/dev/null 2>&1
+printf 'b2\n' > "$REPO/b.js"
+printf 'a-CHANGED\n' > "$REPO/a.js"                              # C changes a.js too
+git -C "$REPO" add -A >/dev/null 2>&1
+git -C "$REPO" commit -qm "C touches b.js AND a.js" >/dev/null 2>&1
+C=$(git -C "$REPO" rev-parse HEAD)
+write_log "$C" "$C" '["b.js"]'                                   # still attests only b.js
+WOUT=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITER" "$SID" 2>&1)
+WRC=$?
+if [ "$WRC" -ne 0 ] && printf '%s' "$WOUT" | grep -q 'a\.js'; then
+  ok "7b writer REFUSES when C actually changed a.js (anchor cannot self-validate)"
+else
+  bad "7b writer accepted a CHANGED a.js on the orphaned anchor (rc=$WRC): $WOUT"
+fi
+OUT=$(run_gate)
+if is_block "$OUT"; then
+  ok "7b gate BLOCKs the changed-but-unattested a.js"
+else
+  bad "7b gate ALLOWed a changed, unattested a.js. out=$OUT"
+fi
+
 echo
 echo "test-tree-carry: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

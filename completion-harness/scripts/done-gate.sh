@@ -357,8 +357,8 @@ fi
 #
 # CANDIDATE SET — EXACTLY TWO harness-derived paths, never a directory listing:
 #   1. review-log/<HEAD_SHA>.json, preferred; and
-#   2. the CARRIED ANCHOR review-log/<review_anchor_sha>.json, the log the
-#      done-state records as the one its verification actually rests on.
+#   2. the ANCHOR review-log/<review_anchor_sha>.json, the log the done-state
+#      records as the one its verification actually rests on.
 # The anchor is admitted whenever its log exists — NOT only when CARRY=1. After
 # a carry the writer records a done-state at the NEW sha whose anchor is still
 # the OLD log; the next gate run takes the sha-equal path (CARRY=0) and would
@@ -366,14 +366,29 @@ fi
 # later. It is also admitted alongside an existing HEAD-exact log, because a
 # delta-scoped HEAD log may attest fewer paths than the anchor does.
 #
-# Reaching here means Step 5 proved the done-state's tree == HEAD's tree
-# (trivially so on the sha-equal path), which is exactly the precondition for
-# resolving the anchor's attested blobs at HEAD. The anchor must be a raw object
-# id: a symbolic value would resolve against the current tree and self-validate.
-# Schema validation and hc_review_blocking then run on the ONE resolved log
-# exactly as before.
+# HOW it is admitted depends on whether a HEAD-exact log exists, and that split
+# is a SAFETY boundary, not a style choice (see hc_review_coverage_gap's header):
+#
+#   no HEAD-exact log  → the anchor IS this verification's log. Step 5 has just
+#     proved the done-state's tree == HEAD's tree, and the writer only ever
+#     records an anchor whose content equals that state's, so the anchor's
+#     content equals HEAD's. Pass it as EXTRA_ADMIT: blobs resolve at HEAD,
+#     which is byte-identical here and survives a gc of the anchor.
+#
+#   HEAD-exact log EXISTS → a later REAL commit has moved the tree on, so the
+#     anchor is an ORPHAN: still attesting files that commit did not touch, but
+#     no longer content-equal to HEAD. Head-resolution would self-validate it.
+#     Pass it as CHAIN_ADMIT instead: blobs resolve at the ANCHOR's own sha, so a
+#     file the later commit actually changed is genuinely uncovered and blocks.
+#
+# The writer applies the SAME split on the same discriminator, so the two resolve
+# an identical candidate set. The anchor must be a raw object id: a symbolic
+# value would resolve against the current tree and self-validate. Schema
+# validation and hc_review_blocking then run on the ONE resolved log exactly as
+# before.
 REVIEW_LOG="$HARNESS_DIR/review-log/$HEAD_SHA.json"
 EXTRA_ADMIT=""
+CHAIN_ADMIT=""
 # LEGACY states predate review_anchor_sha; for them the anchor IS verified_sha
 # (the log the write validated by construction), the same fallback the writer
 # uses. On the sha-equal path that resolves to HEAD_SHA, so it changes nothing
@@ -381,9 +396,11 @@ EXTRA_ADMIT=""
 ANCHOR_SHA=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ -n "$ANCHOR_SHA" ] && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; }; then
   if hc__is_object_id "$ANCHOR_SHA" && [ -f "$HARNESS_DIR/review-log/$ANCHOR_SHA.json" ]; then
-    EXTRA_ADMIT="$ANCHOR_SHA"
     if [ ! -f "$REVIEW_LOG" ]; then
       REVIEW_LOG="$HARNESS_DIR/review-log/$ANCHOR_SHA.json"
+      EXTRA_ADMIT="$ANCHOR_SHA"
+    else
+      CHAIN_ADMIT="$ANCHOR_SHA"
     fi
   fi
 fi
@@ -424,7 +441,7 @@ fi
 # so a missing function here cannot silently allow. A coverage-computation error
 # with a real changeset returns the full changed set (non-empty → block), never
 # SKIP — so it fails toward block, not toward an accidental allow.
-GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT")
+GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
   block "review the uncovered files (${GAP_LIST}), then re-run /done"

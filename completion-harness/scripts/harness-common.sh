@@ -661,12 +661,33 @@ hc_review_blocking() {
 
 # ---------------------------------------------------------------------------
 # hc_review_coverage_gap <review_log_file> <base> <head> [proj] [extra_admit]
+#                        [chain_admit]
 #
-# <extra_admit> (optional) is a CARRIED review-anchor sha: a chain-log the
-# caller has already proven still describes the current content (its recorded
-# tree equals HEAD's tree). It is admitted to the chain by NAME, bypassing the
-# ancestry test its rewritten sha can no longer satisfy, and its blobs are
-# resolved at <head>. Callers must pass it ONLY after proving tree equality.
+# TWO admission overrides, both bypassing the ancestry test that an ORPHANED
+# anchor's rewritten sha can no longer satisfy. They differ ONLY in the rev their
+# attested blobs resolve against, and that difference is the whole safety
+# argument — do not merge them:
+#
+# <extra_admit> (5th, optional) — a CARRIED anchor whose content the caller has
+#   already proven identical to <head> (its recorded tree equals HEAD's tree).
+#   Its blobs resolve at <head>. That is byte-identical to resolving them at the
+#   anchor — equal trees, same blobs — minus the reflog/gc dependency, so the
+#   carry survives a gc that pruned the anchor. Callers must pass it ONLY after
+#   proving tree equality; passing it without that proof is a coverage HOLE (the
+#   attestation would resolve against the CURRENT tree and self-validate).
+#
+# <chain_admit> (6th, optional) — an ORPHANED anchor whose content the caller has
+#   NOT proven equal to <head>: the tree HAS moved on (a later real commit), but
+#   the anchor still attests files that commit did not touch. Its blobs resolve
+#   at ITS OWN sha, so coverage is decided by a GENUINE blob comparison
+#   (<chain_admit>:p == <head>:p) and a file the later commit actually changed is
+#   NOT covered. No tree-equality precondition is needed, and none is assumed.
+#   If the sha no longer resolves (gc), its blobs come back empty, it contributes
+#   nothing, and the files fall into the gap — fail toward block, never a
+#   head-resolution fallback.
+#
+# Both are checked AFTER the hc__is_object_id basename guard, so a symbolic name
+# can never enter the chain through either door.
 #
 # STRUCTURAL coverage check for the review step. Answers: "did the reviewer
 # actually attest to having examined every file the changeset touched, AT ITS
@@ -738,6 +759,11 @@ hc_review_coverage_gap() {
   # at the anchor — equal trees, same blobs — minus the reflog/gc dependency.
   # Empty (the normal case) admits nothing extra.
   local extra="${5:-}"
+  # chain: an ORPHANED review anchor whose content is NOT claimed equal to
+  # <head>. Admitted to the chain by NAME (the ancestry test cannot see it after
+  # an amend/rebase rewrote its sha) but resolved at ITS OWN sha, so every
+  # coverage decision it makes is a real blob comparison. See the header.
+  local chain="${6:-}"
 
   # No changeset base → coverage is not computable. SKIP (no-block degrade).
   [ -z "$base" ] && { printf 'SKIP'; return 0; }
@@ -789,6 +815,10 @@ hc_review_coverage_gap() {
     if [ -n "$extra" ] && [ "$fname" = "$extra" ]; then
       # CARRIED ANCHOR: admitted by name, resolved at head (see `extra` above).
       rsha="$head"
+    elif [ -n "$chain" ] && [ "$fname" = "$chain" ]; then
+      # ORPHANED ANCHOR: admitted by name, resolved at its OWN sha, so its
+      # attestations are blob-checked against head rather than self-validating.
+      rsha="$fname"
     else
       # Filename sha must be an ancestor of head and NOT of base (task-side).
       git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
