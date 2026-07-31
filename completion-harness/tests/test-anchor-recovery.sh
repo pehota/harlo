@@ -187,6 +187,110 @@ else
 fi
 rm -rf "$R"
 
+# ============================================================================
+# B — RECOVERY (b): the done-state's writer-stamped base_sha.
+#
+# B1 is the discriminating case. With HC_BASE empty the coverage check SKIPs, so
+# a review-log attesting NOTHING sailed through a two-file changeset: the gate
+# ALLOWED. Recovering the anchor restores the coverage computation and it blocks.
+# ============================================================================
+R=$(make_repo); SID=recov-gap
+C1=$(git -C "$R" rev-parse HEAD~2)
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" ""            # review-log attests [] ...
+jq --arg b "$C1" '.base_sha = $b' "$R/.claude/.harness/done-state/session-$SID.json" \
+  > "$R/.claude/.harness/done-state/session-$SID.json.tmp" \
+  && mv "$R/.claude/.harness/done-state/session-$SID.json.tmp" \
+        "$R/.claude/.harness/done-state/session-$SID.json"   # ... but base_sha spans 2 files
+OUT=$(run_gate "$R" "$SID"); RSN=$(reason "$OUT")
+if is_block "$OUT"; then
+  ok "B1 recovered anchor restores the coverage check (uncovered changeset BLOCKS)"
+else
+  bad "B1 recovered anchor did not restore coverage — gate allowed an unattested changeset. out=$OUT"
+fi
+case "$RSN" in
+  *"review the uncovered files"*b.js*|*"review the uncovered files"*c.js*)
+    ok "B1 block names the uncovered files from the recovered range" ;;
+  *) bad "B1 block is not the coverage block. reason=$RSN" ;;
+esac
+rm -rf "$R"
+
+# B2 — same recovery, but the review-log DOES attest the whole recovered range:
+#      the normal checks run and are satisfied → the gate must ALLOW, not block.
+R=$(make_repo); SID=recov-ok
+C1=$(git -C "$R" rev-parse HEAD~2)
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" "$C1"         # files_reviewed = diff C1..HEAD, base_sha = C1
+OUT=$(run_gate "$R" "$SID")
+if [ -z "$OUT" ]; then
+  ok "B2 recovered anchor + full coverage + green outcomes → ALLOW"
+else
+  bad "B2 recovered anchor blocked a fully-verified changeset. out=$OUT"
+fi
+rm -rf "$R"
+
+# B3 — hc__recover_base_from_state's admission guards, unit-level. Only a raw
+#      object id naming a commit that EXISTS in this repo is admissible; a
+#      symbolic name would resolve against the current tree and self-validate,
+#      and a dangling/foreign sha would become a rev git later errors on.
+R=$(make_repo)
+# shellcheck source=../scripts/harness-common.sh
+. "$HC_COMMON" 2>/dev/null
+C1=$(git -C "$R" rev-parse HEAD~2)
+S="$R/.claude/.harness/done-state/probe.json"
+mk_state() { jq -n --arg b "$1" 'if $b == "ABSENT" then {} else {base_sha:$b} end' > "$S"; }
+mk_state "$C1"
+[ "$(hc__recover_base_from_state "$S" "$R")" = "$C1" ] \
+  && ok "B3 recovers a real commit sha" \
+  || bad "B3 did not recover a real commit sha"
+mk_state "HEAD"
+[ -z "$(hc__recover_base_from_state "$S" "$R")" ] \
+  && ok "B3 rejects a SYMBOLIC base_sha (would self-validate against the live tree)" \
+  || bad "B3 accepted the symbolic base_sha 'HEAD'"
+mk_state "no-git"
+[ -z "$(hc__recover_base_from_state "$S" "$R")" ] \
+  && ok "B3 rejects the literal 'no-git' baseline marker" \
+  || bad "B3 accepted 'no-git' as an anchor"
+mk_state "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+[ -z "$(hc__recover_base_from_state "$S" "$R")" ] \
+  && ok "B3 rejects a well-formed sha that is not an object in this repo" \
+  || bad "B3 accepted a dangling sha as an anchor"
+mk_state "ABSENT"
+[ -z "$(hc__recover_base_from_state "$S" "$R")" ] \
+  && ok "B3 recovers nothing when base_sha is absent (writer deletes it on an empty base)" \
+  || bad "B3 invented an anchor from a state with no base_sha"
+[ -z "$(hc__recover_base_from_state "$R/.claude/.harness/done-state/nope.json" "$R")" ] \
+  && ok "B3 recovers nothing from a missing done-state" \
+  || bad "B3 returned a value for a missing done-state"
+rm -rf "$R"
+
+# ============================================================================
+# C — THE CASE-2 TRAP. A recovered anchor equal to HEAD must NEVER be usable to
+#     declare the changeset empty. This is the structural invariant: the
+#     recovered value never reaches HC_BASE, so Step 3's quiet-exit and Step 3c's
+#     empty-changeset allow cannot see it. Fixture: base_sha == HEAD, clean tree,
+#     and a done-state whose recorded outcomes are RED. If recovery leaked into
+#     HC_BASE the gate would quiet-exit at Step 3 (empty stdout) and wave the
+#     unverified session through; it must block on the red outcome instead.
+# ============================================================================
+R=$(make_repo); SID=trap-head
+HEAD_SHA=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" "$HEAD_SHA"
+jq '.tests.exit_code = 1' "$R/.claude/.harness/done-state/session-$SID.json" > "$R/ds.tmp" \
+  && mv "$R/ds.tmp" "$R/.claude/.harness/done-state/session-$SID.json"
+OUT=$(run_gate "$R" "$SID")
+if is_block "$OUT"; then
+  ok "C recovered base == HEAD does NOT quiet-exit; the outcome check still runs"
+else
+  bad "C recovered base == HEAD waved an unverified session through. out=[$OUT]"
+fi
+case "$(reason "$OUT")" in
+  *"fix failing tests"*) ok "C the block is the recorded-outcome block, as it should be" ;;
+  *) bad "C blocked for the wrong reason: $(reason "$OUT")" ;;
+esac
+rm -rf "$R"
+
 echo
 echo "test-anchor-recovery: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

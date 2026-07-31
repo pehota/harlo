@@ -39,6 +39,49 @@ hc__is_object_id() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc__recover_base_from_state <done_state_file> [proj]
+#
+# Prints the changeset base recoverable from a done-state's `base_sha`, or
+# NOTHING when nothing is safely recoverable. Never fails the caller.
+#
+# `base_sha` is a FACT stamped by done-write-state.sh from its own resolved
+# HC_BASE — the merge there is `payload * {facts}` and an EMPTY base DELETES the
+# key rather than defaulting it, so the field can never carry an agent-supplied
+# value. That provenance is the whole reason it is admissible as an anchor when
+# the SessionStart baseline has gone missing (state dir deleted, age-reaped).
+#
+# Three guards, all required:
+#   - jq present (else we cannot read the field at all);
+#   - the value is a RAW object id (hc__is_object_id) — a symbolic name like
+#     HEAD would resolve against the CURRENT tree and self-validate;
+#   - the object still EXISTS as a commit in THIS repo (cat-file -e) — a stale
+#     or foreign sha must not become a rev git would later error on. This also
+#     rejects the literal "no-git" that baseline-snapshot.sh writes when HEAD
+#     does not resolve.
+#
+# CALLER CONTRACT: the returned value is a RECOVERED anchor, not the
+# SessionStart baseline. It must only feed checks that make the gate STRICTER
+# (review coverage, the changeset summary). It must NEVER be assigned to
+# HC_BASE, because HC_BASE also drives the two steps that GRANT a pass — the
+# gate's Step 3 quiet-exit and Step 3c empty-changeset allow — where a recovered
+# base equal to HEAD would wave a whole unverified session through.
+hc__recover_base_from_state() {
+  local state="$1"
+  local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  [ -f "$state" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local b
+  b=$(jq -r '.base_sha // ""' "$state" 2>/dev/null)
+  [ -n "$b" ] || return 0
+  hc__is_object_id "$b" || return 0
+  git -C "$proj" cat-file -e "${b}^{commit}" 2>/dev/null || return 0
+
+  printf '%s' "$b"
+  return 0
+}
+
 # Offline, conservative trunk detection. Prints the trunk name, or nothing
 # (empty = UNCONFIDENT). Never consults origin/HEAD (repos may have no remote).
 hc__detect_trunk() {

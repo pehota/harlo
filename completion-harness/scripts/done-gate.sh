@@ -85,6 +85,35 @@ HEAD_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/nul
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
+# --- Step 2a: changeset-anchor recovery (empty HC_BASE) ---------------------
+# HC_BASE is empty whenever the resolver found no anchor: session mode with no
+# baselines/<sid>.sha (state dir deleted mid-session, 14-day age-reap, or a
+# SessionStart that never ran for the id the gate resolves), a zero-length or
+# unwritable baseline file, or task mode with an empty pin. The gate then loses
+# its coverage check (hc_review_coverage_gap SKIPs without a base) and its
+# changeset summary.
+#
+# An anchor the harness ITSELF stamped can be recovered: done-write-state.sh
+# records `base_sha` from its own resolved HC_BASE and DELETES the key when that
+# base is empty, so the field is a writer fact, never agent payload
+# (hc__recover_base_from_state re-validates it as a live commit object anyway).
+#
+# STRUCTURAL SAFETY BOUNDARY — the recovered value is kept in its OWN variable
+# and is deliberately NOT assigned to HC_BASE. HC_BASE drives the only two steps
+# that GRANT a pass (Step 3's HEAD==base quiet-exit and Step 3c's
+# empty-changeset allow); a recovered base equal to HEAD would make an entire
+# unverified session look like "nothing to verify". Keeping it separate makes
+# that impossible by construction rather than by predicate. The recovered anchor
+# feeds ONLY checks that make the gate STRICTER: review coverage and the summary.
+HC_BASE_RECOVERED=""
+if [ -z "$HC_BASE" ] \
+   && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
+  HC_BASE_RECOVERED=$(hc__recover_base_from_state "$DONE_STATE_FILE" "$PROJECT_DIR" 2>/dev/null)
+fi
+# The base the STRICTER checks use: the real anchor when we have one, else the
+# recovered one, else empty (coverage SKIPs and the reason says so — Step 4).
+COVER_BASE="${HC_BASE:-$HC_BASE_RECOVERED}"
+
 # --- Step 2b: pending-escalation one-shot pass (P1-b, #6) -------------------
 # When /done needs to AskUserQuestion for a Category-C / user_halt escalation, it
 # writes pending-escalation/<task_key>.json FIRST. The AskUserQuestion turn ends
@@ -225,13 +254,13 @@ fi
 # repair that actually restores it (a SessionStart). Re-snapshotting the baseline
 # here would be the wrong repair: at gate time HEAD already carries the session's
 # commits, so a fresh baseline would whitelist exactly the work under gate.
-if [ -z "$HC_BASE" ]; then
+if [ -z "$COVER_BASE" ]; then
   S2_REASON="no changeset anchor was recorded for this session — .claude/.harness/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
 else
   S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
   if command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; then
     HC_SESSION_ID="$SESSION_ID"
-    CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$HC_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+    CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$COVER_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
     [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
 $S2_REASON"
   fi
@@ -457,7 +486,7 @@ fi
 # so a missing function here cannot silently allow. A coverage-computation error
 # with a real changeset returns the full changed set (non-empty → block), never
 # SKIP — so it fails toward block, not toward an accidental allow.
-GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
+GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$COVER_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
   block "review the uncovered files (${GAP_LIST}), then re-run /done"
