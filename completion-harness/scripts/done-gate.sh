@@ -213,12 +213,28 @@ fi
 # commit is foreign). Guarded: if the helper is unavailable, S2_REASON degrades to
 # the bare string. HC_SESSION_ID lets hc_changeset_summary find the baseline mtime
 # for its session-authorship tally.
-S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
-if command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; then
-  HC_SESSION_ID="$SESSION_ID"
-  CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$HC_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
-  [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
+#
+# NO-ANCHOR VARIANT. With an EMPTY base the summary above is a lie in both
+# halves: it renders "changeset ..<head> — 0 files, +0/-0" (an empty range against
+# an empty rev) and then tells the agent to "/done the changeset" — an instruction
+# that cannot succeed, because the thing that is missing is the anchor, not the
+# verification. The VERDICT is unchanged (same discipline as a3b600e: without an
+# anchor git cannot distinguish "nothing to verify" from "a whole session of
+# unverified commits", so we block rather than guess) — only the CLAIM and the
+# REMEDY change: name the missing artefact, the ways it goes missing, and the one
+# repair that actually restores it (a SessionStart). Re-snapshotting the baseline
+# here would be the wrong repair: at gate time HEAD already carries the session's
+# commits, so a fresh baseline would whitelist exactly the work under gate.
+if [ -z "$HC_BASE" ]; then
+  S2_REASON="no changeset anchor was recorded for this session — .claude/.harness/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
+else
+  S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
+  if command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; then
+    HC_SESSION_ID="$SESSION_ID"
+    CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$HC_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+    [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
 $S2_REASON"
+  fi
 fi
 
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
