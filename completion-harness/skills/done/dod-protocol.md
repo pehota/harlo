@@ -441,6 +441,11 @@ Include an **EFFORT line**: review rounds used (of `max_review_rounds`), fix att
 made, and wall-clock elapsed if readily available. **Token/dollar cost is not measurable
 from the shell** — do not estimate it; rounds/attempts/elapsed are the honest accounting.
 
+If the gate passed and the project dir is a worktree on a non-trunk branch, close the
+report by telling the user they can run `finish-worktree.sh` to rebase onto trunk,
+fast-forward and tear the worktree down. **Say it, never do it** — integration is the
+user's call, not a side effect of verification.
+
 ---
 
 <a id="escalation"></a>
