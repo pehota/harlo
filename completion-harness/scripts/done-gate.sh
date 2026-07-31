@@ -557,4 +557,32 @@ if [ "$TASK_FAILED" != "0" ]; then
 fi
 
 # --- Step 9: all checks pass -> allow the stop ------------------------------
+#
+# WORKTREE TEARDOWN SUGGESTION. When the gate allows and the project dir is a
+# LINKED worktree on a non-trunk branch, the work is verified and ready to
+# integrate — so name the script that does it.
+#
+# This is a SUGGESTION and nothing else. The gate must never integrate anything
+# as a side effect of verification: /done proves, finish-worktree.sh acts, and a
+# hook that quietly merged on a green result would make every verification a
+# publication. It does not touch the allow/block decision and it is not reached
+# from any block path.
+#
+# It goes to STDERR deliberately. This script's contract is that an allow is
+# exit 0 with EMPTY stdout and a block is exit 0 with the decision JSON — the
+# two are distinguished by stdout, not by exit code. Putting a human line on
+# stdout would break that discriminator for anything parsing it. stderr is the
+# channel the gate already uses for its human log line.
+#
+# Guarded end to end: a git failure, a missing branch, an unconfident trunk, or
+# the main checkout all fall through to a plain exit 0.
+if [ -n "${HC_BRANCH:-}" ] && [ -n "${HC_TRUNK:-}" ] && [ "$HC_BRANCH" != "$HC_TRUNK" ]; then
+  GD=$(git -C "$PROJECT_DIR" rev-parse --absolute-git-dir 2>/dev/null)
+  GC=$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)
+  case "$GC" in /*) ;; *) GC="$PROJECT_DIR/$GC" ;; esac
+  if [ -n "$GD" ] && [ -n "$GC" ] && [ "$GD" != "$GC" ]; then
+    printf 'Completion harness: verified. To integrate this worktree into %s, run finish-worktree.sh (it never pushes).\n' \
+      "$HC_TRUNK" >&2
+  fi
+fi
 exit 0
