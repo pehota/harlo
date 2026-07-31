@@ -10,7 +10,8 @@ Three parts:
 
 - **`scripts/done-gate.sh`** — a **Stop hook** (the gate). Fires on every turn
   exit; blocks unless a valid done-state exists for the session and matches live
-  git state (HEAD == verified SHA, clean tree).
+  git state (HEAD == verified SHA — or a HEAD whose **tree** is byte-identical to
+  the verified one — plus no uncommitted work introduced this session).
 - **`skills/done/SKILL.md`** + **`dod-protocol.md`** — the **`/done` skill** (the
   executor), split for progressive disclosure: a thin `SKILL.md` runs a
   deterministic **triage** (`done-detect.sh | done-triage.sh`) that computes which
@@ -26,7 +27,9 @@ Three parts:
 The two most error-prone `/done` steps are **scripted for determinism** (never
 hand-written by the LLM): Step 0 config detection + fingerprinting
 (`scripts/done-detect.sh`) and Step 7 done-state assembly with live-injected git
-facts (`scripts/done-write-state.sh`, which refuses a dirty tree).
+facts — `verified_sha`, `head_tree`, `review_anchor_sha`, `base_sha`,
+`tree_clean`, none of them agent-supplied (`scripts/done-write-state.sh`, which
+refuses a dirty tree).
 
 State lives under `<project>/.claude/.harness/` (git-ignored) and is keyed by
 **task** (the git branch), with session as a fallback on trunk — so a task's
@@ -89,6 +92,12 @@ It verifies the changeset and writes
 `.claude/.harness/done-state/<task_key>.json` (keyed by the git branch, with a
 `session-<id>` fallback on trunk). The next turn exit sees a valid done-state that
 matches the live HEAD/tree and lets the agent stop.
+
+A HEAD move that leaves the tree byte-identical — rewording a commit, or a
+`pull --rebase` that replays the same patches — **carries** the verification: no
+re-review, no fresh `/done`. Any content change re-blocks: one byte in any tracked
+file, a file mode flip, a symlink target, or a submodule pointer bump all produce
+a different tree.
 
 **Parallel work must use separate git worktrees** — the harness makes
 same-directory parallelism *safe* (each session needs its own verification) but

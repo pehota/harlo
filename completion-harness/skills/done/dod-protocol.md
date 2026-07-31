@@ -40,9 +40,13 @@ before you edit anything or spawn subagents. Non-zero exit = **HARD problem** �
 and fix or surface it before beginning work; do not work against an unwinnable gate.
 
 HARD problems include: `baseline_snapshot` enabled but no test command; a deadlock-risk
-tree state; a **missing tree baseline (`.dirty`)** — SessionStart didn't record the
-baseline, so the gate degrades to strict, treats every pre-existing file as yours, and
-deadlocks; restart the session so `baseline-snapshot.sh` records it before you edit.
+tree state; a **missing tree baseline (`.dirty`)** — SessionStart never ran for this id, or its
+`git status` capture failed (the capture is atomic: on failure it leaves no file rather
+than a misleading empty one). With no baseline the classifier degrades to strict, so every
+pre-existing entry blocks and the gate deadlocks. (The gate's own block message hedges
+here rather than asserting you introduced those paths — with no baseline, authorship is
+undeterminable.) Restart the session so `baseline-snapshot.sh` records the baseline before
+you edit.
 Only `jq` absent is a non-blocking warning. All problems print exact remediation.
 
 ## Config detection (automatic — runs inside the triage invocation)
@@ -299,8 +303,17 @@ raw object id — a log whose basename is not 40/64 lowercase hex is ignored out
 (`reset --soft` + recommit, `commit --amend -m`) or a `pull --rebase` that replays the
 same patches leaves every blob and mode byte-identical, so the existing log and
 done-state still describe exactly what is at HEAD: the gate compares `head_tree` and
-carries them. A **content-changing** move — one byte, or even just a file mode — produces
-a different tree and still requires a fresh log for the new HEAD.
+carries them. A **content-changing** move still requires a fresh log for the new HEAD —
+and that means *any* difference in a tree entry: one byte in one tracked file, a file
+mode flip (`100644` → `100755`), a changed symlink target, or a submodule pointer bump.
+
+**A rewritten anchor stays usable past the next real commit.** When the amend that
+carried the verification rewrote the reviewed commit's sha, that log is no longer an
+ancestor of HEAD and would drop out of the chain. The done-state records it as
+`review_anchor_sha`, and the gate and the writer keep admitting it — resolving its
+attested blobs at **its own sha**, so a file the later commit actually changed is
+genuinely uncovered and still blocks. Practical effect: after such an amend, the next
+commit only needs a review of the files it really touched.
 
 <a id="step-6"></a>
 ## Step 6 — Address findings (bounded loop)
@@ -364,17 +377,23 @@ subagent wrote.
 
 The script **injects the git facts live** — `verified_sha` from `git rev-parse HEAD`,
 `head_tree` from `git rev-parse HEAD^{tree}`, `review_anchor_sha` (the review-log it
-actually validated), `base_sha` (audit only), and `tree_clean` from
+actually validated), `base_sha` (the changeset anchor it resolved — the gate reads it
+back to recover a lost one), and `tree_clean` from
 `git status --porcelain` — **refuses to write over a dirty tree**
 (commit first), and (absent an escalation) refuses unless tests are green, lint is green
 when configured, and the review-log for HEAD has **zero blocking findings** (recomputed
 structurally, same as the gate). You never hand-write a SHA.
 
-`head_tree` and `review_anchor_sha` are **writer-injected facts, never agent-supplied**:
-put them in the payload and the writer overwrites — or deletes — them. When there is no
-review-log for HEAD but the prior done-state for this task recorded the **same
-`head_tree`**, the writer reuses that state's `review_anchor_sha` instead of refusing
-(see Step 5).
+`head_tree`, `review_anchor_sha` and `base_sha` are **writer-injected facts, never
+agent-supplied**: put them in the payload and the writer overwrites — or deletes — them.
+When there is no review-log for HEAD but the prior done-state for this task recorded the
+**same `head_tree`**, the writer reuses that state's `review_anchor_sha` instead of
+refusing — that is the tree-carry case. When a HEAD-exact log *does* exist, a recorded
+anchor is still kept in the coverage chain as an orphan, resolved at its own sha (both
+cases in Step 5). `base_sha` records the changeset anchor the writer itself
+resolved; when the writer has no anchor of its own it carries forward the one the state
+it is replacing recorded, so the gate can still scope coverage after a baseline file
+goes missing.
 
 The "dirty tree" refusal is **baseline-relative**: only changes you *introduced* this
 session block; files present at the SessionStart baseline are warned, not blocked (stops
