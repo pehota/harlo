@@ -42,6 +42,16 @@
     "noncode_globs": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "worktree": {
+      "description": "Worktree provisioning block, owned by worktree-detect.sh. Independently fingerprinted from the top-level detected block so the two never invalidate each other. detected.setup_cmd is ALWAYS null; a runnable setup command only ever comes from overrides.setup_cmd, set by a human.",
+      "type": "object",
+      "properties": {
+        "source_fingerprint": { "type": "string" },
+        "detected": { "type": "object", "additionalProperties": true },
+        "overrides": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

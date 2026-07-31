@@ -43,6 +43,8 @@ cp "$SCRIPT_DIR/scripts/done-detect.sh"       "$CLAUDE_DIR/scripts/done-detect.s
 cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-state.sh"
 cp "$SCRIPT_DIR/scripts/done-triage.sh"       "$CLAUDE_DIR/scripts/done-triage.sh"
 cp "$SCRIPT_DIR/scripts/done-preflight.sh"    "$CLAUDE_DIR/scripts/done-preflight.sh"
+# Worktree provisioning: a Step-0-shaped probe. Operator scripts follow below.
+cp "$SCRIPT_DIR/scripts/worktree-detect.sh"   "$CLAUDE_DIR/scripts/worktree-detect.sh"
 # Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
 # harness-resolve.sh is the executable wrapper; auto-branch.sh is the
 # PreToolUse hook.
@@ -76,6 +78,7 @@ chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapsh
          "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
          "$CLAUDE_DIR/scripts/done-triage.sh" \
          "$CLAUDE_DIR/scripts/done-preflight.sh" \
+         "$CLAUDE_DIR/scripts/worktree-detect.sh" \
          "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
