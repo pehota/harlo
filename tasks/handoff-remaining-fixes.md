@@ -154,6 +154,77 @@ it and document the interaction where the reap policy is described.
 
 ---
 
+## Item 5 — prevent the missing anchor instead of only reporting it
+
+Everything shipped so far makes a missing anchor *legible* (honest message) or
+*recoverable* (writer-stamped `base_sha`, marker fallback). None of it stops the anchor
+going missing. Most of the ways it goes missing are preventable.
+
+### 5a — four cheap preventions (one commit, low risk)
+
+1. **Stop reaping the anchor.** `baseline-snapshot.sh:58-63` deletes anything under the
+   state dir older than 14 days, excluding `task-base/`, `tree-base/`, `review-log/`,
+   `escalation-accept/` — but not `baselines/`. So the harness deletes the exact file it
+   later blocks for missing. Exclude `baselines/*.sha`; keep reaping `*.dirty`, which
+   really is ephemeral. Update the comment at line 56, which currently argues the
+   opposite.
+2. **Make a sourcing failure loud.** The gate has no `set -u`, so if
+   `harness-common.sh` fails to source, `$HC_BASE` expands to empty and the gate
+   degrades into the *identical* symptom as a missing baseline. Two very different
+   faults, one message. Add `set -u` or an explicit "library missing ⇒ hard error"
+   guard so they stop aliasing.
+3. **Refuse to write an empty task pin.** A present-but-empty `task-base/<key>.sha`
+   reaches the same empty-`HC_BASE` state. Validate at write time.
+4. **Treat a present-but-empty pin as corrupt, not as "no base."** Distinct message,
+   distinct remedy.
+
+None of these change what the gate accepts — they remove ways it loses the anchor, and
+they stop three unrelated faults from producing one indistinguishable symptom.
+
+### 5b — the actual root cause (a DESIGN QUESTION — do not implement unasked)
+
+The anchor is keyed on **session identity**, which is not a property of the repository.
+It is a runtime accident: it changes on resume, on compaction, when a hook does not fire,
+when two sessions share a directory. Causes 2, 4 and 8 in the failure list are all
+downstream of that single choice.
+
+Git already knows where the work started, and does not care about session ids:
+
+```
+git merge-base HEAD @{u}
+```
+
+Properties, stated honestly:
+
+- **Survives every session disruption**, because nothing is remembered — the anchor is
+  recomputed from the repo each time.
+- **Handles other people's commits BETTER than the current scheme.** Upstream commits
+  pulled in become ancestors of both sides, so `merge-base` advances past them and they
+  leave the changeset automatically. The pinned session baseline instead counts
+  everything after the pin — in the motivating session, three unrelated upstream commits
+  appeared inside "the agent's" diff for exactly this reason.
+- **Breaks when the work leaves the unpushed window.** Push mid-session (which happened
+  in the motivating session) and `merge-base HEAD @{u}` equals HEAD: the changeset reads
+  empty and the gate would pass having verified nothing. **This is a bypass, and it is
+  the blocking objection.** The same reasoning made an earlier pass decline to treat an
+  empty base as "nothing to do."
+- Two lesser edges: a branch with no upstream has no `@{u}` (fall back to `merge-base`
+  with trunk — this is what the existing branch-keyed task mode already half-implements);
+  and a colleague pushing directly onto the working branch would place their commits
+  inside the changeset.
+
+**The question to answer before writing any code:** is pushed work outside the gate's
+remit, or does pushing not discharge verification? Everything else follows from that.
+
+- If pushing **does** discharge it, `merge-base HEAD @{u}` is close to a drop-in and
+  removes three failure modes at once.
+- If pushing **does not**, the anchor needs a second, durable source for
+  already-pushed-but-unverified work — and that source has to be something the agent
+  cannot forge, which is the same constraint that shaped `head_tree` /
+  `review_anchor_sha`.
+
+Do not pick a side in a subagent. Put it to the user with the bypass stated plainly.
+
 ## Optional cleanup
 
 `grep -rn "ponytail:" completion-harness/` — if any deliberate shortcuts were left, they
