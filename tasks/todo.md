@@ -16,7 +16,7 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
 
 ## Audit findings (done — these size the plan)
 
-1. **Path resolution is already plugin-root-relative.** All 16 test suites resolve
+1. **Path resolution is already plugin-root-relative.** All 21 test suites resolve
    the bundle via `$(dirname "$0")/../scripts` and `../contracts`. All 9 runtime
    scripts source siblings via `$(dirname "$0")` / `BASH_SOURCE`. Nesting one level
    deeper (`plugins/done-gate/` vs `harlo/completion-harness/`) changes nothing.
@@ -31,7 +31,7 @@ Target: `/Users/localadmin/Work/job/git/coding-agents/plugins/done-gate/`
    definition (`HARNESS_DIR=` in 4 scripts, bare literals in `done-triage.sh`,
    `done-write-state.sh`, `harness-common.sh` defaults).
    The rest are test fixture literals and prose. Single global `sed` on the string
-   `.claude/.harness`; the 16 suites are the verification.
+   `.claude/.harness`; the 21 suites are the verification.
    - **`HARNESS_DIR` (the variable) does NOT rename.** It is pinned by
      `contracts/shell-abi.json` and asserted by `test-abi.sh`. Traceability is about
      what an engineer sees on disk, not an internal shell var.
@@ -155,7 +155,7 @@ Strictly better than what install.sh did:
       plus one new assertion: state written mid-session leaves porcelain clean in a
       repo whose `.gitignore` says nothing about the harness.
 - [ ] `test-abi.sh` / `contracts/shell-abi.json` checked — **no reference to
-      `install.sh`**. Deleting it breaks no other suite. 15 suites port, not 16.
+      `install.sh`**. Deleting it breaks no other suite. 20 suites port, not 21.
 
 ### 3c. Rename `done-config.json` -> `done-gate-config.json` (user call)
 
@@ -190,7 +190,7 @@ its owner. 150 refs across 26 files; ~12 are the real path definition
 - [ ] `bash plugins/done-gate/tests/test-<each>.sh` from **repo root** — target's
       runner does not `cd` first, harlo's `run-tests.sh` does. Confirms cwd-independence
       empirically rather than by inspection.
-- [ ] `pnpm run test` at target root — all 15 done-gate suites + every pre-existing
+- [ ] `pnpm run test` at target root — all 20 done-gate suites + every pre-existing
       plugin suite green.
 - [ ] `grep -rn 'completion-harness\|harlo' plugins/done-gate/` returns nothing.
 - [ ] `grep -rn '\.claude/\.harness' plugins/done-gate/` returns nothing.
@@ -223,7 +223,7 @@ its owner. 150 refs across 26 files; ~12 are the real path definition
 |---|---|
 | `bump-version.sh`, `check-version.sh`, `version-lib.sh` | Target owns versioning via `/publish-plugin`; target CLAUDE.md says *do not manually bump*. |
 | `test-version.sh` | Tests harlo's version tooling — its subject isn't porting, so the coverage isn't lost, it's inapplicable. |
-| `install.sh` (180 lines) + `tests/test-install.sh` (160 lines) | Non-plugin fallback installer. Dead path in a plugin marketplace. See Step 3b for the audit and the 3-line replacement for the one thing it did that mattered. **15 of 17 suites port**; `test-version.sh` and `test-install.sh` drop because their subjects drop. |
+| `install.sh` (180 lines) + `tests/test-install.sh` (160 lines) | Non-plugin fallback installer. Dead path in a plugin marketplace. See Step 3b for the audit and the 3-line replacement for the one thing it did that mattered. **20 of 22 suites port**; `test-version.sh` and `test-install.sh` drop because their subjects drop. |
 | `.githooks/pre-push` | Target already runs `pnpm test` pre-push via husky. |
 | `run-tests.sh` | Target's `package.json` glob replaces it. |
 | `.claude/done-config.json`, `.claude/.harness/` | harlo's own dogfooding state — must not be copied. |
