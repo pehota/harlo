@@ -314,8 +314,18 @@ DETECTED_JSON=$(build_detected)
 emit_effective() {
   # effective = detected * overrides (overrides win on flat keys) — the same
   # rule done-detect.sh uses for the top-level block.
+  #
+  # The stored `detected` falls back to THIS RUN's fresh detection when the
+  # config has no worktree block yet. That matters more here than for
+  # done-detect: a done-config that fails the contract (an older hand-written
+  # one, say) makes the write abort, and without this fallback the caller would
+  # receive an EMPTY config and silently provision nothing — links skipped,
+  # install skipped, no error anywhere. Overrides still win, so a human value in
+  # an otherwise-unwritable config is honoured too.
   if [ "$have_jq" = true ] && [ -f "$CONFIG_FILE" ]; then
-    jq -c '((.worktree.detected // {}) * (.worktree.overrides // {}))' "$CONFIG_FILE" 2>/dev/null && return
+    jq -c --argjson fresh "$DETECTED_JSON" \
+      '(((.worktree.detected // {}) | if . == {} then $fresh else . end) * (.worktree.overrides // {}))' \
+      "$CONFIG_FILE" 2>/dev/null && return
   fi
   printf '%s\n' "$DETECTED_JSON"
 }
