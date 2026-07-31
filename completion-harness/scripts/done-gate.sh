@@ -285,10 +285,21 @@ fi
 # the bare string. HC_SESSION_ID lets hc_changeset_summary find the baseline mtime
 # for its session-authorship tally.
 #
-# NO-ANCHOR VARIANT. With an EMPTY base the summary above is a lie in both
-# halves: it renders "changeset ..<head> — 0 files, +0/-0" (an empty range against
-# an empty rev) and then tells the agent to "/done the changeset" — an instruction
-# that cannot succeed, because the thing that is missing is the anchor, not the
+# With an EMPTY base the summary is a lie — "changeset ..<head> — 0 files, +0/-0"
+# is an empty range against an empty rev, not an empty changeset — so it is
+# suppressed and S2_REASON stays the bare instruction.
+S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
+if [ -n "$COVER_BASE" ] \
+   && { command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; }; then
+  HC_SESSION_ID="$SESSION_ID"
+  CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$COVER_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+  [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
+$S2_REASON"
+fi
+
+# NO-ANCHOR REASON — used at Step 4 ONLY, i.e. when the done-state is ALSO
+# absent. Then, and only then, is the missing anchor the whole story: "/done the
+# changeset" is unactionable because what is missing is the anchor, not the
 # verification. The VERDICT is unchanged (same discipline as a3b600e: without an
 # anchor git cannot distinguish "nothing to verify" from "a whole session of
 # unverified commits", so we block rather than guess) — only the CLAIM and the
@@ -296,21 +307,24 @@ fi
 # repair that actually restores it (a SessionStart). Re-snapshotting the baseline
 # here would be the wrong repair: at gate time HEAD already carries the session's
 # commits, so a fresh baseline would whitelist exactly the work under gate.
+#
+# SCOPED DELIBERATELY. Steps 4b/5/8 also block with S2_REASON, but they are
+# reached only when a done-state EXISTS — and an anchorless state is the normal
+# shape of a LEGACY state written before base_sha existed (2b740c9). Blaming a
+# schema-invalid or stale-HEAD legacy state on a missing baseline, and sending
+# the agent off to restart the session, would be exactly the misdiagnosis this
+# whole change removes. Those steps keep the generic reason.
+S2_NO_ANCHOR=""
 if [ -z "$COVER_BASE" ]; then
-  S2_REASON="no changeset anchor was recorded for this session — .claude/.harness/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
-else
-  S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
-  if command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; then
-    HC_SESSION_ID="$SESSION_ID"
-    CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$COVER_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
-    [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
-$S2_REASON"
-  fi
+  S2_NO_ANCHOR="no changeset anchor was recorded for this session — .claude/.harness/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
 fi
 
 # --- Step 4: missing done-state -> BLOCK ------------------------------------
+# The ONLY site that uses the no-anchor reason: no state AND no anchor means the
+# anchor is the whole story. With a state present the later steps have a more
+# specific truth to tell (see the S2_NO_ANCHOR comment).
 if [ ! -f "$DONE_STATE_FILE" ]; then
-  block "$S2_REASON"
+  block "${S2_NO_ANCHOR:-$S2_REASON}"
 fi
 
 # --- Step 4b: done-state must satisfy the hard contract (schema) -> BLOCK ----

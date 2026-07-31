@@ -417,6 +417,77 @@ else
 fi
 rm -rf "$R"
 
+# ============================================================================
+# G — THE NO-ANCHOR REASON MUST NOT DISPLACE A MORE SPECIFIC ONE.
+#
+# An anchorless done-state is the normal shape of a LEGACY state (written before
+# base_sha existed, 2b740c9). If the no-anchor wording applied wherever COVER_BASE
+# is empty, a legacy state that is merely STALE would be blamed on a missing
+# baseline and the agent sent off to restart the session — the same class of false
+# claim commit 1 exists to remove. The no-anchor reason belongs to Step 4 alone.
+# ============================================================================
+R=$(make_repo); SID=legacy-stale
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" ""                  # legacy: green, but no base_sha
+printf 'f\n' > "$R/f.js"; git -C "$R" add -A; git -C "$R" commit -qm c6   # HEAD moves on
+OUT=$(run_gate "$R" "$SID"); RSN=$(reason "$OUT")
+if is_block "$OUT"; then
+  ok "G stale legacy state + no anchor BLOCKS"
+else
+  bad "G stale legacy state did not block. out=[$OUT]"
+fi
+if printf '%s' "$RSN" | grep -qi "$NOANCHOR_PHRASE"; then
+  bad "G blamed a stale done-state on the missing baseline. reason=$RSN"
+else
+  ok "G the stale state gets its own reason, not the no-anchor wording"
+fi
+case "$RSN" in
+  *"$MISDIAGNOSIS"*) ok "G the reason is the generic re-run-/done instruction (Step 5)" ;;
+  *) bad "G unexpected reason for a stale state: $RSN" ;;
+esac
+rm -rf "$R"
+
+# ============================================================================
+# H — THE CASE-2 INSTANCE AS OBSERVED: the marker names a session whose base
+#     equals the CURRENT HEAD, green, with a review-log at HEAD.
+#
+#     F3 covers the neighbouring shape (base == an OLD head, HEAD since moved).
+#     This is the literal one. It ALLOWS, and that is the correct outcome, not a
+#     bypass: the evidence is pinned to the exact commit at HEAD (verified_sha ==
+#     HEAD, its own review-log, green outcomes), and an empty changeset AT that
+#     commit genuinely is nothing to verify. The dangerous reading of case 2 —
+#     the marker's base reaching HC_BASE and quiet-exiting at Step 3 WITHOUT that
+#     evidence — is closed structurally and asserted by C and F3. H2 pins the
+#     distinction by stripping the review-log: same anchor, no evidence → BLOCK.
+# ============================================================================
+R=$(make_repo); GATE_SID=gate-h; MARK_SID=marker-h
+HEADS=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$GATE_SID"
+seed_green_done "$R" "$MARK_SID" "$HEADS"        # base_sha == verified_sha == HEAD
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID")
+if [ -z "$OUT" ]; then
+  ok "H1 marker base == HEAD allows only on HEAD-pinned evidence (verified at this exact commit)"
+else
+  bad "H1 blocked a verification pinned to the exact current HEAD. out=$OUT"
+fi
+rm -rf "$R"
+
+# H2 — identical fixture minus the review-log: the anchor alone must buy nothing.
+R=$(make_repo); GATE_SID=gate-h2; MARK_SID=marker-h2
+HEADS=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$GATE_SID"
+seed_green_done "$R" "$MARK_SID" "$HEADS"
+rm -f "$R/.claude/.harness/review-log/$HEADS.json"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -q "independent code review"; then
+  ok "H2 same anchor without a review-log still BLOCKS (the anchor buys nothing on its own)"
+else
+  bad "H2 marker anchor waved a session through without a review. out=[$OUT]"
+fi
+rm -rf "$R"
+
 echo
 echo "test-anchor-recovery: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
