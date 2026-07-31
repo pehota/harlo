@@ -52,9 +52,30 @@ mkdir -p "$HARNESS/task-base"
 # whitelist the agent's own uncommitted work (the carryover bug).
 STALE_TREE_PIN="$HARNESS/tree-base/br-old-feature.dirty"
 mkdir -p "$HARNESS/tree-base"
+
+# age_20d <file...> — backdate mtimes past the 14-day reap threshold, portably.
+#
+# `touch -d '20 days ago'` is a GNU extension; BSD/macOS touch REJECTS it. It
+# failed silently here (stderr discarded by the runner), so the "stale" fixtures
+# kept their CURRENT mtime, the 14-day reap correctly skipped them, and two
+# assertions failed on every macOS run — which meant this suite was permanently
+# red and masking any real reap regression behind its known noise.
+#
+# Compute an explicit [[CC]YY]MMDDhhmm stamp instead and feed it to `touch -t`,
+# which is POSIX and identical on both platforms. GNU date and BSD date spell
+# relative dates differently, so try each.
+STALE_STAMP=$(date -v-20d +%Y%m%d%H%M 2>/dev/null || date -d '20 days ago' +%Y%m%d%H%M 2>/dev/null)
+age_20d() {
+  if [ -z "$STALE_STAMP" ]; then
+    echo "  FAIL: cannot compute a 20-day-old timestamp (neither BSD nor GNU date)" >&2
+    return 1
+  fi
+  touch -t "$STALE_STAMP" "$@"
+}
+
 for f in "$STALE_SHA" "$STALE_DONE" "$STALE_REVIEW" "$STALE_PIN" "$STALE_TREE_PIN"; do
   echo "stale" > "$f"
-  touch -d '20 days ago' "$f"
+  age_20d "$f"
 done
 
 # --- seed FRESH file (mtime now) --------------------------------------------
@@ -69,8 +90,8 @@ mkdir -p "$HARNESS/escalation-accept"
 HEAD_SHA_REAP=$(git -C "$REPO" rev-parse HEAD)
 ESC_LIVE="$HARNESS/escalation-accept/${HEAD_SHA_REAP}.json"       # reachable HEAD
 ESC_DEAD="$HARNESS/escalation-accept/deadbeefdeadbeef.json"       # unreachable sha
-echo '{"type":"user_accepted"}' > "$ESC_LIVE";  touch -d '20 days ago' "$ESC_LIVE"   # STALE but reachable
-echo '{"type":"user_accepted"}' > "$ESC_DEAD";  touch -d '20 days ago' "$ESC_DEAD"
+echo '{"type":"user_accepted"}' > "$ESC_LIVE";  age_20d "$ESC_LIVE"   # STALE but reachable
+echo '{"type":"user_accepted"}' > "$ESC_DEAD";  age_20d "$ESC_DEAD"
 
 # --- run baseline-snapshot.sh -----------------------------------------------
 printf '{"session_id":"%s"}' "$SID" | CLAUDE_PROJECT_DIR="$REPO" bash "$BASELINE" >/dev/null 2>&1
