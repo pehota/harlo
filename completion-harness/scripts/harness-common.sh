@@ -1404,14 +1404,19 @@ hc_validate() {
 #   2. lint.exit_code checked ONLY when .lint is present/non-null; if present it
 #      must be "0" (a present-but-nonzero blocks; absent lint is not a failure —
 #      not every project configures lint).
-#   3. review-log file must EXIST at <harness_dir>/review-log/<head_sha>.json —
-#      keyed by the LIVE head sha passed in, NOT the task key (absence → block).
+#   3. an admissible review-log must EXIST. Preferred:
+#      <harness_dir>/review-log/<head_sha>.json, keyed by the LIVE head sha
+#      passed in, NOT the task key. Failing that, the done-state's recorded
+#      review_anchor_sha (legacy states: verified_sha) — the SAME two-path
+#      candidate set the gate's Step 8 resolves, so a carried verification is not
+#      reported blocked here while the gate allows it. Neither present → block.
 #   4. review-log must pass hc_validate against <contracts_dir>/review-log.schema.json.
 #   5. hc_review_blocking <review_log> <min_level> must be exactly "0" — "ERR" or
 #      any non-zero blocking count → block.
 #   6. hc_review_coverage_gap <review_log> <base> <head_sha> <proj> must be empty
 #      OR the token "SKIP" — a non-empty non-SKIP result (uncovered files) → block.
 #      (SKIP = coverage not computable, a graceful no-regression degrade, NOT a block.)
+#      The anchor is passed through in the mode check 3 admitted it under.
 #   7. task_checks: the count of entries with status != "passed" must be 0.
 #
 # jq is guarded behind `command -v jq`; if jq is missing we cannot read any
@@ -1466,8 +1471,35 @@ hc_done_state_blocked() {
     return 0
   fi
 
-  # --- 3. review-log file must EXIST at HEAD (keyed by live head sha). --------
+  # --- 3. an admissible review-log must EXIST. --------------------------------
+  # CANDIDATE SET — the SAME two harness-derived paths the gate's Step 8 uses,
+  # never a directory listing: review-log/<head_sha>.json, and the done-state's
+  # recorded review_anchor_sha (legacy states fall back to verified_sha). Without
+  # the anchor this predicate reports "no review-log at HEAD" for exactly the
+  # states the gate ALLOWS via a carry — hc_state would then steer "run /done" at
+  # a HEAD the Stop gate is happy with, which is the contradiction this shares
+  # its logic to prevent.
+  #
+  # The admission MODE mirrors the gate's split on the same discriminator (see
+  # done-gate.sh Step 8 and hc_review_coverage_gap's header) — it is a safety
+  # boundary, not a style choice:
+  #   no HEAD-exact log  → the anchor IS the log; blobs resolve at head
+  #                        (extra_admit) because the caller proved tree equality.
+  #   HEAD-exact log     → the anchor is an ORPHAN; blobs resolve at its OWN sha
+  #                        (chain_admit) so it cannot self-validate.
   local review_log="$harness_dir/review-log/$head_sha.json"
+  local extra_admit="" chain_admit="" anchor_sha=""
+  anchor_sha=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$done_state_file" 2>/dev/null)
+  if [ -n "$anchor_sha" ] && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; }; then
+    if hc__is_object_id "$anchor_sha" && [ -f "$harness_dir/review-log/$anchor_sha.json" ]; then
+      if [ ! -f "$review_log" ]; then
+        review_log="$harness_dir/review-log/$anchor_sha.json"
+        extra_admit="$anchor_sha"
+      else
+        chain_admit="$anchor_sha"
+      fi
+    fi
+  fi
   if [ ! -f "$review_log" ]; then
     HC_DONE_BLOCKED_REASON="no review-log at HEAD"
     return 0
@@ -1501,7 +1533,7 @@ hc_done_state_blocked() {
   # SKIP (no changeset base → not computable) is a graceful degrade, NOT a block.
   local gap
   if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
-    gap=$(hc_review_coverage_gap "$review_log" "$base" "$head_sha" "$proj")
+    gap=$(hc_review_coverage_gap "$review_log" "$base" "$head_sha" "$proj" "$extra_admit" "$chain_admit")
   else
     # Library failed to source — fail toward block, never toward an allow.
     gap="LIBUNAVAILABLE"
@@ -1620,8 +1652,12 @@ hc_state() {
   hc_tree_status "$session_id"
 
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
-  local head_sha
+  local head_sha head_tree
   head_sha=$(git -C "$proj" rev-parse HEAD 2>/dev/null)
+  # HEAD's TREE id — the content fingerprint the S2-vs-S5 boundary compares
+  # against, exactly as the gate's Step 5 does. Empty → no tree, no proof of
+  # identical content → the carry below refuses (strict).
+  head_tree=$(git -C "$proj" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)
 
   # "Committed work exists" = HEAD has moved past the resolver's anchor (HC_BASE).
   # In task mode HC_BASE is the pinned fork base; in session mode it is the
@@ -1673,11 +1709,23 @@ hc_state() {
   # --- committed work exists, tree clean: locate the done-state. --------------
   local done_state_file="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
-  # S2 committed-unverified: done-state MISSING, schema-invalid, or stale
-  # (verified_sha != HEAD). Any of these means the current changeset was never
-  # verified at THIS HEAD (gate Steps 4 / 4b / 5). Because done-write-state.sh
-  # only stamps verified_sha=HEAD on a successful/escalated write, a failed plain
-  # /done attempt lands here (its verified_sha != HEAD), not in S4.
+  # S2 committed-unverified: done-state MISSING, schema-invalid, or stale. Any of
+  # these means the current changeset was never verified at THIS HEAD (gate
+  # Steps 4 / 4b / 5). Because done-write-state.sh only stamps verified_sha=HEAD
+  # on a successful/escalated write, a failed plain /done attempt lands here (its
+  # verified_sha != HEAD), not in S4.
+  #
+  # "STALE" is TREE equality, not sha equality — the identical test gate Step 5
+  # applies. Classifying by sha alone made the harness CONTRADICT ITSELF after a
+  # tree-identical HEAD move (an amend that only rewords, a rebase replaying the
+  # same patches): the Stop gate carried the verification and ALLOWED, while the
+  # next SessionStart still classified S2 and steered "run /done" for a changeset
+  # already verified. Same sources, same order, same fail direction as Step 5:
+  # the done-state's recorded head_tree, else — for LEGACY states written before
+  # that field existed — the tree recomputed live from verified_sha; and when
+  # verified_sha still resolves, its tree is cross-checked too. An empty
+  # head_tree, an unobtainable recorded tree, or any mismatch → NOT valid at head
+  # → S2, exactly as before.
   local verified_sha=""
   local valid_at_head=0
   if [ -f "$done_state_file" ]; then
@@ -1685,6 +1733,15 @@ hc_state() {
       verified_sha=$(jq -r '.verified_sha // ""' "$done_state_file" 2>/dev/null)
       if [ -n "$verified_sha" ] && [ "$verified_sha" = "$head_sha" ]; then
         valid_at_head=1
+      elif [ -n "$verified_sha" ] && [ -n "$head_tree" ]; then
+        local ds_tree vs_tree
+        ds_tree=$(jq -r '.head_tree // ""' "$done_state_file" 2>/dev/null)
+        vs_tree=$(git -C "$proj" rev-parse -q --verify "${verified_sha}^{tree}" 2>/dev/null)
+        [ -z "$ds_tree" ] && ds_tree="$vs_tree"
+        if [ -n "$ds_tree" ] && [ "$ds_tree" = "$head_tree" ] \
+           && { [ -z "$vs_tree" ] || [ "$vs_tree" = "$head_tree" ]; }; then
+          valid_at_head=1
+        fi
       fi
     fi
   fi

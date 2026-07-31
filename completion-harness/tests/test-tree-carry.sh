@@ -373,6 +373,72 @@ else
   bad "7b gate ALLOWed a changed, unattested a.js. out=$OUT"
 fi
 
+# ===========================================================================
+# 8. hc_state PARITY — the harness must not contradict itself.
+#
+#    hc_state classified the S2-vs-S5 boundary by SHA equality alone, so after a
+#    tree-identical HEAD move the Stop gate ALLOWed (Step 5 carried) while the
+#    next SessionStart still classified S2 and steered "run /done" for a
+#    changeset already verified. The classifier now applies the SAME tree test
+#    the gate does — including the legacy recompute — and resolves the SAME
+#    review-log candidate set, so the two agree on every carried state.
+#
+#    8b/8c pin the direction: the widening must not turn a real content change,
+#    or a genuinely unverified HEAD, into a silent S5.
+# ===========================================================================
+hc_state_of() {  # echoes HC_STATE for the current $REPO fixture
+  (
+    unset HC_MODE HC_BASE HC_TASK_KEY HC_STATE HARNESS_DIR HC_CONTRACTS_DIR PROJECT_DIR
+    export CLAUDE_PROJECT_DIR="$REPO"
+    # shellcheck source=/dev/null
+    . "$SCRIPTS/harness-common.sh" 2>/dev/null
+    hc_state "$SID" >/dev/null 2>&1
+    printf '%s' "$HC_STATE"
+  )
+}
+
+# 8 — tree-identical amend: gate allows, so hc_state must be S5 (not S2).
+mk_verified
+git -C "$REPO" commit -q --amend -m "reworded for parity" >/dev/null 2>&1
+OUT=$(run_gate)
+ST=$(hc_state_of)
+if is_block "$OUT"; then
+  bad "8 setup: the gate BLOCKed the tree-identical amend, so parity is untestable"
+elif [ "$ST" = "S5" ]; then
+  ok "8 hc_state agrees with the gate after a tree-identical move (S5, allow)"
+else
+  bad "8 harness contradicts itself: gate ALLOWs but hc_state=$ST steers /done"
+fi
+
+# 8b — LEGACY done-state (no head_tree): the recompute must apply here too, or
+#      the classifier and the gate diverge on exactly the states case 5 covers.
+mk_verified
+write_done_state "$HEAD0" "" ""
+git -C "$REPO" commit -q --amend -m "reworded legacy" >/dev/null 2>&1
+OUT=$(run_gate)
+ST=$(hc_state_of)
+if is_block "$OUT"; then
+  bad "8b setup: the gate BLOCKed the legacy carry"
+elif [ "$ST" = "S5" ]; then
+  ok "8b hc_state applies the same legacy recompute as the gate (S5)"
+else
+  bad "8b legacy carry: gate ALLOWs but hc_state=$ST"
+fi
+
+# 8c — NEGATIVE CONTROL: a real content change must still be S2, and the gate
+#      must still block. The tree test is a carry, never a bypass.
+mk_verified
+printf 'a-real-change\n' > "$REPO/a.js"
+git -C "$REPO" add -A >/dev/null 2>&1
+git -C "$REPO" commit -q --amend -m "the work" >/dev/null 2>&1
+OUT=$(run_gate)
+ST=$(hc_state_of)
+if is_block "$OUT" && [ "$ST" = "S2" ]; then
+  ok "8c content change: gate BLOCKs and hc_state stays S2 (no bypass)"
+else
+  bad "8c content change leaked through (gate blocked=$(is_block "$OUT" && echo yes || echo no), hc_state=$ST)"
+fi
+
 echo
 echo "test-tree-carry: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
