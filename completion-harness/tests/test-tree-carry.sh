@@ -173,10 +173,17 @@ FORGED='{"head_tree":"'"$(printf '0%.0s' $(seq 40))"'","review_anchor_sha":"'"$(
 printf '%s' "$FORGED" | CLAUDE_PROJECT_DIR="$REPO" bash "$WRITER" "$SID" >/dev/null 2>&1
 F_TREE=$(jq -r '.head_tree // ""' "$HDIR/done-state/session-$SID.json" 2>/dev/null)
 F_ANCHOR=$(jq -r '.review_anchor_sha // ""' "$HDIR/done-state/session-$SID.json" 2>/dev/null)
-if [ "$F_TREE" = "$TREE1" ] && [ "$F_ANCHOR" != "$(printf 'f%.0s' $(seq 40))" ]; then
+# Assert EQUALITY with the anchor the writer must actually derive, not mere
+# inequality with the forged value. "!= fff…f" is also satisfied by an EMPTY
+# anchor or an unrelated one, so it would pass even if the facts were dropped
+# rather than overwritten. At this fixture point HEAD is HEAD1, no HEAD-exact
+# review-log exists for it, and the prior done-state (written by case 4) records
+# head_tree=TREE1 with anchor=HEAD0 — so the writer's carry must re-derive
+# exactly HEAD0.
+if [ "$F_TREE" = "$TREE1" ] && [ "$F_ANCHOR" = "$HEAD0" ]; then
   ok "4b payload-supplied head_tree/review_anchor_sha are overwritten by the facts"
 else
-  bad "4b forged fields survived (tree=$F_TREE anchor=$F_ANCHOR)"
+  bad "4b forged fields survived (tree=$F_TREE want=$TREE1; anchor=$F_ANCHOR want=$HEAD0)"
 fi
 
 # ===========================================================================
