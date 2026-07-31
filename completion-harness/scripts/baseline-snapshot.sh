@@ -203,6 +203,9 @@ fi
 #
 # Always create the file (even when empty) so "missing" (→ strict) is
 # distinguishable from "clean at baseline". Fully guarded; never fails the hook.
+# That distinction only holds if a 0-byte file can ONLY mean "clean" — see
+# pin_tree_baseline below, which makes the capture atomic so a FAILED capture
+# leaves no file at all instead of an empty one.
 #
 # UNCONDITIONAL fallback: if the resolver could not run (harness-common.sh
 # failed to source → HC_TREE_BASE_FILE empty), we still MUST record a .dirty for
@@ -215,6 +218,33 @@ fi
 if [ -z "$HC_TREE_BASE_FILE" ]; then
   HC_TREE_BASE_FILE="$BASELINE_DIR/${SESSION_ID}.dirty"
 fi
+
+# pin_tree_baseline <file> — capture `git status --porcelain` ATOMICALLY.
+#
+# `git status --porcelain > "$file"` truncates the target BEFORE git runs, so a
+# git failure, a killed hook or a full disk leaves a 0-BYTE file — byte-identical
+# to the legitimate "clean tree at baseline" snapshot documented above. The
+# classifier then reads an empty-but-HEALTHY baseline set, so
+# HC_TREE_BASELINE_MISSING stays 0 and the block reason asserts the live changes
+# are ones "you introduced" — exactly the unattributable claim a3b600e removed,
+# reintroduced through the back door.
+#
+# So: write to a SIBLING temp (same directory → same filesystem → the mv is a
+# rename, never an interruptible cross-device copy) and move it into place ONLY
+# on a clean git exit. On any failure leave NO file — including removing a stale
+# one from an earlier session, which would otherwise whitelist that session's
+# work. Missing is the honest state: hc_tree_status reports BASELINE_MISSING, the
+# verdict stays strict, and the wording hedges and names the real repair. "0
+# bytes = genuinely clean" is now true BY CONSTRUCTION, not by assumption.
+pin_tree_baseline() {
+  local file="$1" tmp="$1.tmp.$$"
+  mkdir -p "$(dirname "$file")" 2>/dev/null
+  if git -C "$PROJECT_DIR" status --porcelain > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp" "$file" 2>/dev/null; }
+  else
+    rm -f "$tmp" "$file" 2>/dev/null
+  fi
+}
 if [ -n "$HC_TREE_BASE_FILE" ]; then
   # Task mode is ALREADY pin-once (never re-seeded), so it is inherently safe on
   # compact. The source guard's job is to protect SESSION-mode
@@ -223,16 +253,12 @@ if [ -n "$HC_TREE_BASE_FILE" ]; then
   # tree-base must be preserved (write only if ABSENT), exactly like the .sha.
   if [ "$HC_MODE" = "task" ]; then
     if [ ! -f "$HC_TREE_BASE_FILE" ]; then
-      mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
-      git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
-        || : > "$HC_TREE_BASE_FILE" 2>/dev/null
+      pin_tree_baseline "$HC_TREE_BASE_FILE"
     fi
   elif [ "$IS_COMPACT" -eq 1 ] && [ -f "$HC_TREE_BASE_FILE" ]; then
     : # compact: preserve the existing session tree baseline (do not re-seed)
   else
-    mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null
-    git -C "$PROJECT_DIR" status --porcelain > "$HC_TREE_BASE_FILE" 2>/dev/null \
-      || : > "$HC_TREE_BASE_FILE" 2>/dev/null
+    pin_tree_baseline "$HC_TREE_BASE_FILE"
   fi
 fi
 

@@ -208,6 +208,83 @@ case "$FLAGS" in
 esac
 rm -rf "$R"
 
+# ============================================================================
+# E — case B's premise, enforced at the WRITE side. B only holds if a 0-byte
+#     .dirty can ONLY mean "clean at SessionStart". `git status --porcelain >
+#     file` truncates the target BEFORE git runs, so a failing/killed git left a
+#     0-byte file that B then reads as a healthy, empty baseline set — and the
+#     gate asserts "changes you introduced" about paths it never observed. The
+#     capture must therefore be ATOMIC: temp file, moved into place only on a
+#     clean git exit; on failure NO file at all, so the degraded case A fires.
+#
+#     git is shimmed to fail ONLY on `status --porcelain` (everything else
+#     delegates to the real binary), which is the exact failure shape.
+# ============================================================================
+SNAP="$SCRIPTS/baseline-snapshot.sh"
+REAL_GIT=$(command -v git)
+make_failing_git_dir() {
+  local d; d=$(mktemp -d)
+  cat > "$d/git" <<EOF
+#!/bin/bash
+for a in "\$@"; do
+  if [ "\$a" = "--porcelain" ]; then exit 128; fi
+done
+exec "$REAL_GIT" "\$@"
+EOF
+  chmod +x "$d/git"
+  printf '%s' "$d"
+}
+run_snapshot() {  # <repo> <sid> [shim_dir]
+  local extra_path=""
+  [ -n "$3" ] && extra_path="$3:"
+  printf '{"session_id":"%s","source":"startup"}' "$2" \
+    | PATH="${extra_path}$PATH" CLAUDE_PROJECT_DIR="$1" bash "$SNAP" >/dev/null 2>&1
+}
+
+# E1 CONTROL — a healthy capture must still produce the file (the fix must not
+#     simply stop writing baselines).
+R=$(make_repo); SID=atomic
+run_snapshot "$R" "$SID"
+if [ -f "$R/.claude/.harness/baselines/$SID.dirty" ]; then
+  ok "E1 control: a healthy SessionStart still writes the tree baseline"
+else
+  bad "E1 control: no baseline written on a healthy SessionStart"
+fi
+rm -rf "$R"
+
+# E2 — git status fails, no prior baseline → NO file (not a 0-byte one).
+R=$(make_repo); SID=atomic
+SHIM=$(make_failing_git_dir)
+run_snapshot "$R" "$SID" "$SHIM"
+B="$R/.claude/.harness/baselines/$SID.dirty"
+if [ ! -f "$B" ]; then
+  ok "E2 failed capture leaves NO baseline (degraded, not a fake-clean 0-byte)"
+else
+  bad "E2 failed capture left a $(wc -c < "$B" | tr -d ' ')-byte baseline — B's premise broken"
+fi
+rm -rf "$R"
+
+# E3 — git status fails with a STALE baseline present → it is REMOVED. Keeping
+#     it would whitelist an earlier session's porcelain as this session's
+#     pre-existing set. Missing is the honest, strict state (case A).
+R=$(make_repo); SID=atomic
+mkdir -p "$R/.claude/.harness/baselines"
+printf ' M stale.js\n' > "$R/.claude/.harness/baselines/$SID.dirty"
+SHIM=$(make_failing_git_dir)
+run_snapshot "$R" "$SID" "$SHIM"
+if [ ! -f "$R/.claude/.harness/baselines/$SID.dirty" ]; then
+  ok "E3 failed capture removes a stale baseline rather than reusing it"
+else
+  bad "E3 stale baseline survived a failed capture: $(cat "$R/.claude/.harness/baselines/$SID.dirty")"
+fi
+# …and no temp file is left behind to be mistaken for state.
+if ls "$R"/.claude/.harness/baselines/*.tmp.* >/dev/null 2>&1; then
+  bad "E3 a .tmp.* scratch file was left in baselines/"
+else
+  ok "E3 no temp scratch left in baselines/"
+fi
+rm -rf "$R" "$SHIM"
+
 echo
 echo "test-missing-baseline: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
