@@ -410,6 +410,54 @@ else
 fi
 
 # ===========================================================================
+# WRITER PARITY — gate 2 against state the HARNESS produced, not a fixture.
+# ===========================================================================
+# Every case above hand-seeds the done-state, which proves finish-worktree.sh
+# reads what the tests write, not that it reads what done-write-state.sh writes.
+# The keys have to agree: the writer keys on its resolved HC_TASK_KEY, the
+# teardown resolves its own. A divergence there is precisely the silent
+# forever-block this codebase has already shipped twice, so drive the REAL
+# writer once, end to end, in a worktree the REAL provisioner created.
+echo "-- finish-worktree: gate 2 accepts a done-state written by done-write-state.sh --"
+WRITER="$SCRIPTS/done-write-state.sh"
+fresh_task "task/writerparity"
+WHEAD=$(git -C "$WT" rev-parse HEAD)
+WKEY="br-task-writerparity"
+mkdir -p "$WT/.claude/.harness/review-log" "$WT/.claude/.harness/task-base"
+printf '{"trunk":"main"}\n' > "$WT/.claude/done-config.json"
+git -C "$WT" merge-base main HEAD > "$WT/.claude/.harness/task-base/$WKEY.sha" 2>/dev/null
+WBASE=$(cat "$WT/.claude/.harness/task-base/$WKEY.sha")
+WFILES=$(git -C "$WT" diff --name-only "$WBASE" "$WHEAD" | jq -R . | jq -sc .)
+printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[],"open_findings":0}\n' \
+  "$WHEAD" "$WFILES" > "$WT/.claude/.harness/review-log/$WHEAD.json"
+printf '{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"true","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}' \
+  | CLAUDE_PROJECT_DIR="$WT" bash "$WRITER" "wp-session" >/dev/null 2>&1
+WSTATE="$WT/.claude/.harness/done-state/$WKEY.json"
+if [ -f "$WSTATE" ]; then
+  ok "done-write-state.sh wrote a done-state at the key teardown resolves ($WKEY)"
+else
+  bad "writer produced no state at $WSTATE (key divergence): $(ls "$WT/.claude/.harness/done-state" 2>/dev/null)"
+fi
+BEFORE_REMOTE=$(git -C "$ORIGIN" rev-parse main)
+BRANCH_HEAD=$(git -C "$WT" rev-parse HEAD)
+run_finish "$WT"
+if [ "$RC" -eq 0 ]; then
+  ok "gate 2 accepts writer-produced state end to end"
+else
+  bad "gate 2 rejected the real writer's state: $OUT"
+fi
+if [ "$(git -C "$REPO" rev-parse main)" = "$BRANCH_HEAD" ]; then
+  ok "and trunk fast-forwarded"
+else
+  bad "trunk not fast-forwarded"
+fi
+if [ "$(git -C "$ORIGIN" rev-parse main)" = "$BEFORE_REMOTE" ]; then
+  ok "still never pushed"
+else
+  bad "the remote moved"
+fi
+
+# ===========================================================================
 # The gate's teardown SUGGESTION (deliverable 6).
 # ===========================================================================
 echo "-- done-gate: suggests finish-worktree.sh on a green worktree stop --"
