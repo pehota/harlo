@@ -17,6 +17,15 @@ Verification is keyed to the **git branch** (the task), so it survives across
 sessions: pick a task back up later and the harness remembers what's been
 verified. On `main`/trunk it auto-creates a task branch on your first edit.
 
+**Work on a branch — ideally a worktree** (`completion-harness/scripts/new-worktree.sh`
+provisions one). Directly on trunk there is no branch to key the changeset anchor on, so
+the harness keys it on a per-session file instead; that file can go missing (deleted,
+age-reaped, or looked up under a mismatched session id) and the gate then blocks rather
+than guess — four false blocks in one observed session. On a branch the anchor is keyed
+on the branch and its starting point is derivable from git. Not a cure-all: a branch does
+not fix a deleted state directory or a disabled plugin. See
+[`completion-harness/README.md`](completion-harness/README.md#work-on-a-branch--worktrees-make-it-cheap).
+
 ## Install
 
 ```

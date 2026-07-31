@@ -103,13 +103,24 @@ a different tree.
 same-directory parallelism *safe* (each session needs its own verification) but
 not *correct* (agents still race on the git tree).
 
-### Worktrees for short tasks
+### Work on a branch — worktrees make it cheap
 
-On trunk the harness falls back to SESSION mode, where the changeset anchor is
-keyed on the session id — a runtime value that goes missing on resume, when a
-hook does not fire, or when the state dir is reaped. On a branch it runs in TASK
-mode, where the anchor is branch-keyed and pinned once. Two scripts make that the
-cheap path:
+**Recommended working mode: a branch, ideally a worktree.**
+
+On trunk there is no branch to key the changeset anchor on, so the harness falls
+back to SESSION mode and keys it on a *file*, `baselines/<session-id>.sha`. That
+file goes missing for ordinary reasons — the state dir was deleted, the baseline
+was age-reaped, SessionStart never ran for this id, or the gate resolved a
+different session id than `/done` wrote under. With no anchor the gate cannot
+tell an empty changeset from a session of unverified commits, so it blocks; one
+observed session hit **four false blocks** this way.
+
+On a branch the harness runs in TASK mode: the anchor is `merge-base(trunk, HEAD)`,
+keyed on the branch, pinned once, and derivable from git rather than remembered in
+a file. It is not a cure-all — a branch does not help if the state directory is
+deleted or the plugin is disabled — but it removes that whole class of false block.
+
+Two scripts make the branch path the cheap one:
 
 ```
 scripts/new-worktree.sh <branch-name> [path]     # provision

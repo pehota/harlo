@@ -96,6 +96,34 @@ renders the message from the blockers only. The `untracked_policy` knob
 (`done-config.json`, default `"baseline"` | `"strict"`) governs untracked lines —
 see the config section.
 
+**Self-owned paths: the harness ignores its own files, tracked or not.**
+`hc_is_harness_own_path` is the single authoritative predicate for "does the harness
+own this repo-relative path?", and every site that classifies working-tree state calls
+it: `hc_tree_status` (evaluated *before* the `untracked_policy` branch, so an untracked
+state dir does not block at `"strict"`), the gate's Step-3 quiet exit, and
+`finish-worktree.sh` gates 1 and 4. Owned = **the state directory and everything under
+it** — the project's own `.claude/.harness` unconditionally, *plus* a relocated
+`HARNESS_DIR` when it is a genuine `…/.claude/.harness` under the project, which is what
+a linked worktree's state dir looks like from the main checkout. Both are checked, so the
+verdict never drifts with whichever checkout the caller last resolved (a prefix-strip
+alone would answer "not owned" for the main checkout's own state dir while
+`finish-worktree.sh` holds the worktree's `HARNESS_DIR`). The porcelain-collapsed
+`.claude/.harness/` form git reports for a wholly-untracked directory matches too.
+Owned also = **`.claude/done-config.json`**.
+Self-owned lines are recorded as warnings and can never block, under any policy or
+baseline. The reason is concrete: the harness writes both of those *while it runs* —
+`done-detect.sh` rewrites the config mid-`/done`, and `new-worktree.sh` persists the
+`worktree` block into the *source* checkout — so in a repo that **tracks** the config the
+harness would otherwise manufacture exactly the dirty tree it blocks on. Nothing else is
+owned: `.claude/scripts`, `.claude/skills`, `.claude/dod` and `.claude/contracts` (which
+`install.sh` mirrors) stay gated, or an agent could rewrite `done-gate.sh` itself without
+the gate noticing; everything else under `.claude/` belongs to the user and other tools.
+Matching is **path shape only**, computed from the harness's own configured directories —
+never file contents, never anything an agent supplies. The strict live-porcelain fallbacks
+in the gate and the writer are deliberately left unfiltered: the predicate ships in the
+same file as the classifier, so when one is unavailable so is the other, and strict is the
+safe direction.
+
 **Missing baseline: block, but don't claim authorship.** `hc_tree_status` also
 exports `HC_TREE_BASELINE_MISSING` (1 when there is no baseline file, else 0; always
 set, even on a clean tree). The **verdict is unchanged** — still the empty set, still
@@ -189,6 +217,30 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 
 The gate re-checks the tree and `HEAD == verified_sha` live (falling back to tree
 equality — see Stop-hook Step 5), so stale state from a concurrent commit is caught.
+
+**Branch vs trunk — why the working mode matters.** The two modes differ in what the
+changeset anchor is *keyed on*, and that difference decides how the harness behaves when
+something goes missing.
+
+- **On trunk** there is no branch to key on, so the anchor falls back to
+  `baselines/<session_id>.sha` — a file, keyed on a runtime value. That file can be
+  absent for several ordinary reasons: the state dir was deleted mid-session, the
+  baseline was age-reaped (14 days), SessionStart never ran for this id, or the gate
+  resolved a *different* session id than the one `/done` wrote under. No anchor means
+  the gate cannot tell an empty changeset from a whole session of unverified commits,
+  so it blocks. In one observed session this produced **four false blocks**.
+- **On a branch** the anchor is `merge-base(trunk, HEAD)`, keyed on the branch and pinned
+  once. The starting point is derivable from git itself, so even a lost pin file can be
+  recomputed; the key is stable across sessions; and the changeset is the whole task
+  rather than one session's slice.
+
+**Recommendation: work on a branch — ideally a worktree** (`new-worktree.sh`, which
+provisions one and puts you in TASK mode from the first commit). Auto-branch does this
+for you on trunk at the first edit, but only when it is enabled and the hook fires.
+
+This is not a cure-all. A branch does not help if the state directory is deleted (the
+done-state and review-log live there regardless of mode) or if the plugin is disabled —
+it removes *one* class of false block, the session-keyed anchor going missing.
 
 ### Auto-branch (on trunk, first edit)
 
