@@ -355,6 +355,24 @@ EOF
 #                      unknowable, so the message must not assert the session
 #                      introduced those paths. Always set, even on a clean tree.
 #
+# ACCEPTED GAP — what a porcelain-only view cannot see (documented, NOT fixed).
+# This classifier's whole input is plain `git status --porcelain`: no --ignored,
+# no `ls-files -v` cross-check. So on-disk content can decouple from the tree in
+# several ways that all present as a CLEAN tree here, and every one of them is
+# reachable by an agent with a shell:
+#   - GITIGNORED files. Mutating one changes what runs without changing what git
+#     reports. (The obvious case, and the reason this note exists.)
+#   - `git update-index --assume-unchanged <path>` and `--skip-worktree <path>`.
+#     Both hide edits to a TRACKED file from porcelain. Distinguishing them needs
+#     `git ls-files -v` (flags `h`/`S`), which is not consulted.
+#   - `.git/info/exclude`. A repo-LOCAL ignore list with the same force as
+#     .gitignore, but invisible in a reviewable, committed .gitignore diff.
+# Consequence: "clean tree" here means "git reports nothing", not "the working
+# directory matches HEAD". The review-coverage checks are blob-based against
+# committed content, so anything hidden this way is also outside what the review
+# ever attested. Detecting it is deliberately out of scope — this note exists so
+# the limit is stated rather than assumed away.
+#
 # Returns 0 always; callers test `[ -n "$HC_TREE_BLOCKERS" ]`.
 hc_tree_status() {
   local session_id="$1"
