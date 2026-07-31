@@ -56,6 +56,20 @@
       ]
     },
     {
+      "name": "hc_is_harness_own_path",
+      "globals": [],
+      "stdout": "none (predicate)",
+      "return_codes": "0 = the path is harness-owned (state dir or its config); 1 = not owned, including on an empty path",
+      "sentinels": []
+    },
+    {
+      "name": "hc_filter_harness_own",
+      "globals": [],
+      "stdout": "the stdin porcelain lines whose path is NOT harness-owned (blank lines dropped)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
       "name": "hc_tree_status",
       "globals": [
         "HC_TREE_BLOCKERS",

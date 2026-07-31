@@ -105,10 +105,13 @@ hc_tree_status "finish-worktree" 2>/dev/null
 # hc_tree_status splits the tree into BLOCKERS (introduced since the baseline)
 # and WARNINGS (present at the baseline already). For teardown BOTH matter:
 # `git worktree remove` would delete either, and pre-existing dirt is still
-# unsaved work. The one exemption the classifier already makes —
-# .claude/done-config.json, rewritten by /done itself — is honoured here too.
+# unsaved work. The one exemption the classifier makes — paths the HARNESS
+# itself owns (hc_is_harness_own_path: its state dir and its config) — is
+# honoured here too, via that same predicate rather than a second spelling of
+# it. Losing harness state to `worktree remove` is the point of teardown, not a
+# reason to refuse.
 DIRT=$(printf '%s\n%s\n' "${HC_TREE_BLOCKERS:-}" "${HC_TREE_WARNINGS:-}" \
-       | grep -v '^$' | grep -v '^.\{3\}\.claude/done-config\.json$')
+       | hc_filter_harness_own "$WT")
 if [ -n "$DIRT" ]; then
   warn "REFUSED (gate 1): the worktree is not clean. Commit or discard first:"
   printf '%s\n' "$DIRT" | sed 's/^/    /' >&2
@@ -207,7 +210,14 @@ if [ "$MAIN_BRANCH" != "$TRUNK" ]; then
   warn "  The branch is rebased and ready. Check out $TRUNK in $MAIN and re-run."
   exit 1
 fi
-MAIN_DIRT=$(git -C "$MAIN" status --porcelain --untracked-files=no 2>/dev/null)
+MAIN_DIRT=$(git -C "$MAIN" status --porcelain --untracked-files=no 2>/dev/null \
+            | hc_filter_harness_own "$MAIN")
+# The self-owned filter matters MOST here. new-worktree.sh persists the detected
+# `worktree` block into the SOURCE checkout's .claude/done-config.json, so in a
+# repo that TRACKS that file, provisioning a worktree leaves the main checkout
+# with exactly one modified tracked file — and --untracked-files=no sees nothing
+# else. Without the filter, the harness refuses its own teardown over dirt the
+# harness created.
 if [ -n "$MAIN_DIRT" ]; then
   warn "REFUSED (gate 4): the main checkout has uncommitted tracked changes."
   warn "  A fast-forward would move its working tree underneath them."

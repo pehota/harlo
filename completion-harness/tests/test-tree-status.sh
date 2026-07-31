@@ -616,6 +616,195 @@ printf 'new\n' > "$R/introduced.js"
    || bad "D1: introduced file no longer blocks (exemption too broad)"
 rm -rf "$R"
 
+# ============================================================================
+# D2 — SELF-OWNED PATHS: the harness ignores its own files, tracked or not.
+#
+# D1 above covers one literal path. D2 covers the generalised rule
+# (hc_is_harness_own_path) that every classifying site now shares: the state
+# directory and everything under it, plus the config file — and NOTHING else
+# under .claude/, which is shared ground with the user and other tools.
+#
+# NON-VACUITY. The other fixtures in this suite gitignore ALL of .claude/, so a
+# path under it never reaches porcelain and an "does not block" assertion would
+# pass for the wrong reason. Every D2 case therefore gitignores only what
+# install.sh really adds (.claude/.harness/, or nothing at all) and ASSERTS the
+# expected porcelain line is actually present before judging the verdict.
+# ============================================================================
+echo "-- D2: harness-owned paths --"
+
+# make_selfown_repo → a repo that TRACKS .claude/ content (only the state dir is
+# ignored, exactly what install.sh adds), with a committed done-config.json and
+# a session baseline recording a CLEAN tree. Echoes the repo path.
+make_selfown_repo() {
+  local r; r=$(mktemp -d)
+  git -C "$r" init -q -b main
+  git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  printf '.claude/.harness/\n' > "$r/.gitignore"
+  mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" \
+           "$r/.claude/.harness/review-log" "$r/.claude/scripts"
+  printf '{"untracked_policy":"baseline"}\n' > "$r/.claude/done-config.json"
+  printf 'echo gate\n' > "$r/.claude/scripts/done-gate.sh"
+  printf 'a\n' > "$r/a.js"
+  git -C "$r" add -A; git -C "$r" commit -qm c1
+  : > "$r/.claude/.harness/baselines/$1.dirty"                  # clean at baseline
+  printf '%s\n' "$(git -C "$r" rev-parse HEAD)" > "$r/.claude/.harness/baselines/$1.sha"
+  printf '%s' "$r"
+}
+
+# classify <repo> <sid> <needle> → prints "BLOCK", "WARN" or "ABSENT".
+classify() {
+  (
+    cd "$1"; export CLAUDE_PROJECT_DIR="$1"
+    source "$SCRIPTS/harness-common.sh"
+    hc_resolve "$2"; hc_tree_status "$2"
+    if printf '%s' "$HC_TREE_BLOCKERS" | grep -Fq "$3"; then printf 'BLOCK'
+    elif printf '%s' "$HC_TREE_WARNINGS" | grep -Fq "$3"; then printf 'WARN'
+    else printf 'ABSENT'; fi
+  )
+}
+
+# --- D2a: the predicate's matching rule, in isolation ------------------------
+# Path shape only. The OWNED set is exactly two things; everything else under
+# .claude/ — above all .claude/scripts/, which holds the gate itself — is NOT
+# owned, or an agent could rewrite the gate without the gate noticing.
+R=$(make_selfown_repo sidD2a)
+PRED_OUT=$(
+  cd "$R"; export CLAUDE_PROJECT_DIR="$R"
+  source "$SCRIPTS/harness-common.sh"
+  hc_resolve sidD2a
+  for p in '.claude/done-config.json' '.claude/.harness' '.claude/.harness/' \
+           '.claude/.harness/done-state/br-x.json' '.claude/.harness/baselines/s.dirty'; do
+    hc_is_harness_own_path "$p" "$R" || printf 'NOTOWNED %s\n' "$p"
+  done
+  for p in '.claude/settings.local.json' '.claude/scripts/done-gate.sh' \
+           '.claude/skills/done/SKILL.md' '.claude/contracts/shell-abi.json' \
+           '.claude/dod/base-dod.md' '.claude/notes.json' '.claude' '.claude/' \
+           'src/a.js' '.harness/x' 'x/.claude/.harness/y' ''; do
+    hc_is_harness_own_path "$p" "$R" && printf 'OWNED %s\n' "$p"
+  done
+  printf 'DONE\n'
+)
+if printf '%s' "$PRED_OUT" | grep -q '^NOTOWNED '; then
+  bad "D2a: predicate misses a harness path: $(printf '%s' "$PRED_OUT" | grep '^NOTOWNED ')"
+else
+  ok "D2a: predicate owns the state dir (incl. the collapsed '<dir>/' form) and the config"
+fi
+if printf '%s' "$PRED_OUT" | grep -q '^OWNED '; then
+  bad "D2a: predicate WIDENED past what the harness owns: $(printf '%s' "$PRED_OUT" | grep '^OWNED ')"
+else
+  ok "D2a: predicate does NOT own .claude/scripts|skills|dod|contracts, user files, or .claude/ itself"
+fi
+
+# The verdict must not drift with ambient globals. A linked worktree lives UNDER
+# the main checkout, so finish-worktree.sh asks about MAIN while HARNESS_DIR
+# still points at the WORKTREE's state dir. Both state dirs are harness-owned;
+# neither may be lost because of who the caller last resolved.
+AMB_OUT=$(
+  cd "$R"; export CLAUDE_PROJECT_DIR="$R"
+  source "$SCRIPTS/harness-common.sh"
+  HARNESS_DIR="$R/.worktrees/task-x/.claude/.harness"
+  hc_is_harness_own_path '.claude/.harness/done-state/x.json' "$R" \
+    || printf 'LOST own-state-dir\n'
+  hc_is_harness_own_path '.worktrees/task-x/.claude/.harness/done-state/x.json' "$R" \
+    || printf 'LOST nested-state-dir\n'
+  HARNESS_DIR="$R/evil"
+  hc_is_harness_own_path 'evil/x' "$R" && printf 'WIDENED evil\n'
+  printf 'DONE\n'
+)
+case "$AMB_OUT" in
+  DONE*) ok "D2a: verdict is stable under a foreign HARNESS_DIR (worktree nested in main)" ;;
+  *)     bad "D2a: HARNESS_DIR drift: $(printf '%s' "$AMB_OUT" | grep -v '^DONE$')" ;;
+esac
+rm -rf "$R"
+
+# --- D2b: UNTRACKED done-config.json → never a blocker -----------------------
+R=$(make_selfown_repo sidD2b)
+git -C "$R" rm -q --cached .claude/done-config.json >/dev/null 2>&1
+git -C "$R" commit -qm untrack-config
+git -C "$R" status --porcelain | grep -Fq '?? .claude/done-config.json' \
+  && ok "D2b: fixture is non-vacuous (porcelain reports the untracked config)" \
+  || bad "D2b: fixture VACUOUS — the untracked config never reaches porcelain"
+: > "$R/.claude/.harness/baselines/sidD2b.dirty"
+printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/sidD2b.sha"
+case "$(classify "$R" sidD2b 'done-config.json')" in
+  WARN) ok "D2b: UNTRACKED .claude/done-config.json → not a blocker" ;;
+  *)    bad "D2b: untracked .claude/done-config.json was classified $(classify "$R" sidD2b 'done-config.json')" ;;
+esac
+rm -rf "$R"
+
+# --- D2c: the STATE DIR, untracked and collapsed, under untracked_policy=strict
+# The exemption must be evaluated BEFORE the strict-policy branch, or the very
+# repos this fix is for (no install.sh run → .harness/ not gitignored) block
+# forever on the harness's own bookkeeping.
+R=$(make_selfown_repo sidD2c)
+printf '.claude/other/\n' > "$R/.gitignore"          # .harness/ NO LONGER ignored
+printf '{"untracked_policy":"strict"}\n' > "$R/.claude/done-config.json"
+# Stage the two edited files BY NAME: `add -A` here would track the whole
+# now-unignored .harness/ tree and the case would test nothing.
+git -C "$R" add .gitignore .claude/done-config.json; git -C "$R" commit -qm strict
+: > "$R/.claude/.harness/baselines/sidD2c.dirty"
+printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/sidD2c.sha"
+git -C "$R" status --porcelain | grep -Fq '?? .claude/.harness/' \
+  && ok "D2c: fixture is non-vacuous (porcelain reports the collapsed '?? .claude/.harness/')" \
+  || bad "D2c: fixture VACUOUS — the state dir never reaches porcelain"
+case "$(classify "$R" sidD2c '.claude/.harness/')" in
+  WARN) ok "D2c: untracked state dir → not a blocker even at untracked_policy=strict" ;;
+  *)    bad "D2c: state dir classified $(classify "$R" sidD2c '.claude/.harness/') at policy=strict (exemption ran after the strict branch?)" ;;
+esac
+rm -rf "$R"
+
+# --- D2d: NEGATIVE — a real user file elsewhere under .claude/ STILL blocks ---
+# Deliberately a .json, and deliberately NOT settings.local.json:
+#   - *.md is in the default noncode_globs, so a markdown-only changeset makes
+#     the gate stand down for a reason that has nothing to do with this rule;
+#   - `**/.claude/settings.local.json` is a common entry in a developer's GLOBAL
+#     core.excludesfile (and install.sh adds it to the repo .gitignore), so it
+#     may never reach porcelain at all — the case would pass vacuously.
+R=$(make_selfown_repo sidD2d)
+printf '{"user":true}\n' > "$R/.claude/user-notes.json"
+git -C "$R" status --porcelain | grep -Fq '?? .claude/user-notes.json' \
+  && ok "D2d: fixture is non-vacuous (porcelain reports the user file)" \
+  || bad "D2d: fixture VACUOUS — the user file never reaches porcelain"
+case "$(classify "$R" sidD2d 'user-notes.json')" in
+  BLOCK) ok "D2d: a user file under .claude/ STILL blocks (exemption is not all of .claude/)" ;;
+  *)     bad "D2d: user file under .claude/ classified $(classify "$R" sidD2d 'user-notes.json') — exemption widened" ;;
+esac
+# and the shipped gate script itself, which install.sh mirrors into .claude/
+printf 'echo pwned\n' >> "$R/.claude/scripts/done-gate.sh"
+case "$(classify "$R" sidD2d 'scripts/done-gate.sh')" in
+  BLOCK) ok "D2d: a modified .claude/scripts/done-gate.sh STILL blocks (green stays unforgeable)" ;;
+  *)     bad "D2d: .claude/scripts/done-gate.sh classified $(classify "$R" sidD2d 'scripts/done-gate.sh') — the gate could be rewritten unnoticed" ;;
+esac
+rm -rf "$R"
+
+# --- D2e: WRITER AND GATE AGREE on a self-owned path -------------------------
+# Both classify tree state; divergence here has caused a silent forever-block
+# twice. With ONLY harness-owned dirt present the gate must ALLOW and the writer
+# must not refuse for dirt; the tracked config is modified, so this exercises
+# the tracked case end to end.
+R=$(make_selfown_repo sidD2e)
+seed_green_done "$R" sidD2e
+printf '{"untracked_policy":"baseline","contract_version":1}\n' > "$R/.claude/done-config.json"
+git -C "$R" status --porcelain | grep -Eq '^.M \.claude/done-config\.json$|^ M \.claude/done-config\.json$' \
+  && ok "D2e: fixture is non-vacuous (the TRACKED config is modified in porcelain)" \
+  || bad "D2e: fixture VACUOUS — tracked config not reported modified: $(git -C "$R" status --porcelain)"
+OUT=$(run_gate "$R" sidD2e)
+if is_block "$OUT"; then
+  bad "D2e: GATE blocked on harness-owned dirt alone. out=$OUT"
+else
+  ok "D2e: GATE allows with only harness-owned dirt"
+fi
+WOUT=$(printf '%s' '{"contract_version":1,"session_id":"sidD2e","dod":{"sources":["base"],"items":["tests green"]},"tests":{"status":"passed","exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}' \
+  | CLAUDE_PROJECT_DIR="$R" bash "$WRITER" sidD2e 2>&1)
+if printf '%s' "$WOUT" | grep -q 'working tree dirty'; then
+  bad "D2e: WRITER refused for dirt the GATE allows (writer/gate divergence): $WOUT"
+elif [ -f "$R/.claude/.harness/done-state/session-sidD2e.json" ]; then
+  ok "D2e: WRITER wrote the done-state despite harness-owned dirt (agrees with the gate)"
+else
+  bad "D2e: WRITER produced no done-state — it refused for some other reason: $WOUT"
+fi
+rm -rf "$R"
+
 echo
 echo "test-tree-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

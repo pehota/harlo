@@ -22,6 +22,16 @@ if [ -z "${HC_CONTRACTS_DIR:-}" ]; then
   HC_CONTRACTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../contracts" 2>/dev/null && pwd)"
 fi
 
+# Repo-relative paths the harness OWNS. Declared once, here, so no site has to
+# re-spell them (see hc_is_harness_own_path for the ownership rule itself).
+#   HC_CONFIG_REL   the config file the harness writes to itself.
+#   HC_HARNESS_REL  the state directory; the fallback for deriving the same path
+#                   relative to a project root when HARNESS_DIR is unavailable.
+# Plain assignment, not readonly: this library is sourced more than once per
+# process in places, and a readonly re-assignment would abort the caller.
+HC_CONFIG_REL=".claude/done-config.json"
+HC_HARNESS_REL=".claude/.harness"
+
 # Sanitize a string for use in a filename / key: every char NOT in the safe
 # set [A-Za-z0-9_.-] becomes '-'.
 hc__sanitize() {
@@ -36,6 +46,125 @@ hc__sanitize() {
 hc__is_object_id() {
   case "${#1}" in 40|64) ;; *) return 1 ;; esac
   case "$1" in *[!0-9a-f]*) return 1 ;; esac
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# hc_is_harness_own_path <repo_relative_path> [proj]
+#
+# THE authoritative self-ownership predicate: does the HARNESS itself own this
+# repo-relative path? Every site that classifies working-tree state calls this
+# one function. There is deliberately no second implementation and no scattered
+# path literal — writer/gate divergence over tree classification has already
+# produced a silent forever-block in this codebase twice.
+#
+# WHY IT EXISTS. The harness writes into the project while it runs, and in a
+# repo that TRACKS those files that write manufactures exactly the dirty tree
+# the gate blocks on. Concretely: new-worktree.sh persists worktree-detect's
+# `worktree` block into the SOURCE checkout's .claude/done-config.json, and
+# done-detect rewrites the same file mid-/done (contract_version auto-upgrade,
+# fingerprint refresh). Neither is the changeset's work; neither may block.
+#
+# OWNED — exactly these two, nothing more:
+#   1. The STATE DIRECTORY and everything beneath it. Derived from HARNESS_DIR
+#      (the same variable the rest of the code uses) made repo-relative; the
+#      literal $HC_HARNESS_REL is used only as a fallback when HARNESS_DIR is
+#      unset or does not sit under <proj>. Matches the bare directory, the
+#      porcelain COLLAPSED form ("?? .claude/.harness/" — how git reports a
+#      wholly-untracked directory), and any path under it.
+#   2. The CONFIG FILE $HC_CONFIG_REL.
+#
+# NOT OWNED — deliberately, and this is the security-critical half:
+#   - .claude/scripts/, .claude/skills/, .claude/dod/, .claude/contracts/.
+#     install.sh mirrors the bundle there, but the harness never writes them
+#     WHILE RUNNING; only a human invoking the installer does. Exempting them
+#     would let an agent rewrite done-gate.sh itself without the gate noticing —
+#     i.e. it would make the green forgeable.
+#   - anything else under .claude/ (settings.local.json, user notes, other
+#     tools' state). .claude/ is shared ground, not harness ground.
+#
+# The rule is PATH SHAPE ONLY, computed from the harness's own configured
+# directories. It never reads file contents and never consults anything an agent
+# supplies, so it is not an exemption an agent can claim: the only way in is to
+# write AT a harness path, which is unavoidable and accepted — content there is
+# harness state, never reviewable work.
+#
+# Deliberately NOT handled (each fails toward NOT-owned, i.e. toward blocking —
+# the safe direction): porcelain rename lines ("R  old -> new") and C-quoted
+# paths ("\"a b\"") do not match, so they keep their normal classification.
+#
+# Returns 0 when the path is harness-owned, 1 otherwise. Empty path → 1.
+hc_is_harness_own_path() {
+  local path="${1:-}"
+  local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  [ -n "$path" ] || return 1
+
+  # Porcelain collapses a wholly-untracked directory and reports it with a
+  # trailing slash. Strip ONE so the directory and plain forms compare equal.
+  path="${path%/}"
+
+  if [ "$path" = "$HC_CONFIG_REL" ]; then
+    return 0
+  fi
+
+  # <proj>'s OWN state dir is always owned. This is the shipped literal, and it
+  # is checked UNCONDITIONALLY — never conditioned on HARNESS_DIR.
+  #
+  # WHY UNCONDITIONALLY, rather than "derive it from HARNESS_DIR or fall back":
+  # a linked worktree lives UNDER the main checkout, so finish-worktree.sh
+  # legitimately asks about the MAIN checkout while HARNESS_DIR still points at
+  # the WORKTREE's state dir. Deriving by prefix-strip alone would then yield
+  # ".worktrees/<task>/.claude/.harness" and answer "not owned" for MAIN's own
+  # state dir — a verdict that drifts with whichever checkout the caller last
+  # touched. A predicate that answers differently depending on ambient globals
+  # is precisely the writer/gate divergence this function exists to remove.
+  hc__path_under "$path" "$HC_HARNESS_REL" && return 0
+
+  # A RELOCATED state dir is owned too. HARNESS_DIR is the variable the rest of
+  # the code uses, so honour it — but only when it is a genuine
+  # "<...>/.claude/.harness" sitting under <proj> (which is what it means for a
+  # nested worktree). Anything else is ignored rather than trusted: this keeps
+  # the accepted shape bounded instead of "whatever HARNESS_DIR happens to say".
+  local hd="${HARNESS_DIR:-}"
+  hd="${hd%/}"
+  if [ -n "$hd" ] && [ -n "$proj" ]; then
+    local rel="${hd#"${proj%/}"/}"
+    if [ "$rel" != "$hd" ] && [ "${rel%"/$HC_HARNESS_REL"}" != "$rel" ]; then
+      hc__path_under "$path" "$rel" && return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Is <path> exactly <dir>, or somewhere beneath it? Both arguments are already
+# trailing-slash-normalised by the caller. The quoted "$2" in the case pattern
+# is load-bearing: it keeps the directory literal instead of a glob.
+hc__path_under() {
+  [ "$1" = "$2" ] && return 0
+  case "$1" in
+    "$2"/*) return 0 ;;
+  esac
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# hc_filter_harness_own [proj]
+#
+# Convenience over hc_is_harness_own_path for the sites that hold a RAW
+# `git status --porcelain` blob rather than a classified set: reads porcelain
+# lines on stdin and prints only the lines whose path is NOT harness-owned
+# (blank lines are dropped). The matching rule stays in the predicate — this
+# only walks lines and strips the 3-char "XY " prefix, the same space-safe
+# whole-path discipline hc_tree_status uses.
+hc_filter_harness_own() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local line
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    hc_is_harness_own_path "${line:3}" "$proj" && continue
+    printf '%s\n' "$line"
+  done
   return 0
 }
 
@@ -237,7 +366,7 @@ hc_resolve() {
   local session_id="$1"
 
   PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-  HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
+  HARNESS_DIR="$PROJECT_DIR/$HC_HARNESS_REL"
 
   # Reset outputs so a repeat call never leaks stale values.
   HC_BRANCH=""
@@ -497,9 +626,11 @@ EOF
 # Sets shell globals (both newline-separated, empty if none):
 #   HC_TREE_BLOCKERS — entries introduced THIS session (the changeset's own
 #                      uncommitted work) → must block.
-#   HC_TREE_WARNINGS — entries already present at baseline → pre-existing.
-#                      Computed for classification/tests, but NOT surfaced in any
-#                      message (pre-existing dirt is irrelevant to the task).
+#   HC_TREE_WARNINGS — entries already present at baseline → pre-existing, PLUS
+#                      harness-owned paths (hc_is_harness_own_path), which are
+#                      exempt at any policy and under any baseline. Computed for
+#                      classification/tests, but NOT surfaced in any message
+#                      (pre-existing dirt is irrelevant to the task).
 #
 # Membership is by EXACT whole-line equality (robust to paths with spaces —
 # the porcelain formatting is identical on both sides, so no field splitting).
@@ -590,19 +721,25 @@ hc_tree_status() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
 
-    # Harness-managed config exemption. done-detect rewrites
-    # .claude/done-config.json DURING /done itself (e.g. the contract_version
-    # auto-upgrade, or a fingerprint refresh), which would otherwise be
-    # classified as introduced work and force a needless commit → new HEAD →
-    # full re-review cascade. It is never the changeset's own task work, so it
-    # is never a blocker under any policy — recorded as a warning (surfaced,
-    # not gated). The porcelain path is everything after the "XY " prefix.
-    case "${line:3}" in
-      '.claude/done-config.json')
-        HC_TREE_WARNINGS="${HC_TREE_WARNINGS:+$HC_TREE_WARNINGS
+    # SELF-OWNED EXEMPTION. Files the HARNESS itself writes (its state dir and
+    # its config — see hc_is_harness_own_path for the exact rule) are never the
+    # changeset's own task work, tracked or not. Classifying them as introduced
+    # would force a needless commit → new HEAD → full re-review cascade, or, in
+    # a repo that tracks the config, a permanent block the harness manufactured
+    # itself. They are never a blocker under ANY policy — recorded as a warning
+    # (never surfaced, never gated).
+    #
+    # PLACEMENT IS LOAD-BEARING: this must stay ABOVE the untracked_policy
+    # branch below. Under policy "strict" every "??" line blocks unconditionally,
+    # so an untracked state dir ("?? .claude/.harness/", the shape a repo that
+    # never ran install.sh reports) would block if this ran second.
+    #
+    # The porcelain path is everything after the "XY " prefix.
+    if hc_is_harness_own_path "${line:3}" "$proj"; then
+      HC_TREE_WARNINGS="${HC_TREE_WARNINGS:+$HC_TREE_WARNINGS
 }$line"
-        continue ;;
-    esac
+      continue
+    fi
 
     # First two chars are the porcelain status; "??" == untracked.
     is_untracked=0

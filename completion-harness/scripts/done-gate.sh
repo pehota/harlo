@@ -182,6 +182,13 @@ fi
 # gated, so we fall through to the remaining steps (Step 4 -> block).
 if [ -n "$HC_BASE" ] && [ "$HC_BASE" = "$HEAD_SHA" ]; then
   STEP3_TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+  # Harness-owned dirt is not "the tree is dirty": it is the state dir and the
+  # config the harness writes itself, and letting it defeat the quiet exit is
+  # how the harness ends up gating on its own bookkeeping. Same predicate the
+  # classifier below uses (single rule); unavailable → unfiltered, i.e. strict.
+  if type hc_filter_harness_own >/dev/null 2>&1; then
+    STEP3_TREE_STATUS=$(printf '%s\n' "$STEP3_TREE_STATUS" | hc_filter_harness_own "$PROJECT_DIR")
+  fi
   if [ -z "$STEP3_TREE_STATUS" ]; then
     exit 0
   fi

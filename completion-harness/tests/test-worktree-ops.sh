@@ -504,6 +504,141 @@ else
   bad "suggestion leaked onto a block path: stdout=$GOUT err=$(cat "$ERRF")"
 fi
 
+# ===========================================================================
+# SELF-OWNED CONFIG — provisioning must not manufacture a block.
+#
+# worktree-detect.sh persists its `worktree` block into the SOURCE checkout's
+# .claude/done-config.json. Every fixture above gitignores all of .claude/, so
+# that write is invisible there. In a repo that TRACKS the config, provisioning
+# leaves the main checkout with a modified tracked file — and the harness then
+# blocks on dirt the harness itself created. Both the Stop gate and
+# finish-worktree's gate 4 look at that checkout.
+# ===========================================================================
+echo "-- self-owned config: a repo that TRACKS .claude/done-config.json --"
+
+# track_config — narrow the fixture's .gitignore from all of .claude/ to just
+# the state dir (what install.sh actually adds) and commit the config, so the
+# file new-worktree.sh writes into is genuinely tracked.
+#
+# done-detect.sh seeds the config first: worktree-detect.sh validates against
+# the done-config contract before persisting, and make_pair's bare
+# {"trunk":"main"} fails it (missing `detected`) — the block would be silently
+# skipped and every assertion below would pass vacuously.
+track_config() {
+  CLAUDE_PROJECT_DIR="$REPO" bash "$SCRIPTS/done-detect.sh" >/dev/null 2>&1
+  printf '.claude/.harness/\n.worktrees/\nnode_modules/\n.env\n.envrc\n' > "$REPO/.gitignore"
+  git -C "$REPO" add .gitignore .claude/done-config.json >/dev/null 2>&1
+  git -C "$REPO" commit -qm "track .claude/done-config.json" >/dev/null 2>&1
+  git -C "$REPO" push -q origin main >/dev/null 2>&1
+}
+
+make_pair
+track_config
+run_new "$REPO" "task/selfown"
+if [ "$RC" -eq 0 ]; then ok "new-worktree succeeds with a tracked config"; else bad "new-worktree failed: $OUT"; fi
+if git -C "$REPO" status --porcelain | grep -Eq '^.?M \.claude/done-config\.json$'; then
+  ok "non-vacuous: provisioning left the TRACKED config modified in the source checkout"
+else
+  bad "VACUOUS fixture — provisioning did not modify the tracked config: [$(git -C "$REPO" status --porcelain)]"
+fi
+
+# --- the Stop gate in the SOURCE checkout must not block on it ---------------
+# Give the changeset a real committed range and a green done-state, so tree
+# classification is the ONLY thing that could still block. Stage the code file
+# BY NAME — `add -A` would commit the config change away and prove nothing.
+SID="selfown-src"
+SBASE=$(git -C "$REPO" rev-parse HEAD)
+printf 'more\n' > "$REPO/src/more.js"
+git -C "$REPO" add src/more.js >/dev/null 2>&1
+git -C "$REPO" commit -qm "feat: work in the source checkout" >/dev/null 2>&1
+SHEAD=$(git -C "$REPO" rev-parse HEAD)
+HD="$REPO/.claude/.harness"
+mkdir -p "$HD/baselines" "$HD/done-state" "$HD/review-log"
+printf '%s\n' "$SBASE" > "$HD/baselines/$SID.sha"
+: > "$HD/baselines/$SID.dirty"
+SFILES=$(git -C "$REPO" diff --name-only "$SBASE" "$SHEAD" | jq -R . | jq -sc .)
+printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[],"open_findings":0}\n' \
+  "$SHEAD" "$SFILES" > "$HD/review-log/$SHEAD.json"
+printf '{"contract_version":1,"session_id":"%s","verified_sha":"%s","head_tree":"%s","base_sha":"%s","review_anchor_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' \
+  "$SID" "$SHEAD" "$(git -C "$REPO" rev-parse 'HEAD^{tree}')" "$SBASE" "$SHEAD" \
+  > "$HD/done-state/session-$SID.json"
+if git -C "$REPO" status --porcelain | grep -Eq '^.?M \.claude/done-config\.json$'; then
+  ok "non-vacuous: the config is still modified when the gate runs"
+else
+  bad "the config modification was lost before the gate ran"
+fi
+GOUT=$(printf '{"session_id":"%s","stop_hook_active":false}' "$SID" \
+       | CLAUDE_PROJECT_DIR="$REPO" bash "$SCRIPTS/done-gate.sh" 2>/dev/null); GRC=$?
+if [ "$GRC" -eq 0 ] && [ -z "$GOUT" ]; then
+  ok "the Stop gate does NOT block on the config new-worktree.sh wrote"
+else
+  bad "the gate blocked on harness-written config dirt: rc=$GRC out=$GOUT"
+fi
+# ...and a real code change in that same checkout still blocks.
+printf 'uncommitted\n' > "$REPO/src/loose.js"
+GOUT=$(printf '{"session_id":"%s","stop_hook_active":false}' "$SID" \
+       | CLAUDE_PROJECT_DIR="$REPO" bash "$SCRIPTS/done-gate.sh" 2>/dev/null)
+if printf '%s' "$GOUT" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+  ok "a genuine uncommitted code file in the same checkout STILL blocks"
+else
+  bad "introduced code no longer blocks: $GOUT"
+fi
+
+# --- finish-worktree gate 4 must not refuse over it --------------------------
+# gate 4 inspects the MAIN checkout with --untracked-files=no, so the tracked
+# config new-worktree.sh wrote is the ONLY thing it can see.
+echo "-- self-owned config: finish-worktree gate 4 on the main checkout --"
+make_pair
+track_config
+run_new "$REPO" "task/selfown2"
+WT="$REPO/.worktrees/task-selfown2"
+git -C "$WT" config user.email t@t; git -C "$WT" config user.name t
+printf 'work\n' > "$WT/src/feature.js"
+git -C "$WT" add -A >/dev/null 2>&1
+git -C "$WT" commit -qm "feat: the work" >/dev/null 2>&1
+seed_green "$WT"
+# seed_green rewrites the worktree's own .claude/done-config.json, which HERE is
+# tracked content. Gate 1 correctly exempts the resulting modification, but
+# gate 3's `git rebase` then refuses over unstaged changes and would mask the
+# gate-4 assertion below. Restore it — this case is about the MAIN checkout.
+git -C "$WT" checkout -- .claude/done-config.json 2>/dev/null
+MAIN_TRACKED_DIRT=$(git -C "$REPO" status --porcelain --untracked-files=no)
+if printf '%s' "$MAIN_TRACKED_DIRT" | grep -Eq '^.?M \.claude/done-config\.json$'; then
+  ok "non-vacuous: the main checkout has exactly the harness-written tracked dirt"
+else
+  bad "VACUOUS fixture — main checkout tracked dirt is [$MAIN_TRACKED_DIRT]"
+fi
+BRANCH_HEAD=$(git -C "$WT" rev-parse HEAD)
+run_finish "$WT"
+if [ "$RC" -eq 0 ]; then
+  ok "gate 4 does NOT refuse over the config new-worktree.sh wrote"
+else
+  bad "teardown refused (rc=$RC): $OUT"
+fi
+if [ "$(git -C "$REPO" rev-parse main)" = "$BRANCH_HEAD" ]; then
+  ok "and trunk fast-forwarded"
+else
+  bad "trunk not fast-forwarded"
+fi
+# ...but a real uncommitted tracked file in the main checkout still refuses.
+make_pair
+track_config
+run_new "$REPO" "task/selfown3"
+WT="$REPO/.worktrees/task-selfown3"
+git -C "$WT" config user.email t@t; git -C "$WT" config user.name t
+printf 'work\n' > "$WT/src/feature.js"
+git -C "$WT" add -A >/dev/null 2>&1
+git -C "$WT" commit -qm "feat: the work" >/dev/null 2>&1
+seed_green "$WT"
+git -C "$WT" checkout -- .claude/done-config.json 2>/dev/null   # see above
+printf 'dirty\n' >> "$REPO/src/app.js"
+run_finish "$WT"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q 'gate 4'; then
+  ok "gate 4 STILL refuses real uncommitted tracked work in the main checkout"
+else
+  bad "gate 4 no longer refuses main-checkout dirt (rc=$RC): $OUT"
+fi
+
 echo
 echo "test-worktree-ops: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
