@@ -19,6 +19,10 @@ git status --short                 # must be empty
 bash run-tests.sh                  # must be 22/22
 ```
 
+> **Superseded 2026-07-31.** The worktree provisioning/teardown work added three
+> suites (`test-pkg-probe.sh`, `test-worktree-detect.sh`, `test-worktree-ops.sh`).
+> `run-tests.sh` is now **25/25**; the 22 above is the count as of this handoff.
+
 If those don't hold, stop and report before touching anything.
 
 ### What already shipped (do not redo)

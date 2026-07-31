@@ -1034,6 +1034,9 @@ commits moved the gate ahead of the docs; this re-sync brought them back:
 | `scripts/auto-branch.sh` | PreToolUse(Write\|Edit) — trunk→task branch, pin task tree-base |
 | `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint; stamps `contract_version:1`, auto-upgrades old configs, validates before writing |
 | `scripts/done-preflight.sh` | `/done` Step 0 — prove the gate is winnable |
+| `scripts/worktree-detect.sh` | Worktree provisioning probe — `install_cmd` from the lockfile, `link` from the filtered gitignored-config set, `setup_candidates` (never a runnable `setup_cmd`); writes the `worktree` block of `done-config.json`, preserving `worktree.overrides` |
+| `scripts/new-worktree.sh` | Provision a task worktree from `origin/<trunk>`: create branch + worktree, symlink local config (never overwriting), install, report everything it did **not** do |
+| `scripts/finish-worktree.sh` | Verified teardown — clean tree → green+fresh done-state (`hc_tree_status`, `hc_done_state_blocked`, `hc_verification_state`) → rebase onto `origin/<trunk>` → trunk `--ff-only` → remove worktree + branch. **Never pushes** |
 | `scripts/done-triage.sh` | `/done` triage — compute applicable steps, write self-validated audit plan `done-plan/<task_key>.json`, print applicable steps; fail-safe → SKILL runs all steps |
 | `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts (`verified_sha`, `head_tree`, `review_anchor_sha`, `base_sha`, `tree_clean`; payload values overwritten or deleted), stamp `contract_version:1`, refuse dirty/non-green (incl. `not_run` tests without escalation + evidence-less green), fold `done-plan` as `.plan`, write `escalation-accept/<HEAD>.json` sidecar, validate done-state (+ review-log) against schema before writing (refuse if invalid) |
 | `skills/done/SKILL.md` | Thin `/done` entry point — runs triage, routes to `dod-protocol.md` per applicable step (progressive disclosure) |

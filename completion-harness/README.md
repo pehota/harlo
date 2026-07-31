@@ -103,6 +103,39 @@ a different tree.
 same-directory parallelism *safe* (each session needs its own verification) but
 not *correct* (agents still race on the git tree).
 
+### Worktrees for short tasks
+
+On trunk the harness falls back to SESSION mode, where the changeset anchor is
+keyed on the session id — a runtime value that goes missing on resume, when a
+hook does not fire, or when the state dir is reaped. On a branch it runs in TASK
+mode, where the anchor is branch-keyed and pinned once. Two scripts make that the
+cheap path:
+
+```
+scripts/new-worktree.sh <branch-name> [path]     # provision
+scripts/finish-worktree.sh [--skip-verify]       # integrate + tear down
+```
+
+`new-worktree.sh` fetches, cuts the branch from **`origin/<trunk>`** (never local
+trunk, which may be unpushed or stale), symlinks the gitignored local config a
+fresh checkout cannot have, and runs the detected install command. It refuses if
+the branch or path already exists, never overwrites a file, and prints everything
+it did *not* do — including gitignored files outside the allowlist, which you
+promote yourself via `worktree.overrides.link` in `.claude/done-config.json`.
+
+`finish-worktree.sh` runs **inside** the worktree and refuses unless the tree is
+clean and `/done` left a green done-state that still describes HEAD (the gate's
+own predicates, not a second implementation). Then it rebases onto
+`origin/<trunk>`, fast-forwards trunk `--ff-only`, and removes the worktree. It
+**never pushes** — it prints what would be pushed and stops. `--skip-verify`
+bypasses the done-state gate only, and says so loudly.
+
+What gets provisioned is **detected, not hardcoded** (`scripts/worktree-detect.sh`,
+namespaced under the `worktree` key of `.claude/done-config.json`). `setup_cmd` is
+deliberately never auto-detected into something runnable: candidates are reported
+for you to promote, because running a `setup` target found by heuristic is how a
+provisioning script drops a database.
+
 ## Uninstall
 
 - Remove the two hook entries from `<project>/.claude/settings.local.json`

@@ -1047,6 +1047,141 @@ no `findings[]` fall back to the `open_findings` integer. It is human-owned/stic
 
 ---
 
+## Worktree provisioning + teardown
+
+**Why.** On trunk `hc_resolve` falls back to SESSION mode, where the changeset
+anchor is `baselines/<session_id>.sha` — keyed on a runtime accident. It goes
+missing on resume, when a hook does not fire, when the state dir is deleted, and
+when the 14-day reap runs; each of those turns into a no-anchor block. On a
+branch the harness runs in TASK mode, where the anchor is `task-base/<key>.sha`,
+branch-keyed and pinned **once**. Making worktrees cheap removes that whole class
+of failure at the source instead of reporting it more honestly.
+
+Three scripts, all detection-driven so they work across stacks.
+
+### `worktree-detect.sh` — Step 0 for provisioning
+
+Same architecture as `done-detect.sh`, deliberately: probe files never guess;
+recompute a `source_fingerprint` and rewrite `detected` only when the source
+changed; PRESERVE the human-owned `overrides` across every re-detection; always
+emit the EFFECTIVE config (overrides over detected) on stdout; exit 0 with
+best-effort output rather than failing hard. It lives under the **`worktree` key
+of the same `.claude/done-config.json`** — one file, two independently
+fingerprinted blocks — rather than inventing a second file. The Node
+package-manager derivation is `hc_pkg_probe`, shared with `done-detect.sh`, so
+provisioning can never install with one tool while `/done` verifies with another.
+
+`install_cmd` prefers the offline/frozen form (`pnpm install --prefer-offline`,
+`npm ci`, `yarn install --immutable|--frozen-lockfile` chosen by probing for
+`.yarnrc.yml`, `cargo fetch --locked`, `go mod download`, `uv sync --frozen`,
+`poetry install`, `pip install -r`, `bundle install --local`, `composer install`):
+a fresh worktree should link from the shared store, not re-resolve. An unknown
+stack yields `null` and is reported, not treated as an error.
+
+`setup_cmd` in `detected` is **always null**. Candidates (a `setup`/`bootstrap`/
+`prepare`/`postinstall` script, a Makefile `setup` target, `just setup`) are
+reported in `setup_candidates` for a human to promote into
+`overrides.setup_cmd`. Running a target discovered by heuristic is how a
+provisioning script drops a database; there is no code path that makes one
+runnable on its own.
+
+### The gitignored-config filter
+
+"What a fresh worktree needs" is exactly "gitignored but present in the source
+checkout", which git answers stack-agnostically:
+
+```
+git ls-files --others --ignored --exclude-standard --directory -z
+```
+
+`--directory` collapses a wholly-ignored directory to one entry; without it the
+motivating monorepo returns **253,786** paths instead of 112. Rules applied in
+order, each with its own test:
+
+1. **Files only** — any entry ending in `/` is dropped.
+2. **Nothing nested inside an ignored directory.** `--directory` does *not*
+   collapse cleanly: git still lists individual files under a collapsed
+   directory when they also match an ignore pattern in their own right (observed
+   live for `.claude/hooks/`). Every surviving file is re-checked against the
+   collected directory prefixes, which is what keeps `node_modules/` out.
+   *Consequence, deliberate:* a config inside a directory git tracks nothing in
+   is not a candidate — that directory will not exist in the fresh worktree at
+   all, so there is nothing to link it into.
+3. **Depth cap** (default 5 path components) so a deep ignored tree cannot
+   explode the list.
+4. **Per-file size ceiling** (default 64 KiB) — a config is small; anything large
+   is a build artefact wearing a config-ish name.
+5. **Allowlist** for what is linked by default: `.env*`, `.envrc`, `*.local.json`,
+   `*.local.yaml`, `*.local.yml`, `appsettings.Development.json`,
+   `local.settings.json`. Everything else that survived is reported in
+   `link_candidates`, for the human to promote via `overrides.link`.
+6. **Total-count cap** (default 50) whose overflow is reported in
+   `link_overflow`/`link_candidates_overflow`. Nothing is ever silently dropped;
+   depth and size rejections are counted in `skipped`.
+
+The three limits are overridable via `HC_WT_MAX_DEPTH` / `HC_WT_MAX_BYTES` /
+`HC_WT_MAX_LINK`.
+
+### `new-worktree.sh <branch> [path]`
+
+`git fetch`, then create the branch from **`origin/<trunk>`** — not local trunk,
+which may carry unpushed commits or be weeks stale; either would seed the task
+with history the reviewer never sees. Trunk comes from `hc__detect_trunk` (the
+harness's own resolution), and an unconfident trunk is a **refusal**, never a
+guess. Refuses on an existing branch or an existing path. Links are absolute
+symlinks (these worktrees are short-lived) and **never** overwrite: a path
+already present is tracked content or something the user put there. Runs
+`install_cmd`; a failure is reported and the worktree is deliberately **not**
+rolled back. Runs `setup_cmd` only when it came from `overrides` — provenance is
+re-read from the config, because the merged effective view cannot distinguish
+"detected" from "promoted". Prints what was linked, installed and skipped,
+including every candidate it declined to link.
+
+### `finish-worktree.sh [--skip-verify]`
+
+Run inside the worktree. Four ordered gates, each refusing loudly and changing
+nothing beyond its own step:
+
+1. **Clean worktree** — `hc_tree_status`, so "clean" means the same thing here as
+   everywhere else. Both blockers and baseline warnings refuse: `worktree remove`
+   would delete either.
+2. **Green + fresh done-state** — `hc_done_state_blocked` (the gate's Step-8
+   aggregation) and `hc_verification_state` (the gate's Step-5 freshness
+   predicate, which accepts a tree-identical carry). Reusing the gate's own
+   predicates is load-bearing: a second implementation here would let teardown
+   integrate work the gate still blocks on.
+3. **Rebase onto `origin/<trunk>`** — on conflict the rebase is ABORTED and the
+   worktree is left exactly as it was, with instructions to resolve and re-run.
+4. **`--ff-only`** — no merge-commit fallback, ever.
+
+Only then is the worktree removed and the branch deleted. Gates 4/5 run in the
+MAIN worktree (located via `git worktree list`), because git refuses to move a
+branch that is checked out elsewhere; trunk is likewise resolved against the main
+checkout, since `.claude/` is routinely gitignored and a fresh worktree would
+otherwise lose a `trunk` override. Branch deletion is `-D` behind an explicit
+`merge-base --is-ancestor` proof: `git branch -d` refuses a branch not merged into
+its *upstream*, and a task branch has none.
+
+It **never pushes** — it prints what would be pushed and stops. `--skip-verify`
+bypasses gate 2 **only**, prints a boxed warning, and is never the default.
+
+**Stated limitation.** Verify-then-rebase means a rebase that actually replays
+commits moves HEAD past the verified tree, so what lands on trunk is not
+byte-identical to what was reviewed. This is reported, not gated — gating it would
+mean a branch can never be integrated once trunk moves.
+
+### The gate's suggestion
+
+When `done-gate.sh` allows and the project dir is a linked worktree on a non-trunk
+branch, it appends a one-line suggestion to run `finish-worktree.sh`. It is a
+**suggestion only**: the gate never integrates anything as a side effect of
+verification, and the allow/block decision is untouched. It is written to
+**stderr**, because the gate's contract is that an allow is exit 0 with EMPTY
+stdout while a block is exit 0 with the decision JSON — the two are distinguished
+by stdout, so a human line there would break that discriminator.
+
+---
+
 ## Deployment environment
 
 Cannot be fully automated generically.
@@ -1072,13 +1207,16 @@ global use.
 | File | Purpose |
 |---|---|
 | `completion-harness/scripts/done-gate.sh` | Stop hook gate |
-| `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) + `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
+| `completion-harness/scripts/harness-common.sh` | Shared library: `hc_resolve` (identity/base) + `hc_tree_status`/`hc_tree_remediation` (baseline-relative tree classifier) + `hc_verification_state` (Step-5 freshness: `exact`/`carry`/`stale`) + `hc_pkg_probe`/`hc_hash_stdin` (shared toolchain probe) + `hc_validate` (jq-only JSON-Schema-subset validator; sets `HC_CONTRACTS_DIR`) |
 | `completion-harness/scripts/harness-resolve.sh` | `/done` Step 1: executable resolver wrapper — prints a self-validated JSON object (resolver-output contract), `jq`-parsed by the skill |
 | `completion-harness/contracts/*.json` | Hard-contract schema store: 6 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod, done-plan) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
 | `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
 | `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
 | `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
 | `completion-harness/scripts/done-detect.sh` | `/done` config: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
+| `completion-harness/scripts/worktree-detect.sh` | Worktree provisioning probe (Step-0-shaped): `install_cmd`, filtered `link` set, `setup_candidates`; writes the `worktree` block of done-config.json, `worktree.overrides` sticky |
+| `completion-harness/scripts/new-worktree.sh` | Provision a task worktree from `origin/<trunk>` (branch + worktree + symlinked local config + install) |
+| `completion-harness/scripts/finish-worktree.sh` | Verified teardown: clean → green+fresh done-state → rebase onto `origin/<trunk>` → trunk `--ff-only` → remove. Never pushes |
 | `completion-harness/scripts/done-triage.sh` | `/done` triage: compute applicable steps, write self-validated audit `done-plan/<task_key>.json`, print applicable steps; fail-safe → run all |
 | `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses on introduced blockers, `not_run`-without-escalation, evidence-less green); folds `.plan`; writes `escalation-accept` sidecar |
 | `completion-harness/skills/done/SKILL.md` | `/done` skill — thin entry point (runs triage, routes to `dod-protocol.md`) |
