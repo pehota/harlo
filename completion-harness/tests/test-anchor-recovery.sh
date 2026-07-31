@@ -332,6 +332,91 @@ else
 fi
 rm -rf "$R"
 
+# ============================================================================
+# F — RECOVERY (a): the current-session MARKER names the done-state key.
+#
+# Session-id disagreement, observed live: /done wrote under the marker's id
+# while the Stop gate resolved a different one from its own hook stdin, so the
+# gate read a key nothing ever wrote and blocked forever with a verified
+# done-state one filename away.
+# ============================================================================
+R=$(make_repo); GATE_SID=gate-id; MARK_SID=marker-id
+C1=$(git -C "$R" rev-parse HEAD~2)
+seed_tree_base "$R" "$GATE_SID"
+seed_green_done "$R" "$MARK_SID" "$C1"                        # state under the OTHER key
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID")
+if [ -z "$OUT" ]; then
+  ok "F1 marker-named done-state clears the gate for a diverged session id"
+else
+  bad "F1 marker fallback did not resolve the done-state. out=$OUT"
+fi
+rm -rf "$R"
+
+# F2 — the marker path is not a bypass: the evidence is still HEAD-pinned. Same
+#      fixture, but a commit lands after the marker session's verification, so
+#      verified_sha/head_tree no longer describe HEAD → Step 5 blocks.
+R=$(make_repo); GATE_SID=gate-id2; MARK_SID=marker-id2
+C1=$(git -C "$R" rev-parse HEAD~2)
+seed_tree_base "$R" "$GATE_SID"
+seed_green_done "$R" "$MARK_SID" "$C1"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+printf 'd\n' > "$R/d.js"; git -C "$R" add -A; git -C "$R" commit -qm c4
+OUT=$(run_gate "$R" "$GATE_SID")
+if is_block "$OUT"; then
+  ok "F2 marker fallback still BLOCKS when the evidence no longer describes HEAD"
+else
+  bad "F2 marker fallback let a stale verification through. out=[$OUT]"
+fi
+rm -rf "$R"
+
+# F3 — THE CASE-2 TRAP, marker edition. The marker names a session whose base
+#      EQUALS HEAD (an empty changeset) and whose verification is stale. If the
+#      gate adopted that base as its anchor, Step 3's quiet-exit would fire and
+#      an entire unverified session would be waved through with EMPTY stdout.
+#      The recovered anchor never reaches HC_BASE, so it must block instead.
+R=$(make_repo); GATE_SID=gate-trap; MARK_SID=marker-trap
+seed_tree_base "$R" "$GATE_SID"
+OLD_HEAD=$(git -C "$R" rev-parse HEAD)
+seed_green_done "$R" "$MARK_SID" "$OLD_HEAD"       # base_sha == the head it verified
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+printf 'e\n' > "$R/e.js"; git -C "$R" add -A; git -C "$R" commit -qm c5   # unverified work
+OUT=$(run_gate "$R" "$GATE_SID")
+if is_block "$OUT"; then
+  ok "F3 marker base == its HEAD does NOT quiet-exit an unverified session"
+else
+  bad "F3 CASE-2 TRAP: marker anchor waved an unverified session through. out=[$OUT]"
+fi
+rm -rf "$R"
+
+# F4 — a marker state with NO usable base_sha must NOT be adopted. Adopting it
+#      would give a pass route with coverage SKIPped — strictly weaker than the
+#      anchored path. No anchor → honest no-anchor block.
+R=$(make_repo); GATE_SID=gate-noanchor2; MARK_SID=marker-noanchor
+seed_tree_base "$R" "$GATE_SID"
+seed_green_done "$R" "$MARK_SID" ""                # green, but no base_sha stamped
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -qi "$NOANCHOR_PHRASE"; then
+  ok "F4 anchorless marker state is not adopted; the honest no-anchor block stands"
+else
+  bad "F4 adopted an anchorless marker state (coverage would be off). out=[$OUT]"
+fi
+rm -rf "$R"
+
+# F5 — the marker is a FILE whose contents are untrusted for filename purposes.
+#      A traversal payload must be rejected outright, not turned into a path.
+R=$(make_repo); GATE_SID=gate-trav
+seed_tree_base "$R" "$GATE_SID"
+printf '../../../../etc/passwd\n' > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -qi "$NOANCHOR_PHRASE"; then
+  ok "F5 a non-filename marker value is rejected (no path traversal)"
+else
+  bad "F5 traversal marker was not rejected. out=[$OUT]"
+fi
+rm -rf "$R"
+
 echo
 echo "test-anchor-recovery: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

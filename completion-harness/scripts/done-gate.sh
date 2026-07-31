@@ -109,6 +109,48 @@ HC_BASE_RECOVERED=""
 if [ -z "$HC_BASE" ] \
    && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
   HC_BASE_RECOVERED=$(hc__recover_base_from_state "$DONE_STATE_FILE" "$PROJECT_DIR" 2>/dev/null)
+
+  # SESSION-ID DISAGREEMENT. The gate keys the done-state off the session id in
+  # its OWN hook stdin; /done keys it off the current-session marker
+  # SessionStart wrote. When those two ids diverge (observed live: marker
+  # da3cea26…, gate 28222a43…) the gate reads a key nothing ever wrote and
+  # blocks forever, with a verified done-state sitting one filename away.
+  #
+  # So when our own key has NO state, look at the ONE state the marker names.
+  # This is a candidate set of exactly TWO harness-derived paths — never a
+  # directory listing — the same discipline as the Step-8 review-log anchor.
+  #
+  # It cannot forge a green: every piece of evidence stays pinned to the LIVE
+  # repo, not to the key. Step 5 still demands verified_sha == HEAD (or a
+  # byte-identical tree), Step 8 still demands green recorded outcomes and an
+  # independent review-log for HEAD. Only WHICH KEY names that evidence relaxes.
+  #
+  # ADMISSION REQUIRES AN ANCHOR. A marker state with no usable base_sha is NOT
+  # adopted: without it, coverage would SKIP and the marker path would be
+  # strictly WEAKER than the anchored one — a new pass route with the coverage
+  # check switched off. No anchor → leave the key alone → the honest no-anchor
+  # block. And because the recovered base still never reaches HC_BASE, a marker
+  # session whose base equals HEAD cannot short-circuit anything either; it must
+  # produce the same HEAD-pinned evidence as everyone else.
+  #
+  # SESSION MODE ONLY: in task mode the key is br-<branch>, already shared across
+  # sessions by design, so a session marker has no business redirecting it.
+  if [ ! -f "$DONE_STATE_FILE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_DIR/current-session" ]; then
+    MARKER_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
+    # Path hygiene: the marker is a file, so treat its contents as untrusted for
+    # filename purposes. Only a plain [A-Za-z0-9._-] component may name a state.
+    case "$MARKER_ID" in
+      ''|'.'|'..'|*[!A-Za-z0-9._-]*) MARKER_ID="" ;;
+    esac
+    if [ -n "$MARKER_ID" ] && [ "$MARKER_ID" != "$SESSION_ID" ]; then
+      MARKER_STATE="$HARNESS_DIR/done-state/session-$MARKER_ID.json"
+      MARKER_BASE=$(hc__recover_base_from_state "$MARKER_STATE" "$PROJECT_DIR" 2>/dev/null)
+      if [ -n "$MARKER_BASE" ]; then
+        DONE_STATE_FILE="$MARKER_STATE"
+        HC_BASE_RECOVERED="$MARKER_BASE"
+      fi
+    fi
+  fi
 fi
 # The base the STRICTER checks use: the real anchor when we have one, else the
 # recovered one, else empty (coverage SKIPs and the reason says so — Step 4).
