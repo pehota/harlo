@@ -27,36 +27,22 @@ if [ -f "$(dirname "$0")/harness-common.sh" ]; then
   . "$(dirname "$0")/harness-common.sh" 2>/dev/null
 fi
 
-# --- hashing helper (deterministic over stdin) ------------------------------
-hash_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum 2>/dev/null | cut -d' ' -f1
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 2>/dev/null | cut -d' ' -f1
-  else
-    # Last-resort stable-ish fallback; length + cksum.
-    cksum 2>/dev/null | cut -d' ' -f1
-  fi
-}
-
-# --- detect package manager via lockfile ------------------------------------
-PKG_MGR="null"
-if [ -f "$PROJECT_DIR/pnpm-lock.yaml" ]; then
-  PKG_MGR="pnpm"
-elif [ -f "$PROJECT_DIR/yarn.lock" ]; then
-  PKG_MGR="yarn"
-elif [ -f "$PROJECT_DIR/package-lock.json" ]; then
-  PKG_MGR="npm"
-elif [ -f "$PROJECT_DIR/package.json" ]; then
-  PKG_MGR="npm"  # default runner for a Node project with no lockfile
-fi
-
+# --- package manager + lockfile (SHARED probe) ------------------------------
+# hc_pkg_probe and hc_hash_stdin live in harness-common.sh so worktree-detect.sh
+# derives the package manager from the SAME implementation. Two probes that
+# disagree would have the provisioning script install with one tool while /done
+# verifies with another. The library is a shipped sibling; if it failed to
+# source, validate_config_file below already aborts the write, so there is no
+# half-working degraded path worth preserving here.
+#
+# Sentinel translation only (not a second probe): hc_pkg_probe reports "" for a
+# non-Node project, while this script's jq builder uses the string "null".
+hc_pkg_probe "$PROJECT_DIR"
+PKG_MGR="${HC_PKG_MGR:-}"
+[ -z "$PKG_MGR" ] && PKG_MGR="null"
 # Lockfile name feeds the fingerprint (a lockfile appearing/disappearing is a
 # meaningful source change).
-LOCKFILE_NAME="none"
-for lf in pnpm-lock.yaml yarn.lock package-lock.json; do
-  if [ -f "$PROJECT_DIR/$lf" ]; then LOCKFILE_NAME="$lf"; break; fi
-done
+LOCKFILE_NAME="${HC_LOCKFILE:-none}"
 
 # --- detect commands + fingerprint source -----------------------------------
 # DETECTED_JSON is a jq object literal built up below.
@@ -116,7 +102,7 @@ fi
 # If nothing matched, still produce a stable (empty) fingerprint source.
 [ -z "$FP_SOURCE" ] && FP_SOURCE="none"
 
-NEW_FP=$(printf '%s' "$FP_SOURCE" | hash_stdin)
+NEW_FP=$(printf '%s' "$FP_SOURCE" | hc_hash_stdin)
 [ -z "$NEW_FP" ] && NEW_FP="unknown"
 
 # --- build the detected object (jq) -----------------------------------------

@@ -20,6 +20,29 @@
       "sentinels": []
     },
     {
+      "name": "hc_hash_stdin",
+      "globals": [],
+      "args": "(none; reads stdin)",
+      "stdout": "hex digest of stdin, or empty when no hasher is available",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_pkg_probe",
+      "globals": [
+        "HC_PKG_MGR",
+        "HC_LOCKFILE",
+        "HC_YARN_BERRY"
+      ],
+      "args": "[proj]",
+      "stdout": "none (sets globals)",
+      "return_codes": "always 0",
+      "notes": "Lockfile-driven Node package-manager probe shared by done-detect.sh and worktree-detect.sh. HC_PKG_MGR is EMPTY for a non-Node project; HC_LOCKFILE is the literal 'none' when no lockfile is present (a bare package.json still yields HC_PKG_MGR=npm, so manager and lockfile are reported separately). HC_YARN_BERRY is 1 only when .yarnrc.yml sits beside yarn.lock.",
+      "sentinels": [
+        "none"
+      ]
+    },
+    {
       "name": "hc_tree_status",
       "globals": [
         "HC_TREE_BLOCKERS",

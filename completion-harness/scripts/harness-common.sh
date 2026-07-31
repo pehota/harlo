@@ -40,6 +40,72 @@ hc__is_object_id() {
 }
 
 # ---------------------------------------------------------------------------
+# hc_hash_stdin
+#
+# Deterministic hash of stdin, printed to stdout. Prefers sha256sum, then
+# `shasum -a 256`, then cksum as a stable-ish last resort so a host with neither
+# coreutils flavour still produces a value that CHANGES when the input changes —
+# which is all a fingerprint needs. Never fails the caller (an unhashable stdin
+# yields empty; callers substitute their own sentinel).
+#
+# Shared by every probe that fingerprints its own source (done-detect.sh's
+# `detected` block, worktree-detect.sh's `worktree.detected` block), so two
+# blocks living in the SAME config file can never drift onto different digests.
+hc_hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 2>/dev/null | cut -d' ' -f1
+  else
+    cksum 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# hc_pkg_probe [proj]
+#
+# LOCKFILE-DRIVEN Node package-manager probe. Prints nothing; sets:
+#   HC_PKG_MGR     pnpm | yarn | npm | ""   ("" = not a Node project at all)
+#   HC_LOCKFILE    pnpm-lock.yaml | yarn.lock | package-lock.json | none
+#   HC_YARN_BERRY  1 when a .yarnrc.yml sits beside yarn.lock, else 0
+#
+# Probe files, never guess — the same discipline as the rest of Step 0. Order is
+# deliberate: a repo carrying more than one lockfile resolves by precedence
+# (pnpm > yarn > npm), and a bare package.json with NO lockfile still yields
+# "npm" because npm is the default runner for a Node project. HC_LOCKFILE stays
+# "none" in that last case: a lockfile appearing or disappearing is a meaningful
+# source change and must move a fingerprint, which it only can if the probe
+# reports the lockfile SEPARATELY from the manager.
+#
+# HC_YARN_BERRY exists because yarn's frozen-install flag is version-dependent
+# (`--immutable` on berry, `--frozen-lockfile` on classic) and guessing wrong
+# turns provisioning into a hard failure. `.yarnrc.yml` is berry-only, so its
+# presence is a FILE PROBE, not a version heuristic.
+#
+# Never fails; a missing/unreadable project dir degrades every global to the
+# not-a-Node-project answer.
+hc_pkg_probe() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+
+  HC_PKG_MGR=""
+  HC_LOCKFILE="none"
+  HC_YARN_BERRY=0
+
+  if [ -f "$proj/pnpm-lock.yaml" ]; then
+    HC_PKG_MGR="pnpm"; HC_LOCKFILE="pnpm-lock.yaml"
+  elif [ -f "$proj/yarn.lock" ]; then
+    HC_PKG_MGR="yarn"; HC_LOCKFILE="yarn.lock"
+    [ -f "$proj/.yarnrc.yml" ] && HC_YARN_BERRY=1
+  elif [ -f "$proj/package-lock.json" ]; then
+    HC_PKG_MGR="npm"; HC_LOCKFILE="package-lock.json"
+  elif [ -f "$proj/package.json" ]; then
+    HC_PKG_MGR="npm"   # default runner for a Node project with no lockfile
+  fi
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # hc__recover_base_from_state <done_state_file> [proj]
 #
 # Prints the changeset base recoverable from a done-state's `base_sha`, or
