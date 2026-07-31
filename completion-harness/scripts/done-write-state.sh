@@ -341,6 +341,24 @@ DONE_STATE_DIR="$PROJECT_DIR/.claude/.harness/done-state"
 mkdir -p "$DONE_STATE_DIR" 2>/dev/null
 OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 
+# --- carry the anchor forward when the SessionStart baseline has gone --------
+# base_sha is the gate's last resort for a changeset anchor once
+# baselines/<sid>.sha is missing (see hc__recover_base_from_state). But this
+# write OVERWRITES the state that carries it, and with our own HC_BASE empty the
+# merge below DELETES the key — so the very next /done would strip the anchor the
+# gate had just recovered, and the recovery would work exactly once.
+#
+# So: when we have no base of our own, re-read the anchor from the state we are
+# about to replace. Provenance is unchanged — the value was stamped by THIS
+# writer on an earlier run, never supplied by a payload — and
+# hc__recover_base_from_state re-validates it as a live commit object before it
+# is carried. When we DO have a base, ours wins, exactly as before.
+BASE_SHA="${HC_BASE:-}"
+if [ -z "$BASE_SHA" ] \
+   && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
+  BASE_SHA=$(hc__recover_base_from_state "$OUT_FILE" "$PROJECT_DIR" 2>/dev/null)
+fi
+
 # head_tree / review_anchor_sha / base_sha are FACTS this script computed, in
 # the same class as verified_sha — never payload fields. The merge is `payload *
 # {facts}`, so a fact only wins where it is PRESENT; an empty one must therefore
@@ -350,13 +368,16 @@ OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 #                       a tree-identical HEAD move.
 #   review_anchor_sha — the review-log this write validated, so the carry knows
 #                       which log to keep admitting (and the reaper to keep).
-#   base_sha          — the resolved changeset base. Audit only, never gating.
+#   base_sha          — the resolved changeset base. No longer audit-only: it is
+#                       the gate's last-resort changeset ANCHOR once the
+#                       SessionStart baseline is gone, which is exactly why the
+#                       empty case must DELETE rather than default the key.
 RESULT=$(printf '%s' "$PAYLOAD" | jq \
   --arg sid "$SESSION_ID" \
   --arg sha "$VERIFIED_SHA" \
   --arg tree "$HEAD_TREE" \
   --arg anchor "$REVIEW_ANCHOR_SHA" \
-  --arg base "${HC_BASE:-}" \
+  --arg base "$BASE_SHA" \
   --argjson clean "$TREE_CLEAN" \
   --argjson plan "$PLAN_JSON" '
   . * {contract_version: 1, session_id: $sid, verified_sha: $sha, tree_clean: $clean}

@@ -291,6 +291,47 @@ case "$(reason "$OUT")" in
 esac
 rm -rf "$R"
 
+# ============================================================================
+# E — DURABILITY ACROSS THE NEXT /done. The recovery reads base_sha out of the
+#     done-state, but /done REWRITES that state, and with the writer's own
+#     HC_BASE empty the fact-merge DELETES the key. Without a writer-side carry
+#     the anchor survives exactly one turn and the gate reverts to no-anchor.
+#     The writer must re-read the anchor from the state it is replacing.
+# ============================================================================
+WRITER="$SCRIPTS/done-write-state.sh"
+R=$(make_repo); SID=durable
+C1=$(git -C "$R" rev-parse HEAD~2)
+HEADS=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" "$C1"
+# No baselines/*.sha at all → the writer's dead-id backstop is skipped and its
+# own HC_BASE resolves empty, exactly as in the reported repro.
+PAYLOAD='{"dod":{"sources":["base"],"items":["tests green"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
+printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$R" bash "$WRITER" "$SID" >/dev/null 2>&1
+REWROTE=$(jq -r '.base_sha // ""' "$R/.claude/.harness/done-state/session-$SID.json" 2>/dev/null)
+if [ "$REWROTE" = "$C1" ]; then
+  ok "E /done rewrite carries the recovered anchor forward (base_sha survives)"
+else
+  bad "E /done rewrite dropped base_sha (recovery would work exactly once). got='$REWROTE' want='$C1'"
+fi
+rm -rf "$R"
+
+# E2 — the carry must never OUTRANK a real base. With a live baseline the
+#      writer's own HC_BASE wins over whatever the old state happened to hold.
+R=$(make_repo); SID=durable2
+C1=$(git -C "$R" rev-parse HEAD~2); C2=$(git -C "$R" rev-parse HEAD~1)
+seed_tree_base "$R" "$SID"
+seed_green_done "$R" "$SID" "$C1"
+printf '%s\n' "$C2" > "$R/.claude/.harness/baselines/$SID.sha"   # real anchor = C2
+printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$R" bash "$WRITER" "$SID" >/dev/null 2>&1
+REWROTE=$(jq -r '.base_sha // ""' "$R/.claude/.harness/done-state/session-$SID.json" 2>/dev/null)
+if [ "$REWROTE" = "$C2" ]; then
+  ok "E2 a live baseline still wins over the carried anchor"
+else
+  bad "E2 carried anchor outranked the live baseline. got='$REWROTE' want='$C2'"
+fi
+rm -rf "$R"
+
 echo
 echo "test-anchor-recovery: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
