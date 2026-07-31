@@ -39,7 +39,7 @@ your own render, extraction, or mental model.
       entries and no duplicate `.gitignore` lines.
 - [ ] The portable bundle hardcodes no machine paths — hooks use
       `$CLAUDE_PROJECT_DIR` (falling back to `$PWD`).
-- [ ] `dod/base-dod.md` installs to `.claude/harness/base-dod.md` (committed,
+- [ ] `dod/base-dod.md` installs to `.claude/dod/base-dod.md` (committed,
       not gitignored); per-session state stays under `.claude/.harness/`.
 - [ ] Any prompt-body logic (e.g. `/done` Step 0.5 assembly) that cannot be
       unit-tested is stated as such — never claimed to have been executed.

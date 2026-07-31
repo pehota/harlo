@@ -24,8 +24,13 @@ with a reason.
       subagent, scoped to the changeset diff, writes the review-log
       `.claude/.harness/review-log/<HEAD>.json` — an independent artifact, never
       a self-reported count.
-- [ ] **No open review findings.** The review-log for the current HEAD has
-      `open_findings == 0`. Every finding is fixed (moving HEAD → a fresh log) or
+- [ ] **No open review findings.** The review-log for the current HEAD carries
+      **zero blocking findings**. Blocking is recomputed structurally from
+      `findings[].severity` against the configured `min_review_level` (default
+      `high`) — a finding blocks iff `rank(severity) >= rank(min_review_level)`,
+      and an unknown or missing severity ranks as blocking. The log's own
+      `open_findings` count is not what decides this, so tag severities
+      accurately. Every blocking finding is fixed (moving HEAD → a fresh log) or
       escalated — never silently waived.
 - [ ] **Re-verified after fixes.** After applying any fix, return to the tests
       step and re-verify with the fixes in place.
