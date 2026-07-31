@@ -132,6 +132,64 @@ hc_pkg_probe() {
 # HC_BASE, because HC_BASE also drives the two steps that GRANT a pass — the
 # gate's Step 3 quiet-exit and Step 3c empty-changeset allow — where a recovered
 # base equal to HEAD would wave a whole unverified session through.
+# ---------------------------------------------------------------------------
+# hc_verification_state <done_state_file> <head_sha> <head_tree> [proj]
+#
+# "Is this done-state's verification still describing what is at HEAD?" — the
+# gate's Step 5 question, extracted so a SECOND caller cannot answer it
+# differently. Writer/gate divergence has already produced a silent forever-block
+# twice in this codebase; finish-worktree.sh asking the same question with its
+# own `verified_sha == HEAD` comparison would be the third, and it would be the
+# dangerous direction (integrating work the gate would still block on).
+#
+# Prints exactly one sentinel; always returns 0.
+#   exact  verified_sha == head_sha. The plain case.
+#   carry  the shas DIFFER but the TREES are identical, so every blob and mode
+#          byte is what was verified (reset --soft + recommit to reword, a
+#          pull --rebase replaying the same patches). Tree equality is the WHOLE
+#          guarantee — deliberately NOT ancestry, which is strictly weaker.
+#   stale  anything else, including: no state file, no jq, an empty head_tree,
+#          no obtainable recorded tree, or any mismatch. FAIL TOWARD STALE.
+#
+# Recorded-tree sources, in order: the done-state's writer-injected `head_tree`,
+# else — for LEGACY states written before that field existed — the tree
+# recomputed live from verified_sha. When verified_sha STILL resolves, its tree
+# is additionally cross-checked; after a gc it does not resolve and the recorded
+# head_tree carries alone.
+#
+# This function decides FRESHNESS ONLY. It says nothing about whether the
+# recorded outcomes are green, whether a review-log exists, or whether coverage
+# holds — callers must keep enforcing those themselves.
+hc_verification_state() {
+  local state="$1" head_sha="$2" head_tree="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+
+  command -v jq >/dev/null 2>&1 || { printf 'stale'; return 0; }
+  [ -f "$state" ] || { printf 'stale'; return 0; }
+
+  local verified_sha
+  verified_sha=$(jq -r '.verified_sha // ""' "$state" 2>/dev/null)
+
+  if [ -n "$verified_sha" ] && [ "$verified_sha" = "$head_sha" ]; then
+    printf 'exact'
+    return 0
+  fi
+
+  # No HEAD tree → no proof of identical content → refuse to carry.
+  if [ -z "$head_tree" ]; then printf 'stale'; return 0; fi
+
+  local ds_tree vs_tree
+  ds_tree=$(jq -r '.head_tree // ""' "$state" 2>/dev/null)
+  vs_tree=$(git -C "$proj" rev-parse -q --verify "${verified_sha}^{tree}" 2>/dev/null)
+  [ -z "$ds_tree" ] && ds_tree="$vs_tree"
+
+  if [ -z "$ds_tree" ] || [ "$ds_tree" != "$head_tree" ]; then printf 'stale'; return 0; fi
+  if [ -n "$vs_tree" ] && [ "$vs_tree" != "$head_tree" ]; then printf 'stale'; return 0; fi
+
+  printf 'carry'
+  return 0
+}
+
 hc__recover_base_from_state() {
   local state="$1"
   local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"

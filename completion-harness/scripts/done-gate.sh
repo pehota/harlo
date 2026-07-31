@@ -368,25 +368,25 @@ fi
 #
 # Fail direction: an empty HEAD_TREE, an unobtainable recorded tree, or any
 # mismatch → BLOCK, exactly as before.
+#
+# The freshness decision itself lives in hc_verification_state (exact | carry |
+# stale) so finish-worktree.sh consults the IDENTICAL implementation instead of
+# writing its own verified_sha comparison. Only the block ACTION stays here — a
+# sourced library must never exit its caller. An unavailable library forces
+# "stale", i.e. BLOCK, never an accidental allow.
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
-CARRY=0
-if [ "$VERIFIED_SHA" != "$HEAD_SHA" ]; then
-  if [ -z "$HEAD_TREE" ]; then
-    block "$S2_REASON"
-  fi
-  DS_TREE=$(jq -r '.head_tree // ""' "$DONE_STATE_FILE" 2>/dev/null)
-  VS_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify "${VERIFIED_SHA}^{tree}" 2>/dev/null)
-  [ -z "$DS_TREE" ] && DS_TREE="$VS_TREE"
-  if [ -z "$DS_TREE" ] || [ "$DS_TREE" != "$HEAD_TREE" ]; then
-    block "$S2_REASON"
-  fi
-  if [ -n "$VS_TREE" ] && [ "$VS_TREE" != "$HEAD_TREE" ]; then
-    block "$S2_REASON"
-  fi
-  # Audit signal only: records WHY Step 5 did not block. Step 8 deliberately
-  # does NOT gate the anchor admission on it (see there).
-  CARRY=1
+if command -v hc_verification_state >/dev/null 2>&1 || type hc_verification_state >/dev/null 2>&1; then
+  VSTATE=$(hc_verification_state "$DONE_STATE_FILE" "$HEAD_SHA" "$HEAD_TREE" "$PROJECT_DIR")
+else
+  VSTATE="stale"
 fi
+if [ "$VSTATE" = "stale" ]; then
+  block "$S2_REASON"
+fi
+# Audit signal only: records WHY Step 5 did not block. Step 8 deliberately
+# does NOT gate the anchor admission on it (see there).
+CARRY=0
+[ "$VSTATE" = "carry" ] && CARRY=1
 
 # --- Step 7: valid escalation present -> exit 0 -----------------------------
 # "Valid" = escalation field present and non-null. Escalation is honoured LAST,

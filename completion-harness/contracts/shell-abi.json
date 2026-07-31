@@ -43,6 +43,19 @@
       ]
     },
     {
+      "name": "hc_verification_state",
+      "globals": [],
+      "args": "<done_state_file> <head_sha> <head_tree> [proj]",
+      "stdout": "exact | carry | stale",
+      "return_codes": "always 0",
+      "notes": "Freshness ONLY: is the done-state's verification still describing HEAD? 'carry' means the shas differ but the TREES are identical (tree equality, deliberately not ancestry). Fails toward 'stale' on a missing state, missing jq, an empty head_tree, or any mismatch. Shared by done-gate.sh Step 5 and finish-worktree.sh so the two can never diverge; says nothing about green outcomes, review-log presence or coverage, which callers must still enforce.",
+      "sentinels": [
+        "exact",
+        "carry",
+        "stale"
+      ]
+    },
+    {
       "name": "hc_tree_status",
       "globals": [
         "HC_TREE_BLOCKERS",
