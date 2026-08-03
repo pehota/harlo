@@ -251,6 +251,14 @@ already off trunk (it fires on every edit), and on detached/mid-rebase/merge or 
 failure it **stays on trunk and never blocks the edit**. `auto_branch:false` → stays on trunk
 with the SessionStart warning. To *resume* an existing task, checkout its branch first.
 
+**Scope: coding edits only.** Before branching, the hook applies the *same* non-code rule the
+Stop gate uses (`hc_path_is_noncode`, the per-path half of `hc_changeset_is_code`) to
+`tool_input.file_path`: a path matching `noncode_globs` is skipped. Without this the harness
+dragged a docs-only task onto a `task/` branch and then declined to gate it at Stop (Step 3a) —
+visibly "kicking in" for work it does not govern. The test is per **edit**, not per changeset,
+so a mixed task branches on its first *code* edit (carrying the prose WIP with it). An absent
+path, or an unavailable predicate, is treated as code → branch, as before.
+
 After creating the branch it **pins the task tree-base from THIS session's clean pre-edit
 SessionStart snapshot** (`baselines/<session_id>.dirty`) — this hook fires *before* the
 triggering edit, so that snapshot is still clean. When no such snapshot exists it pins an
@@ -426,6 +434,10 @@ script):
 
 1. Read stdin JSON. If `stop_hook_active == true` → **exit 0** (loop guard — a block can never trap the agent forever; blocks are a one-time nudge per stop-continuation chain).
 2. Not a git repo (`git rev-parse HEAD` fails) → **exit 0** (no changeset baseline possible).
+2a-0. **Marker-baseline anchor recovery (empty `HC_BASE`, session mode).** The commonest way the anchor goes missing is not a deleted state dir — it is the **session-id disagreement**: the gate resolves `baselines/<its own stdin session_id>.sha` while SessionStart wrote the file under the id *it* saw. A perfectly good anchor then sits one filename away and every stop blocks with the no-anchor reason, **including a session that changed nothing** and should have taken the Step-3 quiet exit. So the gate adopts `baselines/<marker_id>.sha`.
+
+   Unlike the Step-2a recoveries below, this value **is** assigned to `HC_BASE`, and provenance is what makes that safe: a `baselines/*.sha` is written by SessionStart alone, from live HEAD, before any edit — the same producer and the same meaning as the anchor the resolver failed to find. It is not written mid-task and is not agent payload, so the "keep it out of `HC_BASE`" boundary (which exists because the done-state *is* written mid-task) does not apply. Two conditions bound it, both about not *inventing* a base: the value must be a raw object id naming a live commit that is an **ancestor of HEAD** (a non-ancestor is another line of history, against which "empty" is meaningless), and **session mode only** (task mode keys by branch and pins its own base). Marker contents are treated as untrusted for filename purposes. Residual: a marker naming a *later-started* session would resolve a smaller changeset — that needs two live sessions in one checkout, already unsupported (they race on the tree).
+
 2a. **Changeset-anchor recovery (empty `HC_BASE`).** `HC_BASE` is empty whenever the resolver found no anchor — session mode with no `baselines/<sid>.sha` (state dir deleted mid-session, 14-day age-reap, or a SessionStart that never ran for the id the gate resolves), a zero-length baseline file, or an empty task pin. Two recoveries, both from **writer-stamped facts**, never agent payload:
    - **`base_sha` in the done-state** for our own key (`hc__recover_base_from_state`). `done-write-state.sh` stamps it from its own resolved `HC_BASE` and **deletes** the key when that base is empty, so it cannot be forged; the helper re-validates it as a raw object id naming a live commit (a symbolic name would resolve against the current tree and self-validate). The writer also carries an existing `base_sha` forward when its own base is empty, so the recovery survives the next `/done` instead of working exactly once.
    - **The `current-session` marker's key** when our own key has *no* state at all — the session-id-disagreement case (`/done` writes under the marker id, the gate resolves a different one from its hook stdin, and reads a key nothing wrote). A candidate set of exactly **two harness-derived paths**, never a directory listing. Adopted **only if that state also supplies a usable `base_sha`**, so the marker path is never weaker than the anchored one (an anchorless adoption would `SKIP` coverage). Session mode only; marker contents are treated as untrusted for filename purposes.
@@ -1062,6 +1074,34 @@ to `done-config.schema.json`; `done-detect.sh` validates the config against that
 schema **before writing** (a broken detection never overwrites a good config) and
 **auto-upgrades** a pre-v1 config in place — seeding any newly-added keys while
 preserving every human-owned field. See *Hard contracts*.
+
+#### Session override layer (`.claude/.harness/session-config.json`)
+
+Hooks are invoked by the runtime as **static command strings** — the conversation has no way
+to pass argv, and no in-memory channel to a hook process. So an instruction the user gives in
+chat ("work only on main", "this is a docs task") could not reach `auto-branch.sh` at all: the
+branch appeared anyway, and the only remedy was editing the repo's `done-config.json`, which
+outlives the task.
+
+`hc_cfg <key> [default]` is now the single config read, layering:
+
+1. `.claude/.harness/session-config.json` — **this task's** overrides. The agent writes it from
+   the user's own instruction, before editing.
+2. `.claude/done-config.json` — the repo's persisted config.
+3. the built-in default.
+
+It probes with `has()` at each layer (never a bare `//`, which would treat a literal `false`
+as empty and flip `auto_branch:false` back to `true`); a JSON `null` means "unset here" and
+falls through; arrays are returned space-joined. Keys read through it — the ones a per-task
+instruction can plausibly flip — are `trunk`, `auto_branch`, `branch_prefix`, `noncode_globs`
+and `untracked_policy`.
+
+Lifetime is **one task**: SessionStart deletes the file on a fresh context (`startup`/`clear`)
+and preserves it on `resume`/`compact`/`fork`, the same distinction the baseline guard draws.
+It lives under the state dir, so `hc_is_harness_own_path` already exempts it from the tree
+classification. SessionStart also injects the file's existence into the **agent-visible**
+`additionalContext` when the session starts on trunk with `auto_branch` on — the pre-existing
+warning was a `systemMessage`, which the user sees and the agent does not.
 
 `max_review_rounds` (default `2`) caps the Step-6 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the

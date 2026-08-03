@@ -335,7 +335,8 @@ printed to stdout. The global posture is fail-**safe** (unexpected → allow),
 with one deliberate inversion at Step 8.
 
 **The current step order (exact labels from the script):** Step 1 loop-guard →
-Step 2 not-a-git-repo → **Step 2a changeset-anchor recovery** → **Step 2b
+Step 2 not-a-git-repo → **Step 2a-0 marker-baseline anchor recovery** →
+**Step 2a changeset-anchor recovery** → **Step 2b
 pending-escalation one-shot** → Step 3 HEAD==base && clean quiet-exit → **Step 3a
 out-of-scope non-code stand-down (S_OOS)** → **Step 3b introduced-dirty tree block**
 → **Step 3c empty-changeset short-circuit** → **Step 3d escalation-accept sidecar
@@ -354,7 +355,8 @@ flowchart TD
   B -->|no| C["Step 2: git rev-parse HEAD ok?"]
   C -->|no HEAD| ALLOW2["exit 0 (non-git)"]
   C -->|HEAD_SHA| D["source lib; hc_resolve<br/>DONE_STATE = done-state/&lt;task_key&gt;.json<br/>PENDING = pending-escalation/&lt;task_key&gt;.json"]
-  D --> P2A["Step 2a: HC_BASE empty?<br/>recover base_sha from our done-state,<br/>else from the current-session marker's state<br/>→ HC_BASE_RECOVERED (never HC_BASE)<br/>feeds coverage + summary ONLY"]
+  D --> P2A0["Step 2a-0: HC_BASE empty AND session mode?<br/>adopt baselines/&lt;marker_id&gt;.sha as HC_BASE<br/>(SessionStart-written, must be an ANCESTOR of HEAD)<br/>fixes the session-id disagreement"]
+  P2A0 --> P2A["Step 2a: HC_BASE empty?<br/>recover base_sha from our done-state,<br/>else from the current-session marker's state<br/>→ HC_BASE_RECOVERED (never HC_BASE)<br/>feeds coverage + summary ONLY"]
   P2A --> P2B{"Step 2b: pending-escalation/&lt;task_key&gt;.json exists?"}
   P2B -->|yes| ALLOW2b["rm the file; exit 0 (ONE-SHOT pass)<br/>lets an AskUserQuestion turn reach the user"]
   P2B -->|no| E{"Step 3: HC_BASE set AND<br/>HC_BASE == HEAD?"}
@@ -412,6 +414,15 @@ flowchart TD
   Exit 2 is deliberately *not* used — on exit 2 the runtime reads stderr and
   discards the stdout JSON reason. A stderr line is written too, but only as a
   human log.
+- **Step 2a-0 — marker-baseline anchor recovery.** The commonest empty-`HC_BASE`
+  cause is the **session-id disagreement**: SessionStart wrote
+  `baselines/<its id>.sha`, the gate looks up `baselines/<its own stdin id>.sha`.
+  A session that changed nothing then blocks with the no-anchor reason instead of
+  taking the Step-3 quiet exit. So the gate adopts `baselines/<marker_id>.sha`
+  **into `HC_BASE`** — safe precisely because that file's producer is SessionStart
+  alone, writing live HEAD before any edit, i.e. the same fact the resolver
+  missed, not a mid-task artefact. Bounded by: raw object id, live commit,
+  **ancestor of HEAD**, and **session mode only**.
 - **Step 2a — changeset-anchor recovery.** When the resolver found no anchor
   (`HC_BASE` empty — no `baselines/<sid>.sha`, a zero-length baseline, or an empty
   task pin), the gate recovers one from **writer-stamped facts, never agent
@@ -852,6 +863,9 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Missing tree baseline (`.dirty`)** | SessionStart records it on every git-repo start (0 bytes when the tree is clean, session-scoped fallback if the resolver failed) — but the capture is atomic, so a failed `git status` leaves **no** file (and removes a stale one) rather than a misleading empty one. If absent, `hc_tree_status` sets `HC_TREE_BASELINE_MISSING=1` and degrades to STRICT (every pre-existing entry blocks → deadlock), with wording that **hedges on authorship** instead of claiming the session introduced those paths; preflight raises a **HARD problem** (NOT WINNABLE), not a warning | `baseline-snapshot.sh` `pin_tree_baseline` (temp+`mv`); `hc_tree_status` / `hc_tree_remediation`; `done-preflight.sh` Check 3 (blocking) |
 | **Tree-identical HEAD move** | `commit --amend -m` / `reset --soft` + recommit / a `pull --rebase` that replays the same patches → Step 5 falls back from sha to **tree** equality and carries the verification; `hc_state` applies the same test so SessionStart does not steer "run /done" at a HEAD the gate just allowed. Any tree-entry change (one byte, a mode flip, a symlink target, a gitlink bump) still blocks | `done-gate.sh` Step 5 `CARRY`; `hc_state` S2-vs-S5 boundary; `hc_done_state_blocked` two-path candidate set |
 | **Orphaned review anchor** | After such an amend the reviewed sha is rewritten and drops out of the coverage chain. The done-state's `review_anchor_sha` is re-admitted by name — resolved at **its own sha** (`chain_admit`), so it cannot self-validate — and the reaper keeps its log alive. The next real commit only re-demands review of the files it actually touched | `done-gate.sh`/`done-write-state.sh` Step 8 admission split; `hc_review_coverage_gap` `chain_admit`; `hc_live_review_shas` |
+| **Session-id disagreement (gate id ≠ SessionStart id)** | Gate Step 2a-0 adopts `baselines/<marker_id>.sha` **as `HC_BASE`** — same producer (SessionStart, live HEAD, pre-edit) as the anchor it replaces, so it restores the Step-3 quiet exit for a session that changed nothing. Bounded: raw object id, live commit, **ancestor of HEAD**, session mode only, marker contents untrusted as a filename | `done-gate.sh` Step 2a-0; `tests/test-anchor-recovery.sh` I1–I3 |
+| **Non-code edit on trunk** | The `PreToolUse` branch hook applies the same scope rule as the Stop gate (`hc_path_is_noncode` on `tool_input.file_path`) and does **not** branch for a prose/docs/image edit — the harness no longer drags a docs-only task onto a `task/` branch it then declines to gate. Per-edit: a mixed task branches on its first *code* edit. No path / no predicate → treated as code → branch | `auto-branch.sh` scope block; `hc_path_is_noncode`; `tests/test-autobranch.sh` cases 6–8 |
+| **User instruction that contradicts the config** ("work only on main") | Hooks run as static commands, so chat cannot reach them — the instruction is recorded in `.claude/.harness/session-config.json`, the top layer of `hc_cfg` (over `done-config.json`, over the built-in). SessionStart injects the file's existence into the **agent-visible** `additionalContext` when starting on trunk with `auto_branch` on, and drops the file on the next `startup`/`clear` so it governs one task only | `hc_cfg`; `baseline-snapshot.sh` (ADDL_CTX + fresh-context drop); `tests/test-autobranch.sh` cases 9–10 |
 | **Missing changeset anchor (`baselines/<sid>.sha`)** | Gate Step 2a recovers a base from the done-state's writer-stamped `base_sha`, or from the state the `current-session` marker names when our key has none. Recovered into `HC_BASE_RECOVERED` **only** — never `HC_BASE` — so it can feed coverage and the summary but never Step 3/3c's pass-granting exits. With no recovery the gate still BLOCKS, and at Step 4 (no anchor *and* no done-state) says so honestly instead of demanding an impossible `/done` | `done-gate.sh` Step 2a + `S2_NO_ANCHOR`; `hc__recover_base_from_state`; `done-write-state.sh` carries `base_sha` forward |
 | **Non-hex review-log basename** | A `review-log/HEAD.json` / `main.json` / `HEAD@{0}.json` is **skipped** by the coverage chain before the `merge-base` calls. Otherwise it resolved as a git rev, was trivially an ancestor of HEAD, and blob-checked against the *current* tree — a log that self-validates and never expires | `hc__is_object_id` guard in `hc_review_coverage_gap`'s chain loop |
 | **Dead session id (SESSION mode)** | `session_id` with no `baselines/<id>.sha` → writer **refuses** (exit nonzero, lists valid ids + `current-session` marker); otherwise the done-state keys `session-<id>` the gate never reads → silent forever-block | `done-write-state.sh` dead-id backstop; skill prefers the `current-session` marker |
