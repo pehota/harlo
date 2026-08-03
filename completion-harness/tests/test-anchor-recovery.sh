@@ -27,9 +27,24 @@
 #       key has none — the evidence stays HEAD/tree-pinned and outcome-checked;
 #       only WHICH KEY names it relaxes. Admitted only when it also supplies a
 #       usable base_sha, so the marker path is never weaker than the anchored one.
-#   REJECTED: a marker session's baselines/<id>.sha as the anchor. That is the
-#       case-2 trap — a marker whose base == HEAD would make the changeset look
-#       empty and wave a whole unverified session through.
+#   (c) a marker session's baselines/<id>.sha (+ its .dirty) AS the anchor —
+#       Step 2a-0, layer I below. This suite previously REJECTED this recovery
+#       outright, on the grounds that a marker whose base == HEAD makes the
+#       changeset look empty and waves an unverified session through. That
+#       rejection is now DELIBERATELY REVERSED, and the reversal is bounded:
+#         - the value must be an object id naming a live commit that is an
+#           ANCESTOR of HEAD, session mode only (I3 pins the rejection);
+#         - a non-empty commit range still blocks with every check intact (I2);
+#         - introduced tree dirt still blocks (I5).
+#       What it buys: the SESSION-ID DISAGREEMENT (the gate resolves a different
+#       id than the one SessionStart wrote) otherwise blocks a task that changed
+#       NOTHING, forever, with a usable anchor one filename away.
+#       RESIDUAL, accepted and documented in design.md: if the marker names a
+#       session that started LATER than the one being gated, its baseline sits
+#       nearer HEAD and the changeset resolves smaller. That needs the gated
+#       session's own baseline to have vanished AND a second session to have
+#       started in the same checkout — already outside the supported
+#       single-session model.
 #
 # STRUCTURAL SAFETY INVARIANT (asserted, not merely intended): a RECOVERED anchor
 # may only feed checks that make the gate STRICTER (coverage, the summary). It is
@@ -499,9 +514,11 @@ rm -rf "$R"
 
 # I1 — marker baseline == HEAD, clean tree: nothing was committed, nothing is
 #      dirty. Must take the Step-3 quiet exit instead of the no-anchor block.
+#      The gate id gets NO baseline of its own — seeding one would hand-repair
+#      the very disagreement under test.
 R=$(make_repo); GATE_SID=gate-i1; MARK_SID=marker-i1
 HEADS=$(git -C "$R" rev-parse HEAD)
-seed_tree_base "$R" "$GATE_SID"
+seed_tree_base "$R" "$MARK_SID"
 printf '%s\n' "$HEADS" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
 printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
 OUT=$(run_gate "$R" "$GATE_SID")
@@ -545,6 +562,43 @@ if is_block "$OUT" && printf '%s' "$RSN" | grep -qi "$NOANCHOR_PHRASE"; then
   ok "I3 non-ancestor marker baseline is NOT adopted (honest no-anchor block)"
 else
   bad "I3 adopted a baseline from another history. out=[$OUT]"
+fi
+rm -rf "$R"
+
+# I4 — the tree anchor must move with the changeset anchor. Same disagreement,
+#      but the repo has PRE-EXISTING dirt. Recovering only the .sha would leave
+#      HC_TREE_BASE_FILE pointing at the gate id's missing .dirty → empty
+#      baseline → every entry "introduced" → Step 3b "finish the slice". The
+#      task changed nothing, so it must still take the quiet exit.
+R=$(make_repo); GATE_SID=gate-i4; MARK_SID=marker-i4
+HEADS=$(git -C "$R" rev-parse HEAD)
+printf 'pre-existing\n' > "$R/untracked-note.txt"
+# SessionStart's capture under the MARKER id, recorded while that dirt was
+# already there — i.e. the real pre-edit snapshot, not a hand-repair.
+git -C "$R" status --porcelain > "$R/.claude/.harness/baselines/$MARK_SID.dirty"
+printf '%s\n' "$HEADS" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT"; then
+  bad "I4 pre-existing dirt blocked a zero-file task — tree anchor not recovered. reason=[$RSN]"
+else
+  ok "I4 marker .dirty recovers the TREE anchor too (pre-existing dirt does not block)"
+fi
+rm -rf "$R"
+
+# I5 — the recovery must not whitelist the session's OWN uncommitted work: dirt
+#      absent from the marker's snapshot is still introduced and still blocks.
+R=$(make_repo); GATE_SID=gate-i5; MARK_SID=marker-i5
+HEADS=$(git -C "$R" rev-parse HEAD)
+: > "$R/.claude/.harness/baselines/$MARK_SID.dirty"   # clean at snapshot time
+printf '%s\n' "$HEADS" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+printf 'new work\n' > "$R/introduced.js"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -q "finish the slice"; then
+  ok "I5 introduced dirt still BLOCKS after tree-anchor recovery"
+else
+  bad "I5 recovered tree anchor whitelisted the session's own work. out=[$OUT]"
 fi
 rm -rf "$R"
 

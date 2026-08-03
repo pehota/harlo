@@ -49,6 +49,9 @@ HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
 #   2. $HC_CONFIG_REL — the repo's persisted config.
 #   3. <default> — the built-in.
 #
+# Keys read through this: auto_branch, branch_prefix, noncode_globs,
+# untracked_policy. `trunk` is deliberately NOT among them — see hc__detect_trunk.
+#
 # A `has()` probe, never a bare `//` default: jq's `//` treats a literal `false`
 # as empty and would flip an explicit auto_branch:false back to the default. A
 # JSON `null` means "not set here" and falls through to the next layer. Arrays
@@ -384,12 +387,21 @@ hc__recover_base_from_state() {
 # Offline, conservative trunk detection. Prints the trunk name, or nothing
 # (empty = UNCONFIDENT). Never consults origin/HEAD (repos may have no remote).
 hc__detect_trunk() {
+  local cfg="$PROJECT_DIR/$HC_CONFIG_REL"
   local t=""
 
-  t=$(hc_cfg trunk "")
-  if [ -n "$t" ]; then
-    printf '%s' "$t"
-    return 0
+  # Deliberately NOT hc_cfg: `trunk` is the ONE knob the session layer must not
+  # reach. It selects task-vs-session mode, computes the task key, drives
+  # auto-branch, and feeds SessionStart's terminal reap, which DELETES the state
+  # of branches it judges merged. A wrong trunk there destroys state rather than
+  # merely loosening a check — too much authority for an ephemeral,
+  # agent-written file, and nothing asked for a per-task trunk.
+  if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
+    t=$(jq -r '.trunk // empty' "$cfg" 2>/dev/null)
+    if [ -n "$t" ] && [ "$t" != "null" ]; then
+      printf '%s' "$t"
+      return 0
+    fi
   fi
 
   if git -C "$PROJECT_DIR" show-ref --verify -q refs/heads/main 2>/dev/null; then

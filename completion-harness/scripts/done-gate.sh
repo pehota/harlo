@@ -147,6 +147,26 @@ if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_
        && git -C "$PROJECT_DIR" merge-base --is-ancestor "$MARKER_ANCHOR" "$HEAD_SHA" 2>/dev/null; then
       HC_BASE="$MARKER_ANCHOR"
       HC_BASE_ORIG="$MARKER_ANCHOR"
+
+      # THE TREE ANCHOR MOVES WITH IT. The changeset anchor alone is not enough:
+      # hc_resolve also pointed HC_TREE_BASE_FILE at baselines/<gate id>.dirty,
+      # which in this scenario does not exist either — so hc_tree_status would
+      # degrade to the empty baseline, call every pre-existing entry introduced,
+      # and Step 3b would block with "finish the slice". A zero-file task in a
+      # repo with any pre-existing dirt would stay stuck, one step earlier than
+      # before. hc_tree_status reads HC_TREE_BASE_FILE verbatim (it does not
+      # re-derive it from its session_id argument), and this runs before Step 3a,
+      # so repointing it here is what makes the recovery real.
+      #
+      # ASYMMETRY, stated: the .sha is cross-checked against git (object id, live
+      # commit, ancestor of HEAD); a .dirty is a porcelain capture with nothing to
+      # validate it against, so it rests on provenance alone — same producer
+      # (SessionStart, pre-edit) as the .sha it accompanies. Adopted ONLY when the
+      # file exists; otherwise HC_TREE_BASE_FILE keeps pointing at the missing
+      # file and the classifier stays in its strict degrade.
+      if [ -f "$HARNESS_DIR/baselines/${ANCHOR_MARKER_ID}.dirty" ]; then
+        HC_TREE_BASE_FILE="$HARNESS_DIR/baselines/${ANCHOR_MARKER_ID}.dirty"
+      fi
     fi
   fi
 fi

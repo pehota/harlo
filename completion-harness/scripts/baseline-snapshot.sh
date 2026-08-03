@@ -46,9 +46,13 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalat
 # ONE task, so a "stay on trunk, this once" never silently governs the next
 # task. Dropped on a FRESH context (startup|clear) and kept on resume|compact|
 # fork, which continue the same task — the same distinction IS_COMPACT draws for
-# the baseline. Guarded; a missing file is a no-op.
+# the baseline. An EMPTY source (older CLI that sends no `source`) also drops:
+# this file only ever grants leniency, so an unknown source must fail toward the
+# persisted config, not toward an override surviving indefinitely. Guarded; a
+# missing file is a no-op.
 case "$SOURCE" in
-  startup|clear) rm -f "$PROJECT_DIR/.claude/.harness/session-config.json" 2>/dev/null ;;
+  resume|compact|fork) : ;;
+  *) rm -f "$PROJECT_DIR/.claude/.harness/session-config.json" 2>/dev/null ;;
 esac
 
 # --- reap stale harness state -----------------------------------------------

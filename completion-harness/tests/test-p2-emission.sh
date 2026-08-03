@@ -451,6 +451,94 @@ write_review_log "$DIR" "$FIX/review-log-green.json" "$H1"
 run_session_start "$DIR" "rg-s4c" >/dev/null
 regression_still_blocks "reg S4 (coverage gap)" "$DIR" "rg-s4c"
 
+# ===========================================================================
+# T — the ON-TRUNK session-config notice. This is the ONLY channel through
+#     which an instruction the user gives in chat ("work only on main") reaches
+#     the auto-branch hook, which runs as a static command with no argv the
+#     conversation can address. The pre-existing on-trunk warning is a
+#     systemMessage — user-visible, agent-INVISIBLE — which is exactly why the
+#     branch appeared anyway. So the notice must land in additionalContext.
+# ===========================================================================
+echo
+echo "--- T: on-trunk session-config notice + override lifetime ---"
+
+SESSION_CFG_PHRASE="session-config.json"
+
+# A repo left ON TRUNK (the P2 make_repo checks out a feature branch), with the
+# production non-code globs so the S_OOS case below is reachable.
+make_trunk_repo() {
+  local dir
+  dir=$(mktemp -d)
+  CLEANUP_DIRS="$CLEANUP_DIRS $dir"
+  git -C "$dir" init -q -b main
+  git -C "$dir" config user.email "t@t.t"
+  git -C "$dir" config user.name "t"
+  mkdir -p "$dir/.claude/.harness/done-state" "$dir/.claude/.harness/review-log" \
+           "$dir/.claude/.harness/baselines" "$dir/.claude/.harness/tree-base"
+  jq '.baseline_snapshot = false | .noncode_globs = ["*.md"]' "$FIX/done-config.json" \
+    > "$dir/.claude/done-config.json"
+  echo ".claude/.harness/" > "$dir/.gitignore"
+  echo "root" > "$dir/root.txt"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m "root"
+  printf '%s' "$dir"
+}
+set_cfg() {
+  jq "$2" "$1/.claude/done-config.json" > "$1/cfg.tmp" && mv "$1/cfg.tmp" "$1/.claude/done-config.json"
+}
+
+# T1 — on trunk, auto_branch ON: the agent must be told, BEFORE its first edit,
+#      that the next code edit branches and how to say no for this task.
+DIR=$(make_trunk_repo); set_cfg "$DIR" '.auto_branch = true'
+CTX=$(addl_ctx "$(run_session_start "$DIR" "t1")")
+assert_contains "T1 on-trunk notice is AGENT-visible" "$CTX" "$SESSION_CFG_PHRASE"
+assert_contains "T1 notice names the knob"            "$CTX" "auto_branch"
+
+# T2 — auto_branch already OFF: nothing will branch, so no notice.
+DIR=$(make_trunk_repo); set_cfg "$DIR" '.auto_branch = false'
+CTX=$(addl_ctx "$(run_session_start "$DIR" "t2")")
+case "$CTX" in
+  *"$SESSION_CFG_PHRASE"*) FAILS=$((FAILS+1)); CASES=$((CASES+1))
+    printf 'FAIL  T2 notice emitted despite auto_branch:false: [%s]\n' "$CTX" ;;
+  *) CASES=$((CASES+1)); printf 'PASS  T2 no notice when auto_branch is already off\n' ;;
+esac
+
+# T3 — S_OOS on trunk: the harness stands down on an all-prose changeset, so it
+#      must not add branch advice about work it declines to govern.
+DIR=$(make_trunk_repo); set_cfg "$DIR" '.auto_branch = true'
+run_session_start "$DIR" "t3" >/dev/null          # clean baseline pinned here
+echo "# prose" > "$DIR/notes.md"                  # introduced, non-code
+CTX=$(addl_ctx "$(run_session_start "$DIR" "t3" "compact")")   # compact preserves it
+case "$CTX" in
+  *"$SESSION_CFG_PHRASE"*) FAILS=$((FAILS+1)); CASES=$((CASES+1))
+    printf 'FAIL  T3 notice emitted in S_OOS (stand-down broken): [%s]\n' "$CTX" ;;
+  *) CASES=$((CASES+1)); printf 'PASS  T3 silent in S_OOS (prose-only changeset)\n' ;;
+esac
+
+# T4 — override LIFETIME. One task: a continuation (compact/resume) keeps it, a
+#      fresh context drops it, so "stay on trunk, this once" cannot silently
+#      govern the next task.
+DIR=$(make_trunk_repo)
+SC="$DIR/.claude/.harness/session-config.json"
+printf '{"auto_branch":false}\n' > "$SC"
+run_session_start "$DIR" "t4" "compact" >/dev/null
+if [ -f "$SC" ]; then CASES=$((CASES+1)); printf 'PASS  T4 compact PRESERVES the override\n'
+else FAILS=$((FAILS+1)); CASES=$((CASES+1)); printf 'FAIL  T4 compact dropped the override\n'; fi
+run_session_start "$DIR" "t4" "resume" >/dev/null
+if [ -f "$SC" ]; then CASES=$((CASES+1)); printf 'PASS  T4 resume PRESERVES the override\n'
+else FAILS=$((FAILS+1)); CASES=$((CASES+1)); printf 'FAIL  T4 resume dropped the override\n'; fi
+run_session_start "$DIR" "t4" "startup" >/dev/null
+if [ -f "$SC" ]; then FAILS=$((FAILS+1)); CASES=$((CASES+1)); printf 'FAIL  T4 startup kept a stale override\n'
+else CASES=$((CASES+1)); printf 'PASS  T4 startup DROPS the override (one task only)\n'; fi
+
+# T5 — an EMPTY source (older CLI sending no `source`) must also drop: this file
+#      only ever grants leniency, so an unknown source fails toward the
+#      persisted config rather than letting an override live to the 14-day reap.
+printf '{"auto_branch":false}\n' > "$SC"
+printf '{"session_id":"t5"}' | CLAUDE_PROJECT_DIR="$DIR" bash "$BASELINE" >/dev/null 2>&1
+if [ -f "$SC" ]; then FAILS=$((FAILS+1)); CASES=$((CASES+1)); printf 'FAIL  T5 empty source kept the override\n'
+else CASES=$((CASES+1)); printf 'PASS  T5 empty source DROPS the override (fails toward config)\n'; fi
+
 # ---------------------------------------------------------------------------
 echo
 echo "=============================================================="

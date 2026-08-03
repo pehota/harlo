@@ -438,6 +438,8 @@ script):
 
    Unlike the Step-2a recoveries below, this value **is** assigned to `HC_BASE`, and provenance is what makes that safe: a `baselines/*.sha` is written by SessionStart alone, from live HEAD, before any edit — the same producer and the same meaning as the anchor the resolver failed to find. It is not written mid-task and is not agent payload, so the "keep it out of `HC_BASE`" boundary (which exists because the done-state *is* written mid-task) does not apply. Two conditions bound it, both about not *inventing* a base: the value must be a raw object id naming a live commit that is an **ancestor of HEAD** (a non-ancestor is another line of history, against which "empty" is meaningless), and **session mode only** (task mode keys by branch and pins its own base). Marker contents are treated as untrusted for filename purposes. Residual: a marker naming a *later-started* session would resolve a smaller changeset — that needs two live sessions in one checkout, already unsupported (they race on the tree).
 
+   **The tree anchor moves with it.** Recovering only the `.sha` would leave `HC_TREE_BASE_FILE` pointing at the gate id's equally-missing `.dirty`, so `hc_tree_status` would degrade to the empty baseline, call every pre-existing entry *introduced*, and block at Step 3b with "finish the slice" — the same task stuck one step earlier. So `baselines/<marker_id>.dirty` is adopted too, when it exists (otherwise the classifier stays in its strict degrade). Asymmetry, stated: a `.sha` is cross-checked against git; a `.dirty` is a porcelain capture with nothing to validate it against, so it rests on provenance alone — the same producer, at the same pre-edit moment, as the `.sha` it accompanies. It cannot whitelist the session's own work: dirt absent from that snapshot is still introduced and still blocks.
+
    **Trust boundary, stated plainly.** `baselines/*.sha` and `current-session` live under the state dir, which `hc_is_harness_own_path` deliberately exempts from the tree classification, and nothing prevents an agent with a shell from writing them. An agent that writes `baselines/<sha of HEAD>` and takes the Step-3 quiet exit therefore clears the gate without evidence — but that is **not new here**: the primary path reads `baselines/<gate's own session_id>.sha` with no validation either, and the agent knows that id (it appears in its own session paths). Step 2a-0 adopts a *differently named* file of the same class under strictly tighter checks (object-id shape, live commit, ancestor-of-HEAD) than the unchecked primary read, so it widens no capability. Closing the class means hardening the `baselines/*.sha` boundary itself — signing or relocating it outside agent-writable space — which is a separate change, deliberately not smuggled in here.
 
 2a. **Changeset-anchor recovery (empty `HC_BASE`).** `HC_BASE` is empty whenever the resolver found no anchor — session mode with no `baselines/<sid>.sha` (state dir deleted mid-session, 14-day age-reap, or a SessionStart that never ran for the id the gate resolves), a zero-length baseline file, or an empty task pin. Two recoveries, both from **writer-stamped facts**, never agent payload:
@@ -1095,11 +1097,17 @@ outlives the task.
 It probes with `has()` at each layer (never a bare `//`, which would treat a literal `false`
 as empty and flip `auto_branch:false` back to `true`); a JSON `null` means "unset here" and
 falls through; arrays are returned space-joined. Keys read through it — the ones a per-task
-instruction can plausibly flip — are `trunk`, `auto_branch`, `branch_prefix`, `noncode_globs`
-and `untracked_policy`.
+instruction can plausibly flip — are `auto_branch`, `branch_prefix`, `noncode_globs` and
+`untracked_policy`. **`trunk` is deliberately excluded:** it selects task-vs-session mode,
+computes the task key, drives auto-branch *and* feeds SessionStart's terminal reap, which
+**deletes** the state of branches it judges merged — a wrong value there destroys state rather
+than merely loosening a check, which is too much authority for an ephemeral, agent-written
+file. `hc__detect_trunk` reads the repo config only.
 
-Lifetime is **one task**: SessionStart deletes the file on a fresh context (`startup`/`clear`)
-and preserves it on `resume`/`compact`/`fork`, the same distinction the baseline guard draws.
+Lifetime is **one task**: SessionStart preserves the file only on `resume`/`compact`/`fork`
+(the same continuation set the baseline guard uses) and drops it on everything else —
+including an **empty** `source` from an older CLI, because a file that only ever grants
+leniency must fail toward the persisted config rather than survive to the 14-day reap.
 It lives under the state dir, so `hc_is_harness_own_path` already exempts it from the tree
 classification. SessionStart also injects the file's existence into the **agent-visible**
 `additionalContext` when the session starts on trunk with `auto_branch` on — the pre-existing
