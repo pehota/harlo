@@ -488,6 +488,66 @@ else
 fi
 rm -rf "$R"
 
+# ============================================================================
+# I — MARKER BASELINE recovery (Step 2a-0). The gate's own baselines/<sid>.sha is
+#     absent, but the current-session marker names a session whose baseline .sha
+#     exists. That file is written by SessionStart alone, from live HEAD, before
+#     any edit — the same producer and meaning as the anchor the resolver missed
+#     — so it IS adopted as HC_BASE (unlike the done-state recovery, which is
+#     kept out of HC_BASE). This is what unblocks a session that changed nothing.
+# ============================================================================
+
+# I1 — marker baseline == HEAD, clean tree: nothing was committed, nothing is
+#      dirty. Must take the Step-3 quiet exit instead of the no-anchor block.
+R=$(make_repo); GATE_SID=gate-i1; MARK_SID=marker-i1
+HEADS=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$GATE_SID"
+printf '%s\n' "$HEADS" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID")
+if is_block "$OUT"; then
+  bad "I1 empty changeset still blocked despite a recoverable marker baseline. out=[$OUT]"
+else
+  ok "I1 marker baseline recovers the anchor → empty changeset takes the quiet exit"
+fi
+rm -rf "$R"
+
+# I2 — same recovery, but the marker baseline is C1 while HEAD is C3: a real
+#      unverified changeset. Recovery must not forge a pass.
+R=$(make_repo); GATE_SID=gate-i2; MARK_SID=marker-i2
+C1=$(git -C "$R" rev-parse HEAD~2)
+seed_tree_base "$R" "$GATE_SID"
+printf '%s\n' "$C1" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID")
+if is_block "$OUT"; then
+  ok "I2 recovered anchor with real commits still BLOCKS (no forged pass)"
+else
+  bad "I2 recovery waved an unverified changeset through. out=[$OUT]"
+fi
+rm -rf "$R"
+
+# I3 — the marker baseline names a commit that is NOT an ancestor of HEAD (here:
+#      a well-formed sha from an unrelated history). Judging emptiness against
+#      another line of history is meaningless → not adopted → no-anchor block.
+R=$(make_repo); GATE_SID=gate-i3; MARK_SID=marker-i3
+FOREIGN=$(mktemp -d)
+git -C "$FOREIGN" init -q -b main
+git -C "$FOREIGN" config user.email t@t; git -C "$FOREIGN" config user.name t
+printf 'z\n' > "$FOREIGN/z.js"; git -C "$FOREIGN" add -A; git -C "$FOREIGN" commit -qm z
+FOREIGN_SHA=$(git -C "$FOREIGN" rev-parse HEAD)
+rm -rf "$FOREIGN"
+seed_tree_base "$R" "$GATE_SID"
+printf '%s\n' "$FOREIGN_SHA" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -qi "$NOANCHOR_PHRASE"; then
+  ok "I3 non-ancestor marker baseline is NOT adopted (honest no-anchor block)"
+else
+  bad "I3 adopted a baseline from another history. out=[$OUT]"
+fi
+rm -rf "$R"
+
 echo
 echo "test-anchor-recovery: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

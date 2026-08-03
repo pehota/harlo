@@ -105,6 +105,52 @@ DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 # unverified session look like "nothing to verify". Keeping it separate makes
 # that impossible by construction rather than by predicate. The recovered anchor
 # feeds ONLY checks that make the gate STRICTER: review coverage and the summary.
+
+# --- Step 2a-0: recover the ANCHOR ITSELF from the session marker ------------
+# Before any of the below: the commonest way HC_BASE goes empty is not a deleted
+# state dir, it is a SESSION-ID DISAGREEMENT. The gate resolves its base from
+# baselines/<its own stdin session_id>.sha; SessionStart wrote that file under
+# the id IT saw. When the two ids differ, a perfectly good anchor sits one
+# filename away and the session blocks with the no-anchor reason — including a
+# session that changed NOTHING, which should have taken the Step-3 quiet exit.
+#
+# So: adopt baselines/<marker_id>.sha. Unlike the done-state recovery below,
+# this value IS assigned to HC_BASE, and the provenance is what makes that safe.
+# A baselines/*.sha is written by SessionStart alone, from live HEAD, before any
+# edit — the exact same producer and the exact same meaning as the anchor the
+# resolver failed to find. It is not agent payload, so the Step-2a "keep it out
+# of HC_BASE" boundary (which exists because done-state is written mid-task) does
+# not apply.
+#
+# Two conditions bound it, both about not INVENTING a base:
+#   - the value must be a real commit object that is an ANCESTOR of HEAD. A
+#     non-ancestor is a base from another line of history; judging emptiness
+#     against it is meaningless.
+#   - SESSION MODE only. Task mode keys by branch and pins its own base.
+# Residual: if the marker names a session that started LATER than ours, its
+# baseline is nearer HEAD and the changeset resolves SMALLER. That requires two
+# live sessions in one checkout, which is already unsupported (they race on the
+# tree); the single-session model this marker exists to serve cannot hit it.
+if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_DIR/current-session" ]; then
+  ANCHOR_MARKER_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
+  # Same path hygiene as the marker-state lookup below: the file's contents are
+  # untrusted for filename purposes.
+  case "$ANCHOR_MARKER_ID" in
+    ''|'.'|'..'|*[!A-Za-z0-9._-]*) ANCHOR_MARKER_ID="" ;;
+  esac
+  if [ -n "$ANCHOR_MARKER_ID" ] && [ "$ANCHOR_MARKER_ID" != "$SESSION_ID" ]; then
+    MARKER_ANCHOR=$(cat "$HARNESS_DIR/baselines/${ANCHOR_MARKER_ID}.sha" 2>/dev/null | tr -d '\r\n')
+    if [ -n "$MARKER_ANCHOR" ] \
+       && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
+       && hc__is_object_id "$MARKER_ANCHOR" \
+       && git -C "$PROJECT_DIR" cat-file -e "${MARKER_ANCHOR}^{commit}" 2>/dev/null \
+       && git -C "$PROJECT_DIR" merge-base --is-ancestor "$MARKER_ANCHOR" "$HEAD_SHA" 2>/dev/null; then
+      HC_BASE="$MARKER_ANCHOR"
+      HC_BASE_ORIG="$MARKER_ANCHOR"
+    fi
+  fi
+fi
+
 HC_BASE_RECOVERED=""
 if [ -z "$HC_BASE" ] \
    && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
