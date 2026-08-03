@@ -326,8 +326,17 @@ if [ -n "$HC_WARN" ]; then
     # file. Tell the agent the file exists BEFORE the first edit — the
     # systemMessage above is user-facing only, which is why the branch used to
     # appear anyway despite a standing "stay on trunk" instruction.
+    #
+    # SUPPRESSED IN S_OOS. A changeset the harness has already classified as
+    # all-prose is one it stands down on completely; adding branch advice there
+    # would be the harness talking about work it declines to govern. Every other
+    # state — including S0, the fresh pre-edit session where this is most
+    # useful — gets it.
+    case "$HC_STATE" in S_OOS) ;; *)
     ADDL_CTX="${ADDL_CTX:+$ADDL_CTX
 }[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to .claude/.harness/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
+    ;;
+    esac
   fi
 fi
 

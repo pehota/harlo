@@ -848,13 +848,32 @@ EOF
 #                                   changeset" (S0 territory), NOT as non-code.
 # Any error/ambiguity resolves to CODE ("code"/0). Sets no globals.
 # ---------------------------------------------------------------------------
-# hc_path_is_noncode <repo_relative_path>
+# hc_noncode_globs
+#
+# The effective `noncode_globs` list, space-separated. Split out from the path
+# predicate so a caller looping over N paths reads the config ONCE. This is not
+# a micro-optimisation: hc_changeset_is_code runs inside the Stop hook, which the
+# runtime kills at `"timeout": 10`, and a killed hook emits no stdout — which the
+# gate's own contract reads as ALLOW. A per-path jq spawn (~6ms) would therefore
+# turn a large changeset into a silently disarmed gate.
+hc_noncode_globs() {
+  # Built-in default set; overridden only when the key is PRESENT at some config
+  # layer (hc_cfg's has() probe). A present-but-empty array yields "" → no match
+  # → code, which is the strict direction.
+  hc_cfg noncode_globs '*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf'
+}
+
+# ---------------------------------------------------------------------------
+# hc_path_is_noncode <repo_relative_path> [globs]
 #
 # THE per-path half of the scope rule (#5): does this ONE path match >=1 glob in
 # the effective `noncode_globs`? Extracted from hc_changeset_is_code so the
 # PreToolUse branch hook and the Stop gate decide "is this prose?" with the same
 # implementation — the branch hook used to have no scope test at all, which is
 # how a docs-only task ended up on a task/ branch.
+#
+# <globs> is the optional pre-read list (hc_noncode_globs); pass it when calling
+# in a loop. Omitted → read here, for the one-path callers.
 #
 # An ABSENT/EMPTY noncode_globs → nothing is recognised non-code → every path is
 # code (safe direction: gate more, branch more, never less).
@@ -864,12 +883,11 @@ hc_path_is_noncode() {
   local path="${1:-}"
   [ -n "$path" ] || return 1
 
-  # Built-in default set; overridden only when the key is PRESENT at some config
-  # layer (hc_cfg's has() probe). A present-but-empty array yields "" → no match
-  # → code, which is the strict direction.
-  local default_globs='*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf'
+  # Presence of the ARG decides, not its emptiness: a config with
+  # `noncode_globs: []` legitimately passes an empty list, and re-reading on
+  # empty would restore the per-path jq spawn this parameter exists to avoid.
   local globs
-  globs=$(hc_cfg noncode_globs "$default_globs")
+  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs); fi
 
   # Disable pathname expansion for the duration: `for g in $globs` word-splits
   # the space-separated list, and with globbing ON bash would EXPAND each glob
@@ -935,10 +953,13 @@ EOF
   fi
 
   # --- classify: NON-CODE only if EVERY file matches >=1 noncode glob ---------
-  local f verdict="noncode" rc=1
+  # Config read ONCE, outside the loop — see hc_noncode_globs on why a per-path
+  # read is a gate-disarming timeout risk, not a micro-optimisation.
+  local globs f verdict="noncode" rc=1
+  globs=$(hc_noncode_globs)
   while IFS= read -r f; do
     [ -z "$f" ] && continue
-    if ! hc_path_is_noncode "$f"; then
+    if ! hc_path_is_noncode "$f" "$globs"; then
       # A single unrecognised (code / unknown-ext) file → whole changeset CODE.
       verdict="code"
       rc=0

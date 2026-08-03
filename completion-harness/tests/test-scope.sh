@@ -285,6 +285,68 @@ CASES=$((CASES+1))
 if [ -z "$OUT" ]; then printf 'PASS  B7 override makes .xyz stand down\n'
 else FAILS=$((FAILS+1)); printf 'FAIL  B7 expected empty stdout, got: %s\n' "$OUT"; fi
 
+# ============================================================================
+# C — hc_cfg, the layered config read. The SESSION layer
+#     (.claude/.harness/session-config.json) is how an instruction the user gave
+#     in chat reaches a hook, which runs as a static command with no argv the
+#     conversation can address. These cases pin the layering and the degrades.
+# ============================================================================
+echo
+echo "--- C: hc_cfg layering + degrades ---"
+
+# cfg <repo> <key> <default> — evaluate hc_cfg exactly as a hook would.
+cfg() {
+  local dir="$1" key="$2" def="$3"
+  (
+    export CLAUDE_PROJECT_DIR="$dir"
+    unset PROJECT_DIR
+    . "$LIB"
+    hc_cfg "$key" "$def"
+  )
+}
+seed_session_cfg() {
+  mkdir -p "$1/.claude/.harness" 2>/dev/null
+  printf '%s\n' "$2" > "$1/.claude/.harness/session-config.json"
+}
+
+DIR=$(make_repo)
+jq '.auto_branch = true | .trunk = "main"' "$DIR/.claude/done-config.json" > "$DIR/c.tmp" \
+  && mv "$DIR/c.tmp" "$DIR/.claude/done-config.json"
+
+assert_eq "C1 repo layer read"                 "$(cfg "$DIR" auto_branch true)"  "true"
+assert_eq "C2 built-in default when key absent" "$(cfg "$DIR" nope_key fallback)" "fallback"
+
+# The whole point of the has() probe: a literal false must not be flipped back
+# to the default by jq's `//`.
+seed_session_cfg "$DIR" '{"auto_branch":false}'
+assert_eq "C3 session layer wins (literal false survives)" "$(cfg "$DIR" auto_branch true)" "false"
+
+# An explicit null is "unset at this layer" → fall through to the repo config.
+seed_session_cfg "$DIR" '{"auto_branch":null}'
+assert_eq "C4 session null falls through to repo layer" "$(cfg "$DIR" auto_branch false)" "true"
+
+# Malformed session JSON must not poison the read: jq fails on it, so the repo
+# layer answers. Degrading toward the persisted config, never toward a fabricated
+# value, is the safe direction.
+seed_session_cfg "$DIR" '{not json'
+assert_eq "C5 malformed session layer degrades to repo layer" "$(cfg "$DIR" auto_branch false)" "true"
+rm -f "$DIR/.claude/.harness/session-config.json"
+
+# Arrays are space-joined — the shape the glob-list readers consume.
+seed_session_cfg "$DIR" '{"noncode_globs":["*.md","*.rst"]}'
+assert_eq "C6 array value is space-joined" "$(cfg "$DIR" noncode_globs X)" "*.md *.rst"
+rm -f "$DIR/.claude/.harness/session-config.json"
+
+# The session layer reaches the SCOPE rule end to end: declaring .sh non-code
+# for this task alone flips a code changeset to noncode.
+DIR=$(make_repo)
+commit_change "$DIR" "tool.sh" "echo hi" >/dev/null
+R=$(run_pred "$DIR")
+assert_eq "C7 .sh is code by default" "$(pred_out "$R")" "code"
+seed_session_cfg "$DIR" '{"noncode_globs":["*.sh"]}'
+R=$(run_pred "$DIR")
+assert_eq "C8 session noncode_globs reaches hc_changeset_is_code" "$(pred_out "$R")" "noncode"
+
 echo
 echo "=============================================================="
 if [ "$FAILS" -eq 0 ]; then

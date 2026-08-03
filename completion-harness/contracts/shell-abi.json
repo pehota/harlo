@@ -102,10 +102,17 @@
       "sentinels": []
     },
     {
+      "name": "hc_noncode_globs",
+      "globals": [],
+      "stdout": "the effective noncode_globs list, space-separated",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
       "name": "hc_path_is_noncode",
       "globals": [],
       "stdout": "nothing",
-      "return_codes": "0 the path matches a noncode_globs pattern, 1 code (or empty path)",
+      "return_codes": "0 the path matches a noncode_globs pattern, 1 code (or empty path); optional 2nd arg is the pre-read glob list",
       "sentinels": []
     },
     {
