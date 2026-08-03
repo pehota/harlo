@@ -31,6 +31,52 @@ fi
 # process in places, and a readonly re-assignment would abort the caller.
 HC_CONFIG_REL=".claude/done-config.json"
 HC_HARNESS_REL=".claude/.harness"
+# The SESSION override layer (see hc_cfg). Lives under the state dir, so it is
+# harness-owned by hc_is_harness_own_path and never blocks the tree.
+HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
+
+# ---------------------------------------------------------------------------
+# hc_cfg <key> [default]
+#
+# THE single config read. Prints the effective value of a flat top-level key,
+# first hit wins:
+#   1. $HC_SESSION_CONFIG_REL — THIS task's overrides. Hooks fire as static
+#      commands with no argv the conversation can reach, so an instruction the
+#      user gives in chat ("work only on main", "this is a docs task") can only
+#      reach a hook through a file. The agent writes that instruction here; the
+#      file is ephemeral (dropped at the next fresh SessionStart), so it is a
+#      per-task override and not a silent edit of the repo's config.
+#   2. $HC_CONFIG_REL — the repo's persisted config.
+#   3. <default> — the built-in.
+#
+# A `has()` probe, never a bare `//` default: jq's `//` treats a literal `false`
+# as empty and would flip an explicit auto_branch:false back to the default. A
+# JSON `null` means "not set here" and falls through to the next layer. Arrays
+# are printed space-joined (the shape the glob-list readers want).
+#
+# Fail direction: no jq, no file, unreadable key → the caller's default. Never
+# fabricates a value.
+hc_cfg() {
+  local key="$1" def="${2:-}"
+  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+
+  command -v jq >/dev/null 2>&1 || { printf '%s' "$def"; return 0; }
+
+  local f v
+  for f in "$proj/$HC_SESSION_CONFIG_REL" "$proj/$HC_CONFIG_REL"; do
+    [ -f "$f" ] || continue
+    jq -e --arg k "$key" 'has($k)' "$f" >/dev/null 2>&1 || continue
+    v=$(jq -r --arg k "$key" \
+      '.[$k] | if type == "array" then join(" ") else tostring end' "$f" 2>/dev/null) || continue
+    # An explicit null is "unset at this layer" → keep looking.
+    [ "$v" = "null" ] && continue
+    printf '%s' "$v"
+    return 0
+  done
+
+  printf '%s' "$def"
+  return 0
+}
 
 # Sanitize a string for use in a filename / key: every char NOT in the safe
 # set [A-Za-z0-9_.-] becomes '-'.
@@ -338,15 +384,12 @@ hc__recover_base_from_state() {
 # Offline, conservative trunk detection. Prints the trunk name, or nothing
 # (empty = UNCONFIDENT). Never consults origin/HEAD (repos may have no remote).
 hc__detect_trunk() {
-  local cfg="$PROJECT_DIR/.claude/done-config.json"
   local t=""
 
-  if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
-    t=$(jq -r '.trunk // empty' "$cfg" 2>/dev/null)
-    if [ -n "$t" ] && [ "$t" != "null" ]; then
-      printf '%s' "$t"
-      return 0
-    fi
+  t=$(hc_cfg trunk "")
+  if [ -n "$t" ]; then
+    printf '%s' "$t"
+    return 0
   fi
 
   if git -C "$PROJECT_DIR" show-ref --verify -q refs/heads/main 2>/dev/null; then
@@ -708,14 +751,10 @@ hc_tree_status() {
   current=$(git -C "$proj" status --porcelain 2>/dev/null)
   [ -z "$current" ] && return 0
 
-  # untracked_policy override (default "baseline").
-  local policy="baseline"
-  local cfg="$proj/.claude/done-config.json"
-  if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
-    local p
-    p=$(jq -r '.untracked_policy // "baseline"' "$cfg" 2>/dev/null)
-    [ -n "$p" ] && [ "$p" != "null" ] && policy="$p"
-  fi
+  # untracked_policy override (default "baseline"), session layer first.
+  local policy
+  policy=$(hc_cfg untracked_policy "baseline")
+  [ -n "$policy" ] || policy="baseline"
 
   local line in_baseline is_untracked
   while IFS= read -r line; do
@@ -808,6 +847,52 @@ EOF
 #                                   no introduced dirt). Caller treats as "no
 #                                   changeset" (S0 territory), NOT as non-code.
 # Any error/ambiguity resolves to CODE ("code"/0). Sets no globals.
+# ---------------------------------------------------------------------------
+# hc_path_is_noncode <repo_relative_path>
+#
+# THE per-path half of the scope rule (#5): does this ONE path match >=1 glob in
+# the effective `noncode_globs`? Extracted from hc_changeset_is_code so the
+# PreToolUse branch hook and the Stop gate decide "is this prose?" with the same
+# implementation — the branch hook used to have no scope test at all, which is
+# how a docs-only task ended up on a task/ branch.
+#
+# An ABSENT/EMPTY noncode_globs → nothing is recognised non-code → every path is
+# code (safe direction: gate more, branch more, never less).
+#
+# Returns 0 (non-code) / 1 (code, or empty path). Prints nothing.
+hc_path_is_noncode() {
+  local path="${1:-}"
+  [ -n "$path" ] || return 1
+
+  # Built-in default set; overridden only when the key is PRESENT at some config
+  # layer (hc_cfg's has() probe). A present-but-empty array yields "" → no match
+  # → code, which is the strict direction.
+  local default_globs='*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf'
+  local globs
+  globs=$(hc_cfg noncode_globs "$default_globs")
+
+  # Disable pathname expansion for the duration: `for g in $globs` word-splits
+  # the space-separated list, and with globbing ON bash would EXPAND each glob
+  # (e.g. `*.md`) against the CWD before the loop body ever sees it — silently
+  # turning the pattern list into a list of matching filenames. `set -f` keeps
+  # the patterns literal so `[[ "$path" == $g ]]` performs the intended glob
+  # match. `*` spans `/`, so `*.md` matches `docs/a.md`.
+  local restore_glob=0
+  case "$-" in *f*) ;; *) restore_glob=1 ;; esac
+  set -f
+
+  local g rc=1
+  for g in $globs; do
+    if [[ "$path" == $g ]]; then
+      rc=0
+      break
+    fi
+  done
+
+  [ "$restore_glob" -eq 1 ] && set +f
+  return "$rc"
+}
+
 hc_changeset_is_code() {
   local base="$1" head="$2"
   local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
@@ -849,53 +934,11 @@ EOF
     return 2
   fi
 
-  # --- read noncode_globs (effective config), else the built-in default -------
-  # Flat top-level key, read the same way hc_tree_status reads untracked_policy.
-  # Space-separated list built from the JSON array; on any read failure we fall
-  # back to the default set (never to "no globs", which would over-gate but is
-  # still the safe direction — this fallback merely preserves the intended UX).
-  local default_globs='*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf'
-  local globs="$default_globs"
-  local cfg="$proj/.claude/done-config.json"
-  if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
-    # Only override when the key is PRESENT (has()) — an absent key keeps the
-    # default; a present-but-empty array yields "" → NO file matches → all code.
-    if jq -e 'has("noncode_globs")' "$cfg" >/dev/null 2>&1; then
-      local raw
-      raw=$(jq -r '.noncode_globs // [] | .[]' "$cfg" 2>/dev/null)
-      # Reassemble space-separated (globs never contain spaces in practice).
-      globs=""
-      while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        globs="${globs:+$globs }$line"
-      done <<EOF
-$raw
-EOF
-    fi
-  fi
-
   # --- classify: NON-CODE only if EVERY file matches >=1 noncode glob ---------
-  # Disable pathname expansion for the duration: `for g in $globs` word-splits
-  # the space-separated list, and with globbing ON bash would EXPAND each glob
-  # (e.g. `*.md`) against the CWD before the loop body ever sees it — silently
-  # turning the pattern list into a list of matching filenames. `set -f` keeps
-  # the patterns literal so `[[ "$f" == $g ]]` performs the intended glob match.
-  local restore_glob=0
-  case "$-" in *f*) ;; *) restore_glob=1 ;; esac
-  set -f
-
-  local f g matched verdict="noncode" rc=1
+  local f verdict="noncode" rc=1
   while IFS= read -r f; do
     [ -z "$f" ] && continue
-    matched=0
-    for g in $globs; do
-      # Unquoted RHS = glob match; `*` spans `/`.
-      if [[ "$f" == $g ]]; then
-        matched=1
-        break
-      fi
-    done
-    if [ "$matched" -eq 0 ]; then
+    if ! hc_path_is_noncode "$f"; then
       # A single unrecognised (code / unknown-ext) file → whole changeset CODE.
       verdict="code"
       rc=0
@@ -904,8 +947,6 @@ EOF
   done <<EOF
 $files
 EOF
-
-  [ "$restore_glob" -eq 1 ] && set +f
 
   printf '%s\n' "$verdict"
   return "$rc"

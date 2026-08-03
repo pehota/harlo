@@ -13,13 +13,15 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
-# Read hook JSON from stdin (has session_id etc.). We need session_id to pin the
-# task tree baseline from THIS session's clean pre-edit snapshot (see below); we
-# do not need tool_input.
+# Read hook JSON from stdin. We need session_id to pin the task tree baseline
+# from THIS session's clean pre-edit snapshot (see below), and the edited path
+# from tool_input to apply the SCOPE rule (below).
 HOOK_INPUT=$(cat 2>/dev/null)
 SESSION_ID=""
+EDIT_PATH=""
 if command -v jq >/dev/null 2>&1; then
   SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
+  EDIT_PATH=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
 fi
 
 # --- fast no-op guards (allow, exit 0) --------------------------------------
@@ -67,15 +69,37 @@ if [ -z "$HC_BRANCH" ] || [ -z "$HC_TRUNK" ] || [ "$HC_BRANCH" != "$HC_TRUNK" ];
   exit 0
 fi
 
-# --- config: auto_branch (default true; honor a literal false) --------------
-# A bare `// true` jq default is WRONG: jq's `//` treats a literal `false` as
-# empty and would flip it back to true. Probe with has() first, then read.
-AUTO_BRANCH="true"
-CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
-if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
-  if jq -e 'has("auto_branch")' "$CONFIG_FILE" >/dev/null 2>&1; then
-    AUTO_BRANCH=$(jq -r '.auto_branch' "$CONFIG_FILE" 2>/dev/null)
+# --- scope: never branch for a NON-CODE edit --------------------------------
+# The harness governs CODING changesets only, and the Stop gate already stands
+# down on an all-prose changeset (done-gate.sh Step 3a). This hook had no scope
+# test at all, so a docs-only task still got dragged onto a task/ branch — the
+# harness visibly "kicking in" for work it then declines to gate. Same rule,
+# same implementation (hc_path_is_noncode), applied per edited path.
+#
+# Per-EDIT, not per-changeset, and that is the point: prose edits are skipped
+# one by one, and the first CODE edit of a mixed task still branches (carrying
+# the prose WIP with it, as `checkout -b` always did).
+#
+# Fail direction: an unavailable predicate or an unknown path → treated as code
+# → branch, exactly as before.
+if [ -n "$EDIT_PATH" ] && { command -v hc_path_is_noncode >/dev/null 2>&1 || type hc_path_is_noncode >/dev/null 2>&1; }; then
+  # tool_input.file_path is absolute; the globs are repo-relative.
+  REL_PATH="$EDIT_PATH"
+  case "$REL_PATH" in
+    "$PROJECT_DIR"/*) REL_PATH="${REL_PATH#"$PROJECT_DIR"/}" ;;
+  esac
+  if hc_path_is_noncode "$REL_PATH"; then
+    exit 0
   fi
+fi
+
+# --- config: auto_branch (default true; honor a literal false) --------------
+# hc_cfg layers the SESSION override (.harness/session-config.json — where an
+# instruction the user gave in chat, "work only on main", is recorded) over the
+# repo config, and probes with has() so a literal `false` survives.
+AUTO_BRANCH="true"
+if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+  AUTO_BRANCH=$(hc_cfg auto_branch "true")
 fi
 
 # auto_branch:false → stay on trunk (the "just warn at SessionStart" path); allow.
@@ -87,11 +111,9 @@ fi
 # branch_prefix default task/. checkout -b carries any uncommitted WIP onto the
 # new branch (git's default behaviour).
 PREFIX="task/"
-if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
-  P=$(jq -r '.branch_prefix // empty' "$CONFIG_FILE" 2>/dev/null)
-  if [ -n "$P" ] && [ "$P" != "null" ]; then
-    PREFIX="$P"
-  fi
+if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+  PREFIX=$(hc_cfg branch_prefix "task/")
+  [ -n "$PREFIX" ] || PREFIX="task/"
 fi
 
 BRANCH="${PREFIX}$(date +%Y%m%d-%H%M%S)"

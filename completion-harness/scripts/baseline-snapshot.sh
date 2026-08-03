@@ -39,6 +39,18 @@ HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
 mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalation" 2>/dev/null
 
+# --- drop the previous task's SESSION CONFIG --------------------------------
+# session-config.json is the per-task override layer (hc_cfg): the only channel
+# through which an instruction the user gives in chat reaches a hook, which runs
+# as a static command with no argv the conversation can reach. Its lifetime is
+# ONE task, so a "stay on trunk, this once" never silently governs the next
+# task. Dropped on a FRESH context (startup|clear) and kept on resume|compact|
+# fork, which continue the same task — the same distinction IS_COMPACT draws for
+# the baseline. Guarded; a missing file is a no-op.
+case "$SOURCE" in
+  startup|clear) rm -f "$PROJECT_DIR/.claude/.harness/session-config.json" 2>/dev/null ;;
+esac
+
 # --- reap stale harness state -----------------------------------------------
 # Reap stale harness state (older than 14 days). Fresh files (this session's
 # just-written baseline, active parallel sessions) are far younger, so safe.
@@ -296,22 +308,26 @@ append_msg() { SYS_MSG="${SYS_MSG:+$SYS_MSG
 }$1"; }
 
 if [ -n "$HC_WARN" ]; then
-  # auto_branch default is TRUE when the key is absent, or the config/jq is
-  # unavailable. NOTE: a plain `// true` jq default is WRONG here — jq's `//`
-  # treats a literal `false` as empty and would flip it back to true — so we
-  # must probe with has() and only then read the value.
+  # Effective auto_branch: session override first, then repo config, then the
+  # built-in TRUE. hc_cfg probes with has(), so a literal `false` survives (a
+  # plain `// true` jq default would flip it back).
   AUTO_BRANCH="true"
-  CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
-  if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
-    if jq -e 'has("auto_branch")' "$CONFIG_FILE" >/dev/null 2>&1; then
-      AUTO_BRANCH=$(jq -r '.auto_branch' "$CONFIG_FILE" 2>/dev/null)
-    fi
+  if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+    AUTO_BRANCH=$(hc_cfg auto_branch "true")
   fi
 
   if [ "$AUTO_BRANCH" = "false" ]; then
     append_msg "⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
   else
-    append_msg "on trunk $HC_TRUNK; a task branch will be auto-created on first edit (task continuity via branch)."
+    append_msg "on trunk $HC_TRUNK; a task branch will be auto-created on first code edit (task continuity via branch)."
+    # AGENT-VISIBLE, and this is the whole point: hooks run as static commands
+    # with no argv the conversation can reach, so an instruction the user gives
+    # in chat ("work only on main") can only reach auto-branch.sh through a
+    # file. Tell the agent the file exists BEFORE the first edit — the
+    # systemMessage above is user-facing only, which is why the branch used to
+    # appear anyway despite a standing "stay on trunk" instruction.
+    ADDL_CTX="${ADDL_CTX:+$ADDL_CTX
+}[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to .claude/.harness/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
   fi
 fi
 
