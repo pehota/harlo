@@ -116,7 +116,7 @@
       "stdout": "nothing",
       "return_codes": "0 the path matches a noncode_globs pattern, 1 code (or empty path); optional 2nd arg is the pre-read glob list",
       "sentinels": [],
-      "args": "<repo_relative_path> [globs] [proj]"
+      "args": "<repo_relative_path> [globs]"
     },
     {
       "name": "hc_changeset_is_code",

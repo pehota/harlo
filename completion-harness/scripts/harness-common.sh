@@ -889,7 +889,10 @@ hc_noncode_globs() {
 # how a docs-only task ended up on a task/ branch.
 #
 # <globs> is the optional pre-read list (hc_noncode_globs); pass it when calling
-# in a loop. Omitted → read here, for the one-path callers.
+# in a loop. Omitted → read here from the ambient project, for the one-path
+# callers. There is deliberately no proj parameter: a caller that needs another
+# checkout's globs reads them itself with `hc_noncode_globs <proj>` and passes
+# the list — which is exactly what a loop caller already does.
 #
 # An ABSENT/EMPTY noncode_globs → nothing is recognised non-code → every path is
 # code (safe direction: gate more, branch more, never less).
@@ -903,7 +906,7 @@ hc_path_is_noncode() {
   # `noncode_globs: []` legitimately passes an empty list, and re-reading on
   # empty would restore the per-path jq spawn this parameter exists to avoid.
   local globs
-  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs "${3:-}"); fi
+  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs); fi
 
   # Disable pathname expansion for the duration: `for g in $globs` word-splits
   # the space-separated list, and with globbing ON bash would EXPAND each glob
