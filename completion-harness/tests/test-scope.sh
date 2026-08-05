@@ -22,52 +22,21 @@ FIX="$TESTS_DIR/fixtures"
 [ -f "$LIB" ]  || { echo "FATAL: no harness-common.sh at $LIB" >&2; exit 1; }
 [ -f "$GATE" ] || { echo "FATAL: no done-gate.sh at $GATE" >&2; exit 1; }
 
-FAILS=0
-CASES=0
+# shellcheck source=./test-helpers.sh
+. "$TESTS_DIR/test-helpers.sh"
 
-assert_eq() {
-  local label="$1" actual="$2" expected="$3"
-  CASES=$((CASES + 1))
-  if [ "$actual" = "$expected" ]; then
-    printf 'PASS  %s (= %s)\n' "$label" "$expected"
-  else
-    printf 'FAIL  %s: expected [%s], got [%s]\n' "$label" "$expected" "$actual"
-    FAILS=$((FAILS + 1))
-  fi
-}
-
-# --- throwaway repo scaffolding ---------------------------------------------
-CLEANUP_DIRS=""
-cleanup() {
-  local d
-  for d in $CLEANUP_DIRS; do
-    [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d" 2>/dev/null
-  done
-}
-trap cleanup EXIT INT TERM
-
-# make_repo — task-mode repo (feature branch off main root). Echoes its path.
+# make_repo — task-mode repo (feature branch off main root), with the
+# production default noncode_globs allowlist seeded in place of the shared
+# fixture's empty one (so OTHER suites keep pre-#5 "everything is code" while
+# this suite exercises the allowlist; mirrors install.sh / done-detect.sh).
+# Amended INTO the root commit itself — that commit is also the trunk fork
+# point, so a later commit would land inside the task's own changeset.
 make_repo() {
-  local dir
-  dir=$(mktemp -d)
-  CLEANUP_DIRS="$CLEANUP_DIRS $dir"
-  git -C "$dir" init -q -b main
-  git -C "$dir" config user.email "t@t.t"
-  git -C "$dir" config user.name  "t"
-  mkdir -p "$dir/.claude/.harness/done-state" \
-           "$dir/.claude/.harness/review-log" \
-           "$dir/.claude/.harness/baselines" \
-           "$dir/.claude/.harness/tree-base" \
-           "$dir/.claude/.harness/task-base"
-  # The shared fixture ships noncode_globs=[] (so OTHER suites keep pre-#5
-  # "everything is code"); this suite exercises the ALLOWLIST, so seed the
-  # production default set (mirrors install.sh / done-detect.sh).
+  local dir; dir=$(hc__test_make_repo)
   jq '.noncode_globs = ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"]' \
-    "$FIX/done-config.json" > "$dir/.claude/done-config.json"
-  echo ".claude/.harness/" > "$dir/.gitignore"
-  echo "root" > "$dir/root.txt"
-  git -C "$dir" add -A
-  git -C "$dir" commit -q -m "root"
+    "$dir/.claude/done-config.json" > "$dir/.claude/done-config.json.tmp" \
+    && mv "$dir/.claude/done-config.json.tmp" "$dir/.claude/done-config.json"
+  git -C "$dir" commit -q -a --amend -m root
   git -C "$dir" checkout -q -b feature/x
   printf '%s' "$dir"
 }

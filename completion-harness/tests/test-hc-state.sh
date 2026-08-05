@@ -13,100 +13,22 @@
 
 set -u
 
-# --- locate the library + fixtures (relative to THIS script) ----------------
+# --- locate the library (relative to THIS script) ----------------------------
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 LIB="$TESTS_DIR/../scripts/harness-common.sh"
-FIX="$TESTS_DIR/fixtures"
 
 if [ ! -f "$LIB" ]; then
   echo "FATAL: cannot find harness-common.sh at $LIB" >&2
   exit 1
 fi
 
-FAILS=0
-CASES=0
+# shellcheck source=./test-helpers.sh
+. "$TESTS_DIR/test-helpers.sh"
 
-# --- assert helper ----------------------------------------------------------
-assert_eq() {
-  # assert_eq <label> <actual> <expected>
-  local label="$1" actual="$2" expected="$3"
-  CASES=$((CASES + 1))
-  if [ "$actual" = "$expected" ]; then
-    printf 'PASS  %s (= %s)\n' "$label" "$expected"
-  else
-    printf 'FAIL  %s: expected [%s], got [%s]\n' "$label" "$expected" "$actual"
-    FAILS=$((FAILS + 1))
-  fi
-}
-
-assert_nonempty() {
-  local label="$1" actual="$2"
-  CASES=$((CASES + 1))
-  if [ -n "$actual" ]; then
-    printf 'PASS  %s (non-empty: %s)\n' "$label" "$actual"
-  else
-    printf 'FAIL  %s: expected non-empty, got empty\n' "$label"
-    FAILS=$((FAILS + 1))
-  fi
-}
-
-assert_empty() {
-  local label="$1" actual="$2"
-  CASES=$((CASES + 1))
-  if [ -z "$actual" ]; then
-    printf 'PASS  %s (empty as expected)\n' "$label"
-  else
-    printf 'FAIL  %s: expected empty, got [%s]\n' "$label" "$actual"
-    FAILS=$((FAILS + 1))
-  fi
-}
-
-# --- repo scaffolding -------------------------------------------------------
 # make_repo <mode>  — creates a temp git repo, echoes its path.
 #   mode "task"    → creates a feature branch off main (task mode: branch != trunk).
 #   mode "session" → stays on main; caller drives session-mode via baselines.
-# In BOTH cases we register the cleanup dir globally so the trap can rm it.
-CLEANUP_DIRS=""
-cleanup() {
-  local d
-  for d in $CLEANUP_DIRS; do
-    [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d" 2>/dev/null
-  done
-}
-trap cleanup EXIT INT TERM
-
-make_repo() {
-  local mode="$1"
-  local dir
-  dir=$(mktemp -d)
-  CLEANUP_DIRS="$CLEANUP_DIRS $dir"
-
-  git -C "$dir" init -q -b main
-  git -C "$dir" config user.email "t@t.t"
-  git -C "$dir" config user.name "t"
-
-  mkdir -p "$dir/.claude/.harness/done-state" \
-           "$dir/.claude/.harness/review-log" \
-           "$dir/.claude/.harness/baselines" \
-           "$dir/.claude/.harness/tree-base"
-  cp "$FIX/done-config.json" "$dir/.claude/done-config.json"
-
-  # Mirror the real plugin: .claude/.harness/ is machine-local runtime state,
-  # gitignored so the seeded done-state/review-log fixtures never register as
-  # introduced tree blockers (which would wrongly force every case into S1).
-  echo ".claude/.harness/" > "$dir/.gitignore"
-
-  # First commit on main = the base/trunk anchor.
-  echo "root" > "$dir/root.txt"
-  git -C "$dir" add -A
-  git -C "$dir" commit -q -m "root"
-
-  if [ "$mode" = "task" ]; then
-    git -C "$dir" checkout -q -b feature/x
-  fi
-
-  printf '%s' "$dir"
-}
+make_repo() { hc__test_make_repo "$@"; }
 
 # Commit a change on the current branch so HEAD moves past base. Echoes new HEAD.
 commit_change() {

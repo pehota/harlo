@@ -16,10 +16,8 @@ BASELINE="$BUNDLE/baseline-snapshot.sh"
 GATE="$BUNDLE/done-gate.sh"
 WRITE="$BUNDLE/done-write-state.sh"
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 # Classify a gate run by its stdout: block if stdout carries decision:"block",
 # else allow. Exit code must be 0 either way (crash otherwise).

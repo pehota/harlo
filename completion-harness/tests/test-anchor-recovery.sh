@@ -68,10 +68,8 @@ NOANCHOR_PHRASE="no changeset anchor was recorded for this session"
 RESTART_PHRASE="restart the session"
 MISDIAGNOSIS="run /done to verify the changeset"
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 echo "== test-anchor-recovery =="
 
@@ -89,20 +87,13 @@ fi
 is_block() { printf '%s' "$1" | jq -e '.decision == "block"' >/dev/null 2>&1; }
 reason()   { printf '%s' "$1" | jq -r '.reason // ""' 2>/dev/null; }
 
-# Fresh repo on `main` (trunk → session mode, task_key=session-<sid>), harness
-# state gitignored, three commits so a changeset can be non-empty. Echoes the
-# repo path. C1/C2/C3 are exported by the caller via git rev-parse.
+# Fresh repo on `main` (trunk → session mode, task_key=session-<sid>), TWO more
+# commits (b.js, c.js) laid on top of the shared fixture's root commit so a
+# changeset spans three commits total. Echoes the repo path.
 make_repo() {
-  local r; r=$(mktemp -d)
-  git -C "$r" init -q -b main
-  git -C "$r" config user.email t@t
-  git -C "$r" config user.name t
-  printf '.claude/\n' > "$r/.gitignore"
-  printf 'a\n' > "$r/a.js";  git -C "$r" add -A; git -C "$r" commit -qm c1
-  printf 'b\n' > "$r/b.js";  git -C "$r" add -A; git -C "$r" commit -qm c2
-  printf 'c\n' > "$r/c.js";  git -C "$r" add -A; git -C "$r" commit -qm c3
-  mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" \
-           "$r/.claude/.harness/review-log"
+  local r; r=$(hc__test_make_repo)
+  printf 'b\n' > "$r/b.js"; git -C "$r" add -A; git -C "$r" commit -qm c2
+  printf 'c\n' > "$r/c.js"; git -C "$r" add -A; git -C "$r" commit -qm c3
   printf '%s' "$r"
 }
 

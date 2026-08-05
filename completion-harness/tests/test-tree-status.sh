@@ -16,26 +16,27 @@ WRITER="$SCRIPTS/done-write-state.sh"
 PREFLIGHT="$SCRIPTS/done-preflight.sh"
 SNAPSHOT="$SCRIPTS/baseline-snapshot.sh"
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 # is_block <stdout> → 0 if the gate stdout is a block decision.
 is_block() { printf '%s' "$1" | jq -e '.decision == "block"' >/dev/null 2>&1; }
 
 # Build a fresh repo on `main` (trunk → session mode, task_key=session-<sid>),
-# with harness state gitignored. Echoes the repo path.
+# on top of the shared fixture's root commit, PLUS a tracked a.js (some cases
+# below modify it in place to exercise the "modified tracked file" path).
+# Echoes the repo path.
 make_repo() {
-  local r; r=$(mktemp -d)
-  git -C "$r" init -q -b main
-  git -C "$r" config user.email t@t
-  git -C "$r" config user.name t
+  local r; r=$(hc__test_make_repo)
+  # This suite overwrites .claude/done-config.json directly (uncommitted) at
+  # many call sites to exercise config variants. Untrack it and gitignore the
+  # whole .claude/ dir (not just .harness/, the shared fixture's default) so
+  # those edits are never mistaken for a dirty tree.
+  git -C "$r" rm -q --cached .claude/done-config.json
   printf '.claude/\n' > "$r/.gitignore"
   printf 'a\n' > "$r/a.js"
   git -C "$r" add -A
   git -C "$r" commit -qm c1
-  mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" "$r/.claude/.harness/review-log"
   printf '%s' "$r"
 }
 

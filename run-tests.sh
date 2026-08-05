@@ -20,6 +20,9 @@ total=0
 # Root-level version suite plus every self-contained completion-harness suite.
 for t in test-version.sh completion-harness/tests/test-*.sh; do
   [ -f "$t" ] || continue
+  # test-helpers.sh is a sourced library, not a suite — it matches the glob
+  # above by name but has no PASS/FAIL of its own to report.
+  [ "$(basename "$t")" = "test-helpers.sh" ] && continue
   total=$((total + 1))
   if bash "$t" >/dev/null 2>&1; then
     echo "PASS  $(basename "$t")"

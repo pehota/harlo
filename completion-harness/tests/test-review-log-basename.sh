@@ -17,10 +17,8 @@ SCRIPTS="$(cd "$(dirname "$0")/../scripts" && pwd)"
 HC_COMMON="$SCRIPTS/harness-common.sh"
 GATE="$SCRIPTS/done-gate.sh"
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 echo "== test-review-log-basename =="
 

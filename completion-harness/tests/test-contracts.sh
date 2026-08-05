@@ -8,10 +8,8 @@
 source "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh"
 CONTRACTS="$(cd "$(dirname "$0")/../contracts" && pwd)"
 
-PASS=0
-FAIL=0
-ok(){ echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

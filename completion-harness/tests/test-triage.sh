@@ -15,10 +15,8 @@ OLD_SKILL_HEADINGS=(
 # shellcheck source=/dev/null
 . "$SCRIPTS/harness-common.sh" 2>/dev/null
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 echo "== test-triage =="
 

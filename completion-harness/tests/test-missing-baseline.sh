@@ -29,10 +29,8 @@ GATE="$SCRIPTS/done-gate.sh"
 UNKNOWN_PHRASE="authorship cannot be determined"
 ASSERTIVE_PHRASE="changes you introduced"
 
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 echo "== test-missing-baseline =="
 
@@ -48,20 +46,9 @@ fi
 # is_block <stdout> → 0 if the gate stdout is a block decision.
 is_block() { printf '%s' "$1" | jq -e '.decision == "block"' >/dev/null 2>&1; }
 
-# Fresh repo on `main` (trunk → session mode, task_key=session-<sid>), harness
-# state gitignored. Echoes the repo path. (Same shape as test-tree-status.sh.)
-make_repo() {
-  local r; r=$(mktemp -d)
-  git -C "$r" init -q -b main
-  git -C "$r" config user.email t@t
-  git -C "$r" config user.name t
-  printf '.claude/\n' > "$r/.gitignore"
-  printf 'a\n' > "$r/a.js"
-  git -C "$r" add -A
-  git -C "$r" commit -qm c1
-  mkdir -p "$r/.claude/.harness/baselines" "$r/.claude/.harness/done-state" "$r/.claude/.harness/review-log"
-  printf '%s' "$r"
-}
+# Fresh repo on `main` (trunk → session mode, task_key=session-<sid>). Echoes
+# the repo path — the shared fixture-repo builder (test-helpers.sh).
+make_repo() { hc__test_make_repo; }
 
 # Green done-state + review-log for HEAD, so the gate reaches the tree check.
 seed_green_done() {

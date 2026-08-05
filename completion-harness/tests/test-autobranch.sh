@@ -10,11 +10,8 @@
 BUNDLE_DIR="$(cd "$(dirname "$0")/../scripts" && pwd)"
 HOOK="$BUNDLE_DIR/auto-branch.sh"
 
-PASS=0
-FAIL=0
-ok()  { PASS=$((PASS+1)); printf '  PASS: %s\n' "$1"; }
-bad() { FAIL=$((FAIL+1)); printf '  FAIL: %s (got: %s)\n' "$1" "$2"; }
-eq()  { if [ "$2" = "$3" ]; then ok "$1 = $2"; else bad "$1 expected '$2'" "$3"; fi; }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 CLEANUP=()
 cleanup() { for d in "${CLEANUP[@]}"; do [ -n "$d" ] && rm -rf "$d" 2>/dev/null; done; }

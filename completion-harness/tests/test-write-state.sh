@@ -9,10 +9,8 @@ SCRIPT="$(cd "$(dirname "$0")/../scripts" && pwd)/done-write-state.sh"
 # fold cases to validate the extended done-state schema).
 # shellcheck source=/dev/null
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh" 2>/dev/null
-PASS=0
-FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

@@ -12,16 +12,8 @@ RESOLVE="$BUNDLE_DIR/harness-resolve.sh"
 GATE="$BUNDLE_DIR/done-gate.sh"
 WRITE="$BUNDLE_DIR/done-write-state.sh"
 
-PASS=0
-FAIL=0
-
-ok()   { PASS=$((PASS+1)); printf '  PASS: %s\n' "$1"; }
-bad()  { FAIL=$((FAIL+1)); printf '  FAIL: %s (got: %s)\n' "$1" "$2"; }
-
-# Assert equality; $1 label, $2 expected, $3 actual.
-eq() {
-  if [ "$2" = "$3" ]; then ok "$1 = $2"; else bad "$1 expected '$2'" "$3"; fi
-}
+# shellcheck source=./test-helpers.sh
+. "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
 # hc_validate + HC_CONTRACTS_DIR from the source harness-common.sh (resolves its
 # sibling contracts/ via BASH_SOURCE), so we can assert the resolver output
