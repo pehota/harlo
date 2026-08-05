@@ -99,6 +99,19 @@ hc__test_cleanup() {
 }
 trap hc__test_cleanup EXIT INT TERM
 
+# hc__test_mktemp_d — mktemp -d wrapper that guarantees a non-empty result.
+# An empty result would make every subsequent `git -C "$dir"` silently operate
+# on the caller's cwd (the real repo checkout) instead of failing loudly —
+# the exact bug class hc__test_make_repo's own guard (below) closed. Any
+# fixture builder in this suite that rolls its own mktemp -d should route it
+# through here instead of duplicating the fallback literal.
+hc__test_mktemp_d() {
+  local d
+  d=$(mktemp -d)
+  [ -n "$d" ] || d="/nonexistent-hc-test-mktemp-failed-$$"
+  printf '%s' "$d"
+}
+
 # hc__test_make_repo [mode]
 #   mode "task" -> checks out feature/x off the root commit (task mode:
 #                  branch != trunk).
@@ -112,13 +125,7 @@ trap hc__test_cleanup EXIT INT TERM
 hc__test_make_repo() {
   local mode="${1:-}"
   local dir
-  dir=$(mktemp -d)
-  # Hard safety net: if mktemp ever returns empty (or the call above somehow
-  # aborted without producing output), every `git -C "$dir"` below would
-  # silently target the CALLER's cwd instead of failing — and that cwd is the
-  # real project checkout when tests run from the repo root. Force a path
-  # guaranteed not to exist so those commands fail loudly instead.
-  [ -n "$dir" ] || dir="/nonexistent-hc-test-mktemp-failed-$$"
+  dir=$(hc__test_mktemp_d)
   CLEANUP_DIRS="$CLEANUP_DIRS $dir"
 
   git -C "$dir" init -q -b main

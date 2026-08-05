@@ -54,8 +54,19 @@ run_case() {
 # ============================================================================
 # Fixtures: an isolated throwaway git repo we fully control.
 # ============================================================================
-PROJECT_DIR=$(mktemp -d)
-NONGIT_DIR=$(mktemp -d)
+# mktemp_d — mktemp -d wrapper that guarantees a non-empty result. An empty
+# result would make every `git -C "$dir"` below silently operate on the
+# caller's cwd (the real repo checkout) instead of failing loudly. See
+# hc__test_make_repo in test-helpers.sh for the incident this mirrors. This
+# file does not source test-helpers.sh, so it keeps its own copy.
+mktemp_d() {
+  local d; d=$(mktemp -d)
+  [ -n "$d" ] || d="/nonexistent-hc-test-mktemp-failed-$$"
+  printf '%s' "$d"
+}
+
+PROJECT_DIR=$(mktemp_d)
+NONGIT_DIR=$(mktemp_d)
 trap 'rm -rf "$PROJECT_DIR" "$NONGIT_DIR"' EXIT
 
 git -C "$PROJECT_DIR" init -q
@@ -414,7 +425,7 @@ run_case "17l findings is EMPTY array -> allow (nothing found)" allow \
 # gating axis is coverage. done-state is branch-keyed (feature branch → task
 # mode) so the pinned merge-base is the changeset base the gate diffs against.
 # ============================================================================
-COV_REPO=$(mktemp -d)
+COV_REPO=$(mktemp_d)
 git -C "$COV_REPO" init -q -b main
 git -C "$COV_REPO" config user.name t
 git -C "$COV_REPO" config user.email t@t
@@ -473,7 +484,7 @@ clear_config
 #
 # Built in an isolated repo so it never disturbs the main-branch fixture above.
 # ============================================================================
-FEAT_REPO=$(mktemp -d)
+FEAT_REPO=$(mktemp_d)
 git -C "$FEAT_REPO" init -q -b main
 git -C "$FEAT_REPO" config user.name t
 git -C "$FEAT_REPO" config user.email t@t
@@ -596,7 +607,7 @@ hc_state_for() {
 
 # Build a task-mode repo (feature branch off main). Echoes "<dir> <feat_head>".
 parity_repo() {
-  local d; d=$(mktemp -d)
+  local d; d=$(mktemp_d)
   git -C "$d" init -q -b main
   git -C "$d" config user.name t; git -C "$d" config user.email t@t
   printf '.claude/\n' > "$d/.gitignore"
@@ -669,7 +680,7 @@ assert_no_deny() {
 }
 
 # PB1 — on trunk (main). The hook may auto-branch but must never deny.
-PBDIR=$(mktemp -d)
+PBDIR=$(mktemp_d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
 printf 'root\n' > "$PBDIR/root.js"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
@@ -678,7 +689,7 @@ assert_no_deny "PB1 PreToolUse on trunk -> exit 0, no deny/decision" "$PBDIR"
 rm -rf "$PBDIR"
 
 # PB2 — off trunk (feature branch). Fast-path no-op; still no deny, exit 0.
-PBDIR=$(mktemp -d)
+PBDIR=$(mktemp_d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
 printf 'root\n' > "$PBDIR/root.js"; git -C "$PBDIR" add -A; git -C "$PBDIR" commit -q -m root
@@ -784,7 +795,7 @@ ensure_clean
 # Writer: an escalated /done writes the SHA-keyed sidecar. Uses the WRITE script
 # against a self-contained repo to assert the sidecar file is created at HEAD.
 WRITE_G="$(cd "$(dirname "$0")/../scripts" && pwd)/done-write-state.sh"
-EG_REPO=$(mktemp -d)
+EG_REPO=$(mktemp_d)
 git -C "$EG_REPO" init -q -b main
 git -C "$EG_REPO" config user.name t; git -C "$EG_REPO" config user.email t@t
 printf '.claude/\n' > "$EG_REPO/.gitignore"

@@ -423,7 +423,7 @@ rm -rf "$R"
 # make_task_repo: fresh repo, trunk main + confident-trunk config, on branch feat
 # (branch != trunk → task mode). Echoes the repo path.
 make_task_repo() {
-  local r; r=$(mktemp -d)
+  local r; r=$(hc__test_mktemp_d)
   git -C "$r" init -q -b main
   git -C "$r" config user.email t@t
   git -C "$r" config user.name t
@@ -637,7 +637,7 @@ echo "-- D2: harness-owned paths --"
 # ignored, exactly what install.sh adds), with a committed done-config.json and
 # a session baseline recording a CLEAN tree. Echoes the repo path.
 make_selfown_repo() {
-  local r; r=$(mktemp -d)
+  local r; r=$(hc__test_mktemp_d)
   git -C "$r" init -q -b main
   git -C "$r" config user.email t@t; git -C "$r" config user.name t
   printf '.claude/.harness/\n' > "$r/.gitignore"
