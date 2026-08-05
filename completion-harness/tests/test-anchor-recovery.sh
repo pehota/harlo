@@ -46,10 +46,14 @@
 #       started in the same checkout — already outside the supported
 #       single-session model.
 #
-# STRUCTURAL SAFETY INVARIANT (asserted, not merely intended): a RECOVERED anchor
-# may only feed checks that make the gate STRICTER (coverage, the summary). It is
-# deliberately NOT assigned to HC_BASE, so it can never reach Step 3's quiet-exit
-# or Step 3c's empty-changeset allow — the only two places an anchor grants a pass.
+# STRUCTURAL SAFETY INVARIANT (asserted, not merely intended): a base recovered
+# from a DONE-STATE — an artefact written mid-task — may only feed checks that
+# make the gate STRICTER (coverage, the summary). It is never assigned to
+# HC_BASE, so it cannot reach Step 3's quiet-exit or Step 3c's empty-changeset
+# allow, the only two places an anchor grants a pass. Recovery (c) is the sole
+# exception and turns on PROVENANCE, not on the value: a baselines/*.sha is
+# written by SessionStart alone, from live HEAD, before any edit — the same
+# producer and meaning as the anchor the resolver missed.
 #
 # Runs against the source-tree scripts; each case builds an isolated throwaway
 # git repo, in the style of test-missing-baseline.sh. No install, no set -e.
@@ -599,6 +603,44 @@ if is_block "$OUT" && printf '%s' "$RSN" | grep -q "finish the slice"; then
   ok "I5 introduced dirt still BLOCKS after tree-anchor recovery"
 else
   bad "I5 recovered tree anchor whitelisted the session's own work. out=[$OUT]"
+fi
+rm -rf "$R"
+
+# I6 — REGRESSION GUARD for the interaction between 2a-0 and Step 2a. The full
+#      disagreement: the marker session has BOTH a baseline (so 2a-0 adopts an
+#      anchor) AND the green done-state + review-log for real committed work.
+#      Step 2a's done-state redirect must still fire. It used to live inside the
+#      `[ -z "$HC_BASE" ]` recovery block, which 2a-0 falsifies — leaving /done
+#      writing under the marker key and the gate reading the gate key forever.
+R=$(make_repo); GATE_SID=gate-i6; MARK_SID=marker-i6
+C2=$(git -C "$R" rev-parse HEAD~1)
+seed_tree_base "$R" "$MARK_SID"
+printf '%s\n' "$C2" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+seed_green_done "$R" "$MARK_SID" "$C2"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT"; then
+  bad "I6 2a-0 shadowed the Step-2a done-state redirect (deadlock is back). reason=[$RSN]"
+else
+  ok "I6 anchor recovery and done-state redirect coexist (verified marker state honoured)"
+fi
+rm -rf "$R"
+
+# I7 — the redirect still buys nothing on its own: same fixture, review-log
+#      removed. A redirected key must not skip the review requirement.
+R=$(make_repo); GATE_SID=gate-i7; MARK_SID=marker-i7
+C2=$(git -C "$R" rev-parse HEAD~1)
+HEADS=$(git -C "$R" rev-parse HEAD)
+seed_tree_base "$R" "$MARK_SID"
+printf '%s\n' "$C2" > "$R/.claude/.harness/baselines/$MARK_SID.sha"
+seed_green_done "$R" "$MARK_SID" "$C2"
+rm -f "$R/.claude/.harness/review-log/$HEADS.json"
+printf '%s\n' "$MARK_SID" > "$R/.claude/.harness/current-session"
+OUT=$(run_gate "$R" "$GATE_SID"); RSN=$(reason "$OUT")
+if is_block "$OUT" && printf '%s' "$RSN" | grep -q "independent code review"; then
+  ok "I7 redirected key without a review-log still BLOCKS"
+else
+  bad "I7 the redirect waved a session through without a review. out=[$OUT]"
 fi
 rm -rf "$R"
 

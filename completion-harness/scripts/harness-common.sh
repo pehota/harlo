@@ -61,7 +61,10 @@ HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
 # fabricates a value.
 hc_cfg() {
   local key="$1" def="${2:-}"
-  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  # <proj> (3rd, optional) so a caller working on a checkout OTHER than the
+  # ambient PROJECT_DIR reads THAT checkout's config — hc_changeset_is_code takes
+  # such a proj, and silently ignoring it would answer from the wrong repo.
+  local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
 
   command -v jq >/dev/null 2>&1 || { printf '%s' "$def"; return 0; }
 
@@ -869,10 +872,11 @@ EOF
 # gate's own contract reads as ALLOW. A per-path jq spawn (~6ms) would therefore
 # turn a large changeset into a silently disarmed gate.
 hc_noncode_globs() {
+  # <proj> (1st, optional) — forwarded to hc_cfg; see there.
   # Built-in default set; overridden only when the key is PRESENT at some config
   # layer (hc_cfg's has() probe). A present-but-empty array yields "" → no match
   # → code, which is the strict direction.
-  hc_cfg noncode_globs '*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf'
+  hc_cfg noncode_globs '*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf' "${1:-}"
 }
 
 # ---------------------------------------------------------------------------
@@ -899,7 +903,7 @@ hc_path_is_noncode() {
   # `noncode_globs: []` legitimately passes an empty list, and re-reading on
   # empty would restore the per-path jq spawn this parameter exists to avoid.
   local globs
-  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs); fi
+  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs "${3:-}"); fi
 
   # Disable pathname expansion for the duration: `for g in $globs` word-splits
   # the space-separated list, and with globbing ON bash would EXPAND each glob
@@ -968,7 +972,7 @@ EOF
   # Config read ONCE, outside the loop — see hc_noncode_globs on why a per-path
   # read is a gate-disarming timeout risk, not a micro-optimisation.
   local globs f verdict="noncode" rc=1
-  globs=$(hc_noncode_globs)
+  globs=$(hc_noncode_globs "$proj")
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     if ! hc_path_is_noncode "$f" "$globs"; then

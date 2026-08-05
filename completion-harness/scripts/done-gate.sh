@@ -172,9 +172,12 @@ if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_
 fi
 
 HC_BASE_RECOVERED=""
-if [ -z "$HC_BASE" ] \
-   && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
-  HC_BASE_RECOVERED=$(hc__recover_base_from_state "$DONE_STATE_FILE" "$PROJECT_DIR" 2>/dev/null)
+if { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
+  # The base recovered from OUR OWN key's done-state — only meaningful when the
+  # resolver (and 2a-0 above) found no anchor.
+  if [ -z "$HC_BASE" ]; then
+    HC_BASE_RECOVERED=$(hc__recover_base_from_state "$DONE_STATE_FILE" "$PROJECT_DIR" 2>/dev/null)
+  fi
 
   # SESSION-ID DISAGREEMENT. The gate keys the done-state off the session id in
   # its OWN hook stdin; /done keys it off the current-session marker
@@ -201,6 +204,16 @@ if [ -z "$HC_BASE" ] \
   #
   # SESSION MODE ONLY: in task mode the key is br-<branch>, already shared across
   # sessions by design, so a session marker has no business redirecting it.
+  #
+  # NOT CONDITIONED ON AN EMPTY HC_BASE — and that is load-bearing since 2a-0.
+  # This redirect used to sit inside the `[ -z "$HC_BASE" ]` recovery block, which
+  # was harmless only while nothing could fill HC_BASE in this exact scenario.
+  # 2a-0 now does: it adopts the marker's BASELINE, which falsifies that guard and
+  # would skip the redirect entirely — so a disagreeing session with real work and
+  # a green done-state under the marker key would block forever, the very deadlock
+  # Step 2a exists to break. The redirect's own preconditions (our key has NO
+  # state, session mode, and the marker state supplies a usable base_sha) are what
+  # bound it; the state of HC_BASE never was.
   if [ ! -f "$DONE_STATE_FILE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_DIR/current-session" ]; then
     MARKER_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
     # Path hygiene: the marker is a file, so treat its contents as untrusted for

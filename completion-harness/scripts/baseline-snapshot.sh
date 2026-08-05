@@ -293,9 +293,11 @@ if command -v hc_state >/dev/null 2>&1 || type hc_state >/dev/null 2>&1; then
 fi
 
 # ADDL_CTX carries the agent-visible proactive steering, injected via
-# hookSpecificOutput.additionalContext ONLY in ACTIONABLE states (S1/S2/S4). The
+# hookSpecificOutput.additionalContext in the ACTIONABLE states (S1/S2/S4). The
 # first line is the D4 review-ownership directive; the second injects the FSM
-# next-action. Silent (empty) in S0/S5.
+# next-action. Silent (empty) in S0/S5 — with ONE deliberate addition appended
+# below: the on-trunk auto-branch notice, which must reach the agent BEFORE its
+# first edit and is therefore emitted in S0 too (suppressed only in S_OOS).
 ADDL_CTX=""
 case "$HC_STATE" in
   S1|S2|S4)
