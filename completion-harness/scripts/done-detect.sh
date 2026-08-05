@@ -175,32 +175,36 @@ if [ "$have_jq" != true ]; then
   exit 0
 fi
 
+# Canonical default-value object (everything a config needs beyond the
+# per-run fields contract_version/source_fingerprint/detected), shared with
+# the upgrade/merge block below so neither hardcodes its own copy. Read once;
+# if it is missing or unparseable, DEFAULTS_JSON stays empty and both write
+# blocks below skip their write (fail-safe — /done is never blocked, the
+# existing/no config is left as-is).
+DEFAULTS_JSON=""
+if [ -n "${HC_CONTRACTS_DIR:-}" ] && [ -f "$HC_CONTRACTS_DIR/done-config.default.json" ]; then
+  DEFAULTS_JSON=$(jq -c '.' "$HC_CONTRACTS_DIR/done-config.default.json" 2>/dev/null)
+fi
+
 if [ ! -f "$CONFIG_FILE" ]; then
   # Missing: seed the full starter shape (matches installer) with fresh detect.
-  # contract_version stamps the config as conforming to schema v1.
+  # contract_version stamps the config as conforming to schema v1. The default
+  # shape (everything but contract_version/source_fingerprint/detected, which
+  # are computed here) lives in contracts/done-config.default.json — the single
+  # canonical copy also read by the upgrade/merge block below. install.sh keeps
+  # its own literal starter (it runs before this file's siblings exist) and
+  # must be kept in sync with that file by hand; see the comment there.
   mkdir -p "$(dirname "$CONFIG_FILE")" 2>/dev/null
   TMP=$(mktemp 2>/dev/null)
-  if [ -n "$TMP" ]; then
+  if [ -n "$TMP" ] && [ -n "$DEFAULTS_JSON" ]; then
     jq -n \
+      --argjson defaults "$DEFAULTS_JSON" \
       --argjson detected "$DETECTED_JSON" \
       --arg fp "$NEW_FP" '
-      {
+      $defaults + {
         contract_version: 1,
         source_fingerprint: $fp,
-        detected: $detected,
-        overrides: {},
-        max_fix_attempts: 3,
-        max_review_rounds: 2,
-        baseline_snapshot: true,
-        deploy_check_cmd: null,
-        start_check_cmd: null,
-        start_timeout: 30,
-        trunk: null,
-        auto_branch: false,
-        branch_prefix: "task/",
-        untracked_policy: "baseline",
-        min_review_level: "high",
-        noncode_globs: ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"]
+        detected: $detected
       }
     ' > "$TMP" 2>/dev/null
     # Write-time gate: only publish a contract-valid config.
@@ -238,25 +242,24 @@ else
     # `if has(...) then . else .k = default end`) never clobbers an existing
     # value — including a literal `false`.
     TMP=$(mktemp 2>/dev/null)
-    if [ -n "$TMP" ]; then
+    if [ -n "$TMP" ] && [ -n "$DEFAULTS_JSON" ]; then
+      # Same seed-if-absent, preserve-if-present rule as before, just sourced
+      # from the shared defaults object instead of a second hardcoded literal.
+      # Key list intentionally excludes deploy_check_cmd (a pre-existing gap
+      # in the upgrade path, not introduced here) — kept as-is rather than
+      # silently widening upgrade behavior.
       jq \
         --argjson detected "$DETECTED_JSON" \
         --arg fp "$NEW_FP" \
+        --argjson defaults "$DEFAULTS_JSON" \
         --argjson refresh "$([ "$NEEDS_REFRESH" = true ] && echo true || echo false)" '
         (if $refresh then (.detected = $detected | .source_fingerprint = $fp) else . end)
         | .contract_version = 1
-        | (if has("overrides") then . else .overrides = {} end)
-        | (if has("max_fix_attempts") then . else .max_fix_attempts = 3 end)
-        | (if has("baseline_snapshot") then . else .baseline_snapshot = true end)
-        | (if has("trunk") then . else .trunk = null end)
-        | (if has("auto_branch") then . else .auto_branch = false end)
-        | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
-        | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
-        | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)
-        | (if has("min_review_level") then . else .min_review_level = "high" end)
-        | (if has("noncode_globs") then . else .noncode_globs = ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"] end)
-        | (if has("start_check_cmd") then . else .start_check_cmd = null end)
-        | (if has("start_timeout") then . else .start_timeout = 30 end)
+        | reduce ["overrides","max_fix_attempts","baseline_snapshot","trunk",
+                  "auto_branch","branch_prefix","untracked_policy",
+                  "max_review_rounds","min_review_level","noncode_globs",
+                  "start_check_cmd","start_timeout"][] as $k
+            (.; if has($k) then . else .[$k] = $defaults[$k] end)
       ' "$CONFIG_FILE" > "$TMP" 2>/dev/null
       # Write-time gate: never overwrite existing valid state with an invalid one.
       if validate_config_file "$TMP"; then

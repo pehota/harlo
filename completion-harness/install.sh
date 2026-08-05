@@ -86,6 +86,12 @@ chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapsh
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------
+# This literal is the canonical default's ONE permitted duplicate: install.sh
+# runs before harness-common.sh (and its sibling contracts/) exist on a fresh
+# install, so it cannot source-load contracts/done-config.default.json the
+# way done-detect.sh does. Keep the two in sync by hand — every key below
+# (except contract_version/source_fingerprint/detected, which are per-run)
+# must match contracts/done-config.default.json.
 CONFIG_FILE="$CLAUDE_DIR/done-config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
   cat > "$CONFIG_FILE" <<'JSON'
