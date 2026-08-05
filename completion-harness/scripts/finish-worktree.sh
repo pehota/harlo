@@ -53,7 +53,7 @@ die()  { hc_die "$1"; }
 say()  { printf '%s\n' "$1"; }
 warn() { printf '%s\n' "$1" >&2; }
 
-command -v jq >/dev/null 2>&1 || die "jq is required"
+hc_has_jq || die "jq is required"
 
 # --- locate this worktree and the MAIN one ----------------------------------
 WT=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null)

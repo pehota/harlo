@@ -62,6 +62,25 @@ hc_die() {
 }
 
 # ---------------------------------------------------------------------------
+# hc_has_jq — "is jq on PATH?" boolean. The `command -v jq >/dev/null 2>&1`
+# check recurred ~26 times across scripts touching config/state, most of
+# them branching (degrade/allow) rather than dying, hence a boolean helper
+# rather than only a die-on-missing one.
+hc_has_jq() {
+  command -v jq >/dev/null 2>&1
+}
+
+# hc_require_jq [message] — die-on-missing counterpart for the handful of
+# call sites that print their own custom message and exit 1 outright (no
+# prefix, unlike hc_die — those sites already had their own wording; this
+# just removes the repeated `command -v jq` probe, not the message).
+hc_require_jq() {
+  hc_has_jq && return 0
+  printf '%s\n' "${1:-jq is required}" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
 # hc_read_hook_input
 #
 # Reads the hook JSON payload from stdin ONCE and parses the fields hook
@@ -87,7 +106,7 @@ hc_read_hook_input() {
   HC_HOOK_TOOL_FILE_PATH=""
   HC_HOOK_SOURCE=""
   HC_HOOK_STOP_ACTIVE="false"
-  if command -v jq >/dev/null 2>&1; then
+  if hc_has_jq; then
     HC_HOOK_SESSION_ID=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.session_id // ""' 2>/dev/null)
     HC_HOOK_TOOL_FILE_PATH=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
     HC_HOOK_SOURCE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.source // ""' 2>/dev/null)
@@ -137,7 +156,7 @@ hc_cfg() {
   # such a proj, and silently ignoring it would answer from the wrong repo.
   local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
 
-  command -v jq >/dev/null 2>&1 || { printf '%s' "$def"; return 0; }
+  hc_has_jq || { printf '%s' "$def"; return 0; }
 
   local f v
   for f in "$proj/$HC_SESSION_CONFIG_REL" "$proj/$HC_CONFIG_REL"; do
@@ -416,7 +435,7 @@ hc_verification_state() {
   local state="$1" head_sha="$2" head_tree="$3"
   local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
 
-  command -v jq >/dev/null 2>&1 || { printf 'stale'; return 0; }
+  hc_has_jq || { printf 'stale'; return 0; }
   [ -f "$state" ] || { printf 'stale'; return 0; }
 
   local verified_sha
@@ -446,7 +465,7 @@ hc__recover_base_from_state() {
   local state="$1"
   local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
   [ -f "$state" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
+  hc_has_jq || return 0
 
   local b
   b=$(jq -r '.base_sha // ""' "$state" 2>/dev/null)
@@ -470,7 +489,7 @@ hc__detect_trunk() {
   # of branches it judges merged. A wrong trunk there destroys state rather than
   # merely loosening a check — too much authority for an ephemeral,
   # agent-written file, and nothing asked for a per-task trunk.
-  if command -v jq >/dev/null 2>&1 && [ -f "$cfg" ]; then
+  if hc_has_jq && [ -f "$cfg" ]; then
     t=$(jq -r '.trunk // empty' "$cfg" 2>/dev/null)
     if [ -n "$t" ] && [ "$t" != "null" ]; then
       printf '%s' "$t"
@@ -1091,7 +1110,7 @@ hc_review_blocking() {
   local log="$1" min_level="$2"
 
   # jq is required to reason structurally; without it, fail toward block.
-  command -v jq >/dev/null 2>&1 || { printf 'ERR'; return 0; }
+  hc_has_jq || { printf 'ERR'; return 0; }
   [ -f "$log" ] || { printf 'ERR'; return 0; }
 
   # Normalize an unknown/empty min_level to "high".
@@ -1259,7 +1278,7 @@ hc_review_coverage_gap() {
 
   # jq is required to read files_reviewed from any log. Missing → nothing can be
   # attested → gap = all changed files → block.
-  if ! command -v jq >/dev/null 2>&1; then
+  if ! hc_has_jq; then
     printf '%s' "$changed"
     return 0
   fi
@@ -1654,7 +1673,7 @@ hc_validate() {
   local schema_file="$1" json_file="$2"
 
   # jq is mandatory — without it we cannot reason about JSON at all → reject.
-  command -v jq >/dev/null 2>&1 || { printf 'ERR: jq unavailable\n'; return 1; }
+  hc_has_jq || { printf 'ERR: jq unavailable\n'; return 1; }
 
   # Schema and instance must both be present, readable, and parseable JSON.
   [ -f "$schema_file" ] && [ -r "$schema_file" ] || { printf 'ERR: %s: schema missing or unreadable\n' "$schema_file"; return 1; }
@@ -1907,7 +1926,7 @@ hc_done_state_blocked() {
   # jq is mandatory to read any recorded outcome. Without it we cannot verify
   # a single field → fail toward block (mirrors the gate, whose jq-missing top
   # guard would already have exited before Step 8 could pass).
-  if ! command -v jq >/dev/null 2>&1; then
+  if ! hc_has_jq; then
     HC_DONE_BLOCKED_REASON="jq unavailable (cannot verify recorded outcomes)"
     return 0
   fi

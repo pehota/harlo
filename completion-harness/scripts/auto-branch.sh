@@ -134,7 +134,7 @@ BRANCH="${PREFIX}$(date +%Y%m%d-%H%M%S)"
 
 emit_msg() {
   # Non-blocking systemMessage on stdout (guarded); never fail.
-  if command -v jq >/dev/null 2>&1; then
+  if hc_has_jq; then
     jq -n --arg m "$1" '{"systemMessage":$m}' 2>/dev/null
   else
     printf '{"systemMessage":"%s"}\n' "$1"

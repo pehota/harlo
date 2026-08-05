@@ -19,9 +19,16 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Literal, not hc__harness_dir: harness-common.sh isn't sourced until below.
+# Literal, not hc__harness_dir: kept simple/direct rather than coupling this
+# early path derivation to whether sourcing below succeeded.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
+
+# --- source the shared library early (before Check 2 needs hc_has_jq) -------
+# Sourcing has no dependency on anything checked below.
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
+fi
 
 HARD=0   # set to 1 on any hard problem → exit 1.
 
@@ -38,14 +45,9 @@ if ! git -C "$PROJECT_DIR" rev-parse HEAD >/dev/null 2>&1; then
 fi
 
 # --- Check 2: jq missing → gate fails open ----------------------------------
-if ! command -v jq >/dev/null 2>&1; then
+if ! hc_has_jq; then
   warn "jq not found — the gate fails open (allows) and config-driven checks degrade. Install jq for full enforcement."
   exit 0
-fi
-
-# --- source the shared library + resolve identity ---------------------------
-if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
-  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # Resolve session id with the SAME precedence the skill/writer use so preflight

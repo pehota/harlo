@@ -20,7 +20,16 @@
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-if ! command -v jq >/dev/null 2>&1; then
+# Source shared helpers early (before the jq check below) so hc_require_jq is
+# available. Sourcing has no dependency on anything checked in this script.
+# shellcheck source=harness-common.sh
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
+fi
+
+if command -v hc_require_jq >/dev/null 2>&1 || type hc_require_jq >/dev/null 2>&1; then
+  hc_require_jq "error: jq is required to build done-state"
+elif ! command -v jq >/dev/null 2>&1; then
   echo "error: jq is required to build done-state" >&2
   exit 1
 fi
@@ -44,7 +53,8 @@ fi
 # deliberately NOT used — it leaks into child/subagent shells and test
 # subprocesses, so the per-project marker is the trustworthy source.
 SESSION_ID="${1:-}"
-# Literal, not hc__harness_dir: harness-common.sh isn't sourced until below.
+# Literal, not hc__harness_dir: kept simple/direct here rather than coupling
+# this early SESSION_ID resolution to whether sourcing above succeeded.
 BASELINE_DIR="$PROJECT_DIR/.claude/.harness/baselines"
 if [ -z "$SESSION_ID" ] && [ -f "$PROJECT_DIR/.claude/.harness/current-session" ]; then
   SESSION_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
@@ -62,9 +72,7 @@ fi
 # not the raw session id — the gate reads the same key. The injected session_id
 # JSON field below stays the raw resolved id. Guarded: on any failure fall back
 # to a session-scoped key so the writer still produces a consistent path.
-if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
-  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
-fi
+# (harness-common.sh already sourced above, ahead of the jq check.)
 if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi

@@ -360,7 +360,7 @@ fi
 # --- optional background test snapshot --------------------------------------
 CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 SNAPSHOT_ENABLED="false"
-if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
+if hc_has_jq && [ -f "$CONFIG_FILE" ]; then
   SNAPSHOT_ENABLED=$(jq -r '.baseline_snapshot // false' "$CONFIG_FILE" 2>/dev/null)
 fi
 
@@ -369,7 +369,7 @@ TESTS_FILE="$BASELINE_DIR/${HEAD_SHA}.tests.json"
 if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
   # Resolve effective test command: override wins over detected.
   TEST_CMD=""
-  if command -v jq >/dev/null 2>&1; then
+  if hc_has_jq; then
     TEST_CMD=$(jq -r '(.overrides.test // .detected.test) // ""' "$CONFIG_FILE" 2>/dev/null)
   fi
 
@@ -380,12 +380,12 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
     if [ -x "$SCRIPT_DIR/done-detect.sh" ] || [ -f "$SCRIPT_DIR/done-detect.sh" ]; then
       bash "$SCRIPT_DIR/done-detect.sh" >/dev/null 2>&1
     fi
-    if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
+    if hc_has_jq && [ -f "$CONFIG_FILE" ]; then
       TEST_CMD=$(jq -r '(.overrides.test // .detected.test) // ""' "$CONFIG_FILE" 2>/dev/null)
     fi
   fi
 
-  if [ -n "$TEST_CMD" ] && command -v jq >/dev/null 2>&1; then
+  if [ -n "$TEST_CMD" ] && hc_has_jq; then
     # Real snapshot: run tests in the background. Atomic write via temp + mv so a
     # concurrent /done never reads a half-written file. Keyed by SHA (amortised).
     (
@@ -408,7 +408,7 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
     # is available even after detection (or jq is missing). Write an explicit
     # inert marker (atomic) and surface it so the /done before/after red-test
     # discrimination is known to be unavailable, not silently skipped.
-    if command -v jq >/dev/null 2>&1; then
+    if hc_has_jq; then
       TMP_SNAP="${TESTS_FILE}.tmp.$$"
       jq -n --arg sha "$HEAD_SHA" \
         '{sha:$sha, status:"inert", reason:"no test command detected"}' \
@@ -440,7 +440,7 @@ fi
 # to the systemMessage-only form (additionalContext dropped) — matching the
 # existing degrade path; emit only when SYS_MSG is set.
 if [ -n "$SYS_MSG" ] || [ -n "$ADDL_CTX" ]; then
-  if command -v jq >/dev/null 2>&1; then
+  if hc_has_jq; then
     jq -n --arg m "$SYS_MSG" --arg ctx "$ADDL_CTX" '
       {
         systemMessage: (if $m != "" then $m else null end),

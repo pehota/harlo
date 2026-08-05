@@ -29,7 +29,9 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
 fi
 
 # jq is mandatory — without it we cannot read config or build/validate the plan.
-if ! command -v jq >/dev/null 2>&1; then
+if command -v hc_require_jq >/dev/null 2>&1 || type hc_require_jq >/dev/null 2>&1; then
+  hc_require_jq 'done-triage: jq is required — cannot compute plan; run ALL steps (fallback)'
+elif ! command -v jq >/dev/null 2>&1; then
   printf 'done-triage: jq is required — cannot compute plan; run ALL steps (fallback)\n' >&2
   exit 1
 fi

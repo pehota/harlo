@@ -34,7 +34,7 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
 fi
 
 have_jq=false
-command -v jq >/dev/null 2>&1 && have_jq=true
+hc_has_jq && have_jq=true
 
 # --- filter limits ----------------------------------------------------------
 # Overridable by env so the test suite can drive each ceiling without building a

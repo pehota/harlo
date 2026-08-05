@@ -28,6 +28,22 @@
       "sentinels": []
     },
     {
+      "name": "hc_has_jq",
+      "globals": [],
+      "args": "(none)",
+      "stdout": "none",
+      "return_codes": "0 if jq is on PATH, 1 otherwise",
+      "sentinels": []
+    },
+    {
+      "name": "hc_require_jq",
+      "globals": [],
+      "args": "[message] — default \"jq is required\"",
+      "stdout": "none (writes message to stderr on missing jq)",
+      "return_codes": "0 if jq present; exits 1 (never returns) if missing",
+      "sentinels": []
+    },
+    {
       "name": "hc_die",
       "globals": [],
       "args": "<message> — reads prefix from HC_DIE_PREFIX (default \"harness\")",

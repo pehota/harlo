@@ -55,7 +55,7 @@ fi
 # The set of PUBLIC entrypoints. Each MUST have an ABI entry (drift guard: a new
 # public hc_* function without a declared contract fails). Private helpers
 # (hc__*, double underscore) are intentionally NOT part of the ABI surface.
-PUBLIC_FNS="hc_resolve hc_tree_status hc_tree_remediation hc_changeset_summary hc_changeset_is_code hc_review_blocking hc_review_coverage_gap hc_live_task_keys hc_live_review_shas hc_validate hc_state hc_done_state_blocked hc_hash_stdin hc_pkg_probe hc_verification_state hc_is_harness_own_path hc_filter_harness_own hc_cfg hc_path_is_noncode hc_noncode_globs hc_read_hook_input hc_has_fn hc_die"
+PUBLIC_FNS="hc_resolve hc_tree_status hc_tree_remediation hc_changeset_summary hc_changeset_is_code hc_review_blocking hc_review_coverage_gap hc_live_task_keys hc_live_review_shas hc_validate hc_state hc_done_state_blocked hc_hash_stdin hc_pkg_probe hc_verification_state hc_is_harness_own_path hc_filter_harness_own hc_cfg hc_path_is_noncode hc_noncode_globs hc_read_hook_input hc_has_fn hc_die hc_has_jq hc_require_jq"
 
 # ---------------------------------------------------------------------------
 # Fixture helpers (throwaway git repo + .harness state, no remote) — same

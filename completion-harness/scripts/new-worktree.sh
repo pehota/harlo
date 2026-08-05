@@ -49,7 +49,7 @@ TOPLEVEL=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)
 [ -n "$TOPLEVEL" ] || die "not a git repository: $PROJECT_DIR"
 PROJECT_DIR="$TOPLEVEL"
 
-command -v jq >/dev/null 2>&1 || die "jq is required"
+hc_has_jq || die "jq is required"
 # If sourcing failed above, die() itself is unusable (it delegates to
 # hc_die), so this one check stays a literal.
 type hc__detect_trunk >/dev/null 2>&1 \

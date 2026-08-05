@@ -43,7 +43,7 @@ fi
 # ahead of the read (unlike auto-branch.sh/baseline-snapshot.sh, which
 # degrade fields to "" instead of exiting) because the gate's stated fail-safe
 # posture is "no jq -> allow the stop", not "carry on with empty fields".
-command -v jq >/dev/null 2>&1 || exit 0
+hc_has_jq || exit 0
 
 if hc_has_fn hc_read_hook_input; then
   hc_read_hook_input

@@ -18,15 +18,17 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 
-have_jq=false
-command -v jq >/dev/null 2>&1 && have_jq=true
-
 # Source shared helpers for hc_validate + HC_CONTRACTS_DIR (write-time contract
-# validation). Guarded on the file's presence, same as sibling scripts.
+# validation), and hc_has_jq below. Guarded on the file's presence, same as
+# sibling scripts. Moved ahead of the have_jq check: sourcing has no
+# dependency on it.
 # shellcheck source=harness-common.sh
 if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
+
+have_jq=false
+hc_has_jq && have_jq=true
 
 # --- package manager + lockfile (SHARED probe) ------------------------------
 # hc_pkg_probe and hc_hash_stdin live in harness-common.sh so worktree-detect.sh
