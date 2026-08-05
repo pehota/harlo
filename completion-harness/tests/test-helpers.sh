@@ -110,9 +110,15 @@ trap hc__test_cleanup EXIT INT TERM
 # the shipped plugin). Registers the dir for the EXIT/INT/TERM cleanup trap
 # above and echoes its path.
 hc__test_make_repo() {
-  local mode="$1"
+  local mode="${1:-}"
   local dir
   dir=$(mktemp -d)
+  # Hard safety net: if mktemp ever returns empty (or the call above somehow
+  # aborted without producing output), every `git -C "$dir"` below would
+  # silently target the CALLER's cwd instead of failing — and that cwd is the
+  # real project checkout when tests run from the repo root. Force a path
+  # guaranteed not to exist so those commands fail loudly instead.
+  [ -n "$dir" ] || dir="/nonexistent-hc-test-mktemp-failed-$$"
   CLEANUP_DIRS="$CLEANUP_DIRS $dir"
 
   git -C "$dir" init -q -b main
