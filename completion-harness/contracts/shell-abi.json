@@ -20,6 +20,20 @@
       "sentinels": []
     },
     {
+      "name": "hc_read_hook_input",
+      "globals": [
+        "HC_HOOK_RAW",
+        "HC_HOOK_SESSION_ID",
+        "HC_HOOK_TOOL_FILE_PATH",
+        "HC_HOOK_SOURCE",
+        "HC_HOOK_STOP_ACTIVE"
+      ],
+      "args": "(none; reads stdin)",
+      "stdout": "none (sets globals)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
       "name": "hc_hash_stdin",
       "globals": [],
       "args": "(none; reads stdin)",

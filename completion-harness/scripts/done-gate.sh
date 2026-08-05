@@ -26,27 +26,43 @@
 # --- project root -----------------------------------------------------------
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
-# --- read hook JSON from stdin ----------------------------------------------
-HOOK_INPUT=$(cat 2>/dev/null)
+# --- resolve identity (task_key, base) via the shared resolver --------------
+# Sourced library: sets HC_MODE HC_TASK_KEY HC_BASE (+ PROJECT_DIR HARNESS_DIR).
+# Done-state is keyed by HC_TASK_KEY (task-branch continuity across sessions),
+# not the raw session id. Guarded: if it cannot be sourced we fall back to a
+# session-scoped key so the gate never crashes. Sourced before the stdin read
+# below so hc_read_hook_input is available; sourcing itself has no dependency
+# on anything parsed from stdin.
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
 
-# jq missing -> cannot reason about state -> fail safe.
+# --- read hook JSON from stdin ----------------------------------------------
+# jq missing -> cannot reason about state -> fail safe. This check stays
+# ahead of the read (unlike auto-branch.sh/baseline-snapshot.sh, which
+# degrade fields to "" instead of exiting) because the gate's stated fail-safe
+# posture is "no jq -> allow the stop", not "carry on with empty fields".
 command -v jq >/dev/null 2>&1 || exit 0
 
-SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
-STOP_HOOK_ACTIVE=$(printf '%s' "$HOOK_INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)
+if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+  hc_read_hook_input
+  SESSION_ID="$HC_HOOK_SESSION_ID"
+  STOP_HOOK_ACTIVE="$HC_HOOK_STOP_ACTIVE"
+else
+  # harness-common.sh failed to source: fall back to the original inline read
+  # rather than defaulting STOP_HOOK_ACTIVE to "false". jq is already proven
+  # present above, and a stuck-false STOP_HOOK_ACTIVE would disable the
+  # recursion brake at the stop_hook_active check below on every retriggered
+  # Stop — the exact runaway-recursion class this repo already got burned by.
+  HOOK_INPUT=$(cat 2>/dev/null)
+  SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
+  STOP_HOOK_ACTIVE=$(printf '%s' "$HOOK_INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)
+fi
 
 # Fallback session id so the gate path matches baseline-snapshot.sh exactly
 # when session_id is absent (both fall back to "unknown-session").
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
 
-# --- resolve identity (task_key, base) via the shared resolver --------------
-# Sourced library: sets HC_MODE HC_TASK_KEY HC_BASE (+ PROJECT_DIR HARNESS_DIR).
-# Done-state is keyed by HC_TASK_KEY (task-branch continuity across sessions),
-# not the raw session id. Guarded: if it cannot be sourced we fall back to a
-# session-scoped key so the gate never crashes.
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
-fi
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi

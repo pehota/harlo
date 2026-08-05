@@ -13,15 +13,26 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Source the shared helpers early (before reading stdin) so hc_read_hook_input
+# is available. Sourcing has no dependency on anything parsed below, so moving
+# it ahead of the stdin read is safe.
+# shellcheck source=harness-common.sh
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
+
 # Read hook JSON from stdin. We need session_id to pin the task tree baseline
 # from THIS session's clean pre-edit snapshot (see below), and the edited path
 # from tool_input to apply the SCOPE rule (below).
-HOOK_INPUT=$(cat 2>/dev/null)
-SESSION_ID=""
-EDIT_PATH=""
-if command -v jq >/dev/null 2>&1; then
-  SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
-  EDIT_PATH=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
+if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+  hc_read_hook_input
+  SESSION_ID="$HC_HOOK_SESSION_ID"
+  EDIT_PATH="$HC_HOOK_TOOL_FILE_PATH"
+else
+  # harness-common.sh failed to source: degrade exactly as hc_read_hook_input
+  # would, minus consuming stdin (nothing downstream needs the raw payload).
+  SESSION_ID=""
+  EDIT_PATH=""
 fi
 
 # --- fast no-op guards (allow, exit 0) --------------------------------------
@@ -48,11 +59,9 @@ if [ -n "$GIT_DIR" ]; then
 fi
 
 # --- resolve identity -------------------------------------------------------
-# Source the shared resolver and resolve. HC_MODE=task means branch != trunk,
-# i.e. we are ALREADY on a feature branch → cheap off-trunk fast path, no-op.
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
-fi
+# Resolve via the shared resolver (already sourced above). HC_MODE=task means
+# branch != trunk, i.e. we are ALREADY on a feature branch → cheap off-trunk
+# fast path, no-op.
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "" 2>/dev/null
 fi

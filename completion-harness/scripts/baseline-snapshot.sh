@@ -11,15 +11,23 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
-HOOK_INPUT=$(cat 2>/dev/null)
+# Source the shared helpers early (before reading stdin) so hc_read_hook_input
+# is available. Sourcing has no dependency on anything parsed below — the rest
+# of this script's "not sourced until below" bootstrapping (HARNESS_DIR etc.)
+# is unaffected, it just no longer waits on this specific source line.
+# shellcheck source=harness-common.sh
+if [ -f "$(dirname "$0")/harness-common.sh" ]; then
+  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+fi
 
 SESSION_ID=""
 SOURCE=""
-if command -v jq >/dev/null 2>&1; then
-  SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null)
+if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+  hc_read_hook_input
+  SESSION_ID="$HC_HOOK_SESSION_ID"
   # SessionStart source: startup | resume | clear | compact | fork (top-level).
   # Fires on /compact AND on AUTO-compaction — mid-task, with a DIRTY tree.
-  SOURCE=$(printf '%s' "$HOOK_INPUT" | jq -r '.source // ""' 2>/dev/null)
+  SOURCE="$HC_HOOK_SOURCE"
 fi
 # Fallback session id so we always have a stable filename.
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
@@ -35,8 +43,10 @@ fi
 IS_COMPACT=0
 [ "$SOURCE" = "compact" ] && IS_COMPACT=1
 
-# Literal, not hc__harness_dir: harness-common.sh (which defines it) is not
-# sourced until below — this runs before that, so it must self-bootstrap.
+# Literal, not hc__harness_dir: harness-common.sh IS sourced above now (for
+# hc_read_hook_input), but hc_resolve below is what actually needs it wired
+# up; keeping this literal avoids coupling the mkdir bootstrap to whether
+# sourcing succeeded.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
 mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalation" 2>/dev/null
@@ -109,13 +119,11 @@ else
 fi
 
 # --- resolve identity (lazily pins the task base in task mode) --------------
-# Source the shared resolver and resolve. In task mode this pins the fork base
-# under .harness/task-base on first call. HC_WARN is non-empty only when we fell
-# back to session mode BECAUSE of trunk (on trunk, or unconfident trunk) — in
-# that case surface a non-blocking guidance message about task continuity.
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
-fi
+# Resolve via the shared resolver (already sourced above). In task mode this
+# pins the fork base under .harness/task-base on first call. HC_WARN is
+# non-empty only when we fell back to session mode BECAUSE of trunk (on
+# trunk, or unconfident trunk) — in that case surface a non-blocking guidance
+# message about task continuity.
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi

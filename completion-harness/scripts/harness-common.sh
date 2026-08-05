@@ -36,6 +36,40 @@ HC_HARNESS_REL=".claude/.harness"
 HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
 
 # ---------------------------------------------------------------------------
+# hc_read_hook_input
+#
+# Reads the hook JSON payload from stdin ONCE and parses the fields hook
+# scripts actually consume out of it: session_id, tool_input.file_path,
+# source, stop_hook_active. Was previously re-implemented independently by
+# auto-branch.sh, baseline-snapshot.sh and done-gate.sh (each its own
+# `cat` + jq-guarded parse); this is the one canonical read.
+#
+# Degrades every field to its default ("" / stop_hook_active to "false") when
+# jq is missing, matching every prior call site's behavior — callers that need
+# a different jq-missing fallback (e.g. done-gate.sh's fail-safe exit) should
+# still make that check themselves before or after calling this.
+#
+# Sets (globals, caller may copy into its own local names):
+#   HC_HOOK_RAW              raw stdin payload, verbatim
+#   HC_HOOK_SESSION_ID       .session_id
+#   HC_HOOK_TOOL_FILE_PATH   .tool_input.file_path
+#   HC_HOOK_SOURCE           .source
+#   HC_HOOK_STOP_ACTIVE      .stop_hook_active (text "true"/"false")
+hc_read_hook_input() {
+  HC_HOOK_RAW=$(cat 2>/dev/null)
+  HC_HOOK_SESSION_ID=""
+  HC_HOOK_TOOL_FILE_PATH=""
+  HC_HOOK_SOURCE=""
+  HC_HOOK_STOP_ACTIVE="false"
+  if command -v jq >/dev/null 2>&1; then
+    HC_HOOK_SESSION_ID=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.session_id // ""' 2>/dev/null)
+    HC_HOOK_TOOL_FILE_PATH=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
+    HC_HOOK_SOURCE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.source // ""' 2>/dev/null)
+    HC_HOOK_STOP_ACTIVE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.stop_hook_active // false' 2>/dev/null)
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # hc__harness_dir [project_root]
 #
 # Prints "<project_root>/$HC_HARNESS_REL" ($PROJECT_DIR when project_root is
