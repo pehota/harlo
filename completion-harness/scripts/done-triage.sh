@@ -21,13 +21,11 @@
 # emitting anything usable.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-
-SELF_DIR=$(dirname "$0" 2>/dev/null)
-[ -z "$SELF_DIR" ] && SELF_DIR="."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=harness-common.sh
-if [ -f "$SELF_DIR/harness-common.sh" ]; then
-  . "$SELF_DIR/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # jq is mandatory — without it we cannot read config or build/validate the plan.

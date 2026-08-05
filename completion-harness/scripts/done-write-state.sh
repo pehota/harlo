@@ -18,6 +18,7 @@
 # did not record a done-state.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "error: jq is required to build done-state" >&2
@@ -61,8 +62,8 @@ fi
 # not the raw session id — the gate reads the same key. The injected session_id
 # JSON field below stays the raw resolved id. Guarded: on any failure fall back
 # to a session-scoped key so the writer still produces a consistent path.
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "$SESSION_ID" 2>/dev/null

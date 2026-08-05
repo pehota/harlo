@@ -12,13 +12,14 @@
 # No `set -e`.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Source the shared helpers early (before reading stdin) so hc_read_hook_input
 # is available. Sourcing has no dependency on anything parsed below, so moving
 # it ahead of the stdin read is safe.
 # shellcheck source=harness-common.sh
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # Read hook JSON from stdin. We need session_id to pin the task tree baseline

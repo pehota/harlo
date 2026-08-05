@@ -25,6 +25,7 @@
 
 # --- project root -----------------------------------------------------------
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- resolve identity (task_key, base) via the shared resolver --------------
 # Sourced library: sets HC_MODE HC_TASK_KEY HC_BASE (+ PROJECT_DIR HARNESS_DIR).
@@ -33,8 +34,8 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 # session-scoped key so the gate never crashes. Sourced before the stdin read
 # below so hc_read_hook_input is available; sourcing itself has no dependency
 # on anything parsed from stdin.
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # --- read hook JSON from stdin ----------------------------------------------

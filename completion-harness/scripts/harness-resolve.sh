@@ -12,12 +12,11 @@
 
 SESSION_ID="$1"
 
-SELF_DIR=$(dirname "$0" 2>/dev/null)
-[ -z "$SELF_DIR" ] && SELF_DIR="."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=harness-common.sh
-if [ -f "$SELF_DIR/harness-common.sh" ]; then
-  . "$SELF_DIR/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then

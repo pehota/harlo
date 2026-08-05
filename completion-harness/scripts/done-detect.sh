@@ -15,6 +15,7 @@
 # problem it exits 0 with best-effort output so /done is never blocked.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="$PROJECT_DIR/.claude/done-config.json"
 
 have_jq=false
@@ -23,8 +24,8 @@ command -v jq >/dev/null 2>&1 && have_jq=true
 # Source shared helpers for hc_validate + HC_CONTRACTS_DIR (write-time contract
 # validation). Guarded on the file's presence, same as sibling scripts.
 # shellcheck source=harness-common.sh
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # --- package manager + lockfile (SHARED probe) ------------------------------

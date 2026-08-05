@@ -10,14 +10,15 @@
 # No `set -e`; background work is detached with ( ... ) & so it cannot stall.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Source the shared helpers early (before reading stdin) so hc_read_hook_input
 # is available. Sourcing has no dependency on anything parsed below — the rest
 # of this script's "not sourced until below" bootstrapping (HARNESS_DIR etc.)
 # is unaffected, it just no longer waits on this specific source line.
 # shellcheck source=harness-common.sh
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 SESSION_ID=""
@@ -376,8 +377,8 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
   # known yet. Run the (idempotent) detector to seed/refresh done-config.json,
   # then re-read the effective test command. Guarded; never fails the hook.
   if [ -z "$TEST_CMD" ]; then
-    if [ -x "$(dirname "$0")/done-detect.sh" ] || [ -f "$(dirname "$0")/done-detect.sh" ]; then
-      bash "$(dirname "$0")/done-detect.sh" >/dev/null 2>&1
+    if [ -x "$SCRIPT_DIR/done-detect.sh" ] || [ -f "$SCRIPT_DIR/done-detect.sh" ]; then
+      bash "$SCRIPT_DIR/done-detect.sh" >/dev/null 2>&1
     fi
     if command -v jq >/dev/null 2>&1 && [ -f "$CONFIG_FILE" ]; then
       TEST_CMD=$(jq -r '(.overrides.test // .detected.test) // ""' "$CONFIG_FILE" 2>/dev/null)

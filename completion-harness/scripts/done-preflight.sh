@@ -18,6 +18,7 @@
 # it and tells the user to restart the session; it does not paper over it.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Literal, not hc__harness_dir: harness-common.sh isn't sourced until below.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
@@ -43,8 +44,8 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # --- source the shared library + resolve identity ---------------------------
-if [ -f "$(dirname "$0")/harness-common.sh" ]; then
-  . "$(dirname "$0")/harness-common.sh" 2>/dev/null
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
 # Resolve session id with the SAME precedence the skill/writer use so preflight
