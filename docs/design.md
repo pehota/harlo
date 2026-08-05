@@ -244,12 +244,20 @@ it removes *one* class of false block, the session-keyed anchor going missing.
 
 ### Auto-branch (on trunk, first edit)
 
-Config `auto_branch` (default **true**): a `PreToolUse(Write|Edit)` hook (`auto-branch.sh`)
+Config `auto_branch` (default **false** — opt-in): a `PreToolUse(Write|Edit)` hook (`auto-branch.sh`)
 detects "on trunk, about to edit" and `git checkout -b <branch_prefix><timestamp>` (carries
 WIP), moving the work into TASK mode so it gets cross-session continuity. Fast no-op when
 already off trunk (it fires on every edit), and on detached/mid-rebase/merge or checkout
-failure it **stays on trunk and never blocks the edit**. `auto_branch:false` → stays on trunk
-with the SessionStart warning. To *resume* an existing task, checkout its branch first.
+failure it **stays on trunk and never blocks the edit**. `auto_branch:false` (the default) →
+stays on trunk with the SessionStart warning. To *resume* an existing task, checkout its branch
+first.
+
+**Why the default is off.** Branching is a decision about where the user's work lives, and the
+hook cannot see the instruction that would override it — a standing "work on main" reaches no
+hook. Opting in costs one config key; opting out of a branch that already happened costs a
+checkout and an explanation. An existing config keeps whatever it already declares: the
+`done-detect.sh` auto-upgrade only seeds the key when it is ABSENT, so a repo that was seeded
+`true` by an older install stays `true` until a human changes it.
 
 **Scope: coding edits only.** Before branching, the hook applies the *same* non-code rule the
 Stop gate uses (`hc_path_is_noncode`, the per-path half of `hc_changeset_is_code`) to
@@ -1061,7 +1069,7 @@ every escalation is echoed in the step-8 summary for the user to see.
   "start_check_cmd": null,
   "start_timeout": 30,
   "trunk": null,
-  "auto_branch": true,
+  "auto_branch": false,
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high"

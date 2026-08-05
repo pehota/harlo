@@ -54,10 +54,10 @@ run_hook() {
 cur_branch() { git -C "$REPO" symbolic-ref --short -q HEAD 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
-printf '== Case 1: on trunk + auto_branch default(true) → new task/* branch ==\n'
+printf '== Case 1: on trunk + auto_branch:true → new task/* branch ==\n'
 new_repo
 commit_file base.txt
-seed_config '{"trunk":"main","max_fix_attempts":3}'   # no auto_branch key
+seed_config '{"trunk":"main","auto_branch":true,"max_fix_attempts":3}'
 # uncommitted WIP that must survive the checkout -b: an untracked file AND a
 # dirty tracked file (the tracked change is the one that actually exercises
 # git carrying WIP onto the new branch).
@@ -88,11 +88,20 @@ eq "case2 exit 0" "0" "$HOOK_RC"
 eq "case2 still on main (no branch)" "main" "$(cur_branch)"
 
 # ---------------------------------------------------------------------------
+printf '== Case 2b: no auto_branch key → DEFAULT is off → stay on main ==\n'
+new_repo
+commit_file base.txt
+seed_config '{"trunk":"main"}'   # no auto_branch key at all
+run_hook
+eq "case2b exit 0" "0" "$HOOK_RC"
+eq "case2b default is OFF (opt-in, not opt-out)" "main" "$(cur_branch)"
+
+# ---------------------------------------------------------------------------
 printf '== Case 3: already on a feature branch → no-op ==\n'
 new_repo
 commit_file base.txt
 git -C "$REPO" checkout -q -b feat/x 2>/dev/null
-seed_config '{"trunk":"main"}'
+seed_config '{"trunk":"main","auto_branch":true}'
 run_hook
 eq "case3 exit 0" "0" "$HOOK_RC"
 eq "case3 still on feat/x (no-op)" "feat/x" "$(cur_branch)"
@@ -138,7 +147,7 @@ run_hook_for() {
 printf '== Case 6: prose edit (.md) on trunk → NO branch ==\n'
 new_repo
 commit_file base.txt
-seed_config '{"trunk":"main"}'
+seed_config '{"trunk":"main","auto_branch":true}'
 run_hook_for "$REPO/docs/design.md"
 eq "case6 exit 0" "0" "$HOOK_RC"
 eq "case6 still on main (non-code edit out of scope)" "main" "$(cur_branch)"
@@ -154,7 +163,7 @@ esac
 printf '== Case 8: noncode_globs override makes .ts non-code → NO branch ==\n'
 new_repo
 commit_file base.txt
-seed_config '{"trunk":"main","noncode_globs":["*.ts"]}'
+seed_config '{"trunk":"main","auto_branch":true,"noncode_globs":["*.ts"]}'
 run_hook_for "$REPO/src/index.ts"
 eq "case8 exit 0" "0" "$HOOK_RC"
 eq "case8 still on main (config-declared non-code)" "main" "$(cur_branch)"

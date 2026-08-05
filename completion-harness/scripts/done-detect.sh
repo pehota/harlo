@@ -196,7 +196,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
         start_check_cmd: null,
         start_timeout: 30,
         trunk: null,
-        auto_branch: true,
+        auto_branch: false,
         branch_prefix: "task/",
         untracked_policy: "baseline",
         min_review_level: "high",
@@ -249,7 +249,7 @@ else
         | (if has("max_fix_attempts") then . else .max_fix_attempts = 3 end)
         | (if has("baseline_snapshot") then . else .baseline_snapshot = true end)
         | (if has("trunk") then . else .trunk = null end)
-        | (if has("auto_branch") then . else .auto_branch = true end)
+        | (if has("auto_branch") then . else .auto_branch = false end)
         | (if has("branch_prefix") then . else .branch_prefix = "task/" end)
         | (if has("untracked_policy") then . else .untracked_policy = "baseline" end)
         | (if has("max_review_rounds") then . else .max_review_rounds = 2 end)

@@ -101,7 +101,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "start_check_cmd": null,
   "start_timeout": 30,
   "trunk": null,
-  "auto_branch": true,
+  "auto_branch": false,
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high",

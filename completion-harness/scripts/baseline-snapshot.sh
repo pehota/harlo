@@ -315,11 +315,11 @@ append_msg() { SYS_MSG="${SYS_MSG:+$SYS_MSG
 
 if [ -n "$HC_WARN" ]; then
   # Effective auto_branch: session override first, then repo config, then the
-  # built-in TRUE. hc_cfg probes with has(), so a literal `false` survives (a
-  # plain `// true` jq default would flip it back).
-  AUTO_BRANCH="true"
+  # built-in FALSE (opt-in; see auto-branch.sh). hc_cfg probes with has(), so an
+  # explicit true or false both survive intact.
+  AUTO_BRANCH="false"
   if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
-    AUTO_BRANCH=$(hc_cfg auto_branch "true")
+    AUTO_BRANCH=$(hc_cfg auto_branch "false")
   fi
 
   if [ "$AUTO_BRANCH" = "false" ]; then

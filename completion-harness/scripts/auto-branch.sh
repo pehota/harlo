@@ -93,16 +93,20 @@ if [ -n "$EDIT_PATH" ] && { command -v hc_path_is_noncode >/dev/null 2>&1 || typ
   fi
 fi
 
-# --- config: auto_branch (default true; honor a literal false) --------------
+# --- config: auto_branch (default FALSE; honor a literal true) --------------
+# Default OFF: staying on the branch the user chose is the least surprising
+# behaviour, and silently moving a session off trunk contradicts a standing
+# "work on main" instruction the hook cannot see. Opting IN is a one-key
+# decision; opting out of a branch that already happened is not.
 # hc_cfg layers the SESSION override (.harness/session-config.json — where an
 # instruction the user gave in chat, "work only on main", is recorded) over the
 # repo config, and probes with has() so a literal `false` survives.
-AUTO_BRANCH="true"
+AUTO_BRANCH="false"
 if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
-  AUTO_BRANCH=$(hc_cfg auto_branch "true")
+  AUTO_BRANCH=$(hc_cfg auto_branch "false")
 fi
 
-# auto_branch:false → stay on trunk (the "just warn at SessionStart" path); allow.
+# auto_branch:false (the DEFAULT) → stay on trunk; SessionStart already warned. Allow.
 if [ "$AUTO_BRANCH" = "false" ]; then
   exit 0
 fi

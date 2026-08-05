@@ -60,10 +60,11 @@ else
   bad "sticky defaults not seeded correctly"
 fi
 # identity keys seeded on a fresh file: trunk (null → resolver auto-detects),
-# auto_branch (true), branch_prefix ("task/"). has() proves the key is present
-# (== null alone would also be true for an ABSENT key, so use has()).
-if jq -e 'has("trunk") and .trunk == null and has("auto_branch") and .auto_branch == true and .branch_prefix == "task/"' "$CONFIG" >/dev/null 2>&1; then
-  ok "seeded identity keys (trunk=null, auto_branch=true, branch_prefix=task/)"
+# auto_branch (FALSE — opt-in, so a fresh repo never silently moves off the
+# branch the user chose), branch_prefix ("task/"). has() proves the key is
+# present (== null alone would also be true for an ABSENT key, so use has()).
+if jq -e 'has("trunk") and .trunk == null and has("auto_branch") and .auto_branch == false and .branch_prefix == "task/"' "$CONFIG" >/dev/null 2>&1; then
+  ok "seeded identity keys (trunk=null, auto_branch=false, branch_prefix=task/)"
 else
   bad "identity keys not seeded correctly; got: $(jq -c '{trunk,auto_branch,branch_prefix}' "$CONFIG" 2>/dev/null)"
 fi
