@@ -145,9 +145,10 @@ fi
 # add an overrides entry that must survive the re-detect
 tmp=$(mktemp); jq '.overrides = {"start": "node server.js"}' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 # also mutate the identity keys away from their defaults to prove the rewrite
-# PRESERVES human-owned identity config (including a literal auto_branch=false,
-# which a naive `// true` default would silently flip back to true).
-tmp=$(mktemp); jq '.trunk = "develop" | .auto_branch = false | .branch_prefix = "feature/" | .untracked_policy = "strict" | .max_review_rounds = 4 | .min_review_level = "critical" | .start_check_cmd = "curl -sf localhost:3000/health" | .start_timeout = 90' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+# PRESERVES human-owned identity config (including a literal auto_branch=true,
+# which is now the NON-DEFAULT value — seeding the default would prove nothing,
+# and it is the back-compat promise the flip rests on).
+tmp=$(mktemp); jq '.trunk = "develop" | .auto_branch = true | .branch_prefix = "feature/" | .untracked_policy = "strict" | .max_review_rounds = 4 | .min_review_level = "critical" | .start_check_cmd = "curl -sf localhost:3000/health" | .start_timeout = 90' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 
 # rename the "test" script to "check" in package.json
 cat > "$TMP/package.json" <<'JSON'
@@ -181,9 +182,11 @@ if jq -e '.overrides.start == "node server.js"' "$CONFIG" >/dev/null 2>&1; then
 else
   bad "overrides were clobbered by re-detect"
 fi
-# identity keys must be PRESERVED across the re-detect — including auto_branch=false
-if jq -e '.trunk == "develop" and .auto_branch == false and .branch_prefix == "feature/"' "$CONFIG" >/dev/null 2>&1; then
-  ok "identity keys preserved across re-detect (trunk/auto_branch=false/branch_prefix)"
+# identity keys must be PRESERVED across the re-detect — including auto_branch=true,
+# the back-compat promise the default flip rests on: a repo seeded true by an
+# older install must keep branching until a human says otherwise.
+if jq -e '.trunk == "develop" and .auto_branch == true and .branch_prefix == "feature/"' "$CONFIG" >/dev/null 2>&1; then
+  ok "identity keys preserved across re-detect (trunk/auto_branch=true/branch_prefix)"
 else
   bad "identity keys clobbered by re-detect; got: $(jq -c '{trunk,auto_branch,branch_prefix}' "$CONFIG" 2>/dev/null)"
 fi

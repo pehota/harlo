@@ -113,7 +113,10 @@ commit_file base.txt
 commit_file second.txt
 SHA=$(git -C "$REPO" rev-parse HEAD 2>/dev/null)
 git -C "$REPO" checkout -q "$SHA" 2>/dev/null   # detached
-seed_config '{"trunk":"main"}'
+# auto_branch:true DELIBERATELY — with the default (off) this case would pass
+# because nothing ever branches, testing nothing. The guard under test is the
+# detached-HEAD one, so branching must otherwise be armed.
+seed_config '{"trunk":"main","auto_branch":true}'
 run_hook
 eq "case4 exit 0" "0" "$HOOK_RC"
 if [ -z "$(cur_branch)" ] && git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
@@ -126,7 +129,9 @@ fi
 printf '== Case 5: mid-merge sentinel (.git/MERGE_HEAD) → no-op ==\n'
 new_repo
 commit_file base.txt
-seed_config '{"trunk":"main"}'
+# auto_branch:true DELIBERATELY — see case 4: the sentinel is the guard under
+# test, so branching must be armed or the assertion is vacuous.
+seed_config '{"trunk":"main","auto_branch":true}'
 # fabricate a merge-in-progress sentinel
 printf '%s\n' "$(git -C "$REPO" rev-parse HEAD)" > "$REPO/.git/MERGE_HEAD"
 run_hook

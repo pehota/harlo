@@ -854,7 +854,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 
 | Case | What happens | Code path |
 |---|---|---|
-| **On trunk** | SESSION fallback + `HC_WARN`; SessionStart surfaces a systemMessage; first Write/Edit auto-branches to task mode | `hc_resolve` (branch==trunk → session); `baseline-snapshot.sh` HC_WARN block; `auto-branch.sh` |
+| **On trunk** | SESSION fallback + `HC_WARN`; SessionStart surfaces a systemMessage. Auto-branching is **opt-in** (`auto_branch`, default `false`): with it on, the first Write/Edit to a CODE path moves the session to task mode; off (the default), the session stays on trunk | `hc_resolve` (branch==trunk → session); `baseline-snapshot.sh` HC_WARN block; `auto-branch.sh` |
 | **Detached HEAD** | `HC_BRANCH` empty → SESSION mode, **no** warning; auto-branch no-ops (no `symbolic-ref`) | `hc_resolve`; `auto-branch.sh` detached guard |
 | **Unrelated histories** | `merge-base` empty → degrade task→session, `HC_WARN="unrelated histories"`, base **not** pinned | `hc__resolve_task_base` empty-mb branch |
 | **Pre-existing dirty tree** | Lines present at baseline → WARNING (ignored) → gate does NOT block on them (deadlock broken) | `hc_tree_status` in-baseline branch; gate Step 3b |

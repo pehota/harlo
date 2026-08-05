@@ -511,7 +511,7 @@ fi
 rm -rf "$R"
 
 # ============================================================================
-# AUTO-BRANCH INVARIANT 2 (the DEFAULT auto_branch:true path) — a session that
+# AUTO-BRANCH INVARIANT 2 (the auto_branch:true path — opt-in since the default flip) — a session that
 # starts on trunk, then auto-branches mid-session on the first edit, must pin
 # its CLEAN pre-edit tree baseline at checkout time. Otherwise a later session's
 # first task-mode SessionStart would seed the pin from live porcelain (already
@@ -522,7 +522,7 @@ rm -rf "$R"
 # ============================================================================
 PRE_HOOK="$SCRIPTS/auto-branch.sh"
 
-R=$(make_repo)   # on trunk `main`, auto_branch default true
+R=$(make_repo)   # on trunk `main`; the fixture declares auto_branch:true
 # Confident trunk + auto_branch true (defaults, but be explicit).
 cat > "$R/.claude/done-config.json" <<'JSON'
 {"detected":{},"overrides":{},"baseline_snapshot":false,"trunk":"main","auto_branch":true,"branch_prefix":"task/","untracked_policy":"baseline"}
