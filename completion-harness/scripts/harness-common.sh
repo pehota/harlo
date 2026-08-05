@@ -36,6 +36,17 @@ HC_HARNESS_REL=".claude/.harness"
 HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
 
 # ---------------------------------------------------------------------------
+# hc_has_fn <name>
+#
+# "Is a function or command named <name> available in this shell?" — the
+# `hc_has_fn X` probe every call
+# site re-spelled before calling an hc_* helper that might not exist (e.g.
+# this library failed to source). One name, one probe.
+hc_has_fn() {
+  command -v "$1" >/dev/null 2>&1 || type "$1" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # hc_read_hook_input
 #
 # Reads the hook JSON payload from stdin ONCE and parses the fields hook
@@ -1938,7 +1949,7 @@ hc_done_state_blocked() {
   local review_log="$harness_dir/review-log/$head_sha.json"
   local extra_admit="" chain_admit="" anchor_sha=""
   anchor_sha=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$done_state_file" 2>/dev/null)
-  if [ -n "$anchor_sha" ] && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; }; then
+  if [ -n "$anchor_sha" ] && { hc_has_fn hc__is_object_id; }; then
     if hc__is_object_id "$anchor_sha" && [ -f "$harness_dir/review-log/$anchor_sha.json" ]; then
       if [ ! -f "$review_log" ]; then
         review_log="$harness_dir/review-log/$anchor_sha.json"
@@ -1955,7 +1966,7 @@ hc_done_state_blocked() {
 
   # --- 4. review-log must pass the hard-contract schema. ----------------------
   # A missing schema file → hc_validate nonzero → block (broken install, safe).
-  if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+  if hc_has_fn hc_validate; then
     if ! hc_validate "$contracts_dir/review-log.schema.json" "$review_log" >/dev/null 2>&1; then
       HC_DONE_BLOCKED_REASON="review-log fails schema"
       return 0
@@ -1967,7 +1978,7 @@ hc_done_state_blocked() {
 
   # --- 5. hc_review_blocking must be exactly "0" (ERR / non-zero → block). ----
   local open
-  if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+  if hc_has_fn hc_review_blocking; then
     open=$(hc_review_blocking "$review_log" "$min_level")
   else
     open="ERR"
@@ -1980,7 +1991,7 @@ hc_done_state_blocked() {
   # --- 6. hc_review_coverage_gap must be empty OR "SKIP". ---------------------
   # SKIP (no changeset base → not computable) is a graceful degrade, NOT a block.
   local gap
-  if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
+  if hc_has_fn hc_review_coverage_gap; then
     gap=$(hc_review_coverage_gap "$review_log" "$base" "$head_sha" "$proj" "$extra_admit" "$chain_admit")
   else
     # Library failed to source — fail toward block, never toward an allow.
@@ -2133,7 +2144,7 @@ hc_state() {
   # sentinel (rc 2, cannot occur here — we established a non-empty changeset) →
   # fall through to normal gating. Fail-safe: any predicate error resolves to
   # CODE inside hc_changeset_is_code, so an error never lands us in S_OOS.
-  if command -v hc_changeset_is_code >/dev/null 2>&1 || type hc_changeset_is_code >/dev/null 2>&1; then
+  if hc_has_fn hc_changeset_is_code; then
     local scope
     scope=$(hc_changeset_is_code "$HC_BASE" "$head_sha" "$proj" 2>/dev/null)
     if [ "$scope" = "noncode" ]; then

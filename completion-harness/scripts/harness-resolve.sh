@@ -19,7 +19,7 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 

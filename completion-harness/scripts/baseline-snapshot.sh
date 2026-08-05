@@ -23,7 +23,7 @@ fi
 
 SESSION_ID=""
 SOURCE=""
-if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+if hc_has_fn hc_read_hook_input; then
   hc_read_hook_input
   SESSION_ID="$HC_HOOK_SESSION_ID"
   # SessionStart source: startup | resume | clear | compact | fork (top-level).
@@ -125,7 +125,7 @@ fi
 # non-empty only when we fell back to session mode BECAUSE of trunk (on
 # trunk, or unconfident trunk) — in that case surface a non-blocking guidance
 # message about task continuity.
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 
@@ -142,9 +142,9 @@ fi
 #     test integration against; that stays on the 14-day age reap.
 # If trunk is EMPTY/UNCONFIDENT we SKIP terminal reap entirely (never guess
 # "merged"). Fully guarded; never fails the hook.
-if command -v hc_live_task_keys >/dev/null 2>&1 || type hc_live_task_keys >/dev/null 2>&1; then
+if hc_has_fn hc_live_task_keys; then
   REAP_TRUNK=""
-  if command -v hc__detect_trunk >/dev/null 2>&1 || type hc__detect_trunk >/dev/null 2>&1; then
+  if hc_has_fn hc__detect_trunk; then
     REAP_TRUNK=$(hc__detect_trunk 2>/dev/null)
   fi
   if [ -n "$REAP_TRUNK" ] && [ -d "$HARNESS_DIR" ]; then
@@ -183,7 +183,7 @@ fi
 # branch or the current HEAD. Prune the rest (superseded fix-churn).
 # SAFETY: never delete the current HEAD's review-log (it IS in the keep-set).
 if { [ -d "$HARNESS_DIR/review-log" ] || [ -d "$HARNESS_DIR/escalation-accept" ]; } \
-   && { command -v hc_live_review_shas >/dev/null 2>&1 || type hc_live_review_shas >/dev/null 2>&1; }; then
+   && { hc_has_fn hc_live_review_shas; }; then
   LIVE_SHAS=$(hc_live_review_shas "$PROJECT_DIR" 2>/dev/null)
   # Only prune when we could compute a keep-set (git ok). Empty keep-set in a git
   # repo means no branches AND no HEAD — treat as "cannot judge" → keep all.
@@ -299,7 +299,7 @@ fi
 # does not re-pin.
 HC_STATE=""
 HC_NEXT=""
-if command -v hc_state >/dev/null 2>&1 || type hc_state >/dev/null 2>&1; then
+if hc_has_fn hc_state; then
   hc_state "$SESSION_ID" 2>/dev/null
 fi
 
@@ -329,7 +329,7 @@ if [ -n "$HC_WARN" ]; then
   # built-in FALSE (opt-in; see auto-branch.sh). hc_cfg probes with has(), so an
   # explicit true or false both survive intact.
   AUTO_BRANCH="false"
-  if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+  if hc_has_fn hc_cfg; then
     AUTO_BRANCH=$(hc_cfg auto_branch "false")
   fi
 

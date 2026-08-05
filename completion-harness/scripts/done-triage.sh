@@ -76,7 +76,7 @@ if [ -f "$MARKER" ]; then SID=$(cat "$MARKER" 2>/dev/null); fi
 if [ -z "$SID" ]; then
   SID=$(ls -t "$(hc__harness_dir)"/baselines/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//')
 fi
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SID" 2>/dev/null
 fi
 TASK_KEY="${HC_TASK_KEY:-session-$SID}"

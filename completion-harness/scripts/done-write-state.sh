@@ -65,7 +65,7 @@ fi
 if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 [ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
@@ -112,7 +112,7 @@ HEAD_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/nul
 # uncommitted work); pre-existing entries are ignored (never surfaced). tree_clean reflects
 # "no blockers". Keeps the word "dirty" in the refusal for parity/clarity.
 TREE_CLEAN=true
-if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+if hc_has_fn hc_tree_status; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     echo "error: working tree dirty — $(hc_tree_remediation); commit before recording done-state" >&2
@@ -247,7 +247,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # A usable prior anchor: a raw object id with a review-log on disk.
   PRIOR_ANCHOR_OK=0
   if [ -n "$PRIOR_ANCHOR" ] \
-     && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
+     && { hc_has_fn hc__is_object_id; } \
      && hc__is_object_id "$PRIOR_ANCHOR" \
      && [ -f "$(hc__harness_dir)/review-log/${PRIOR_ANCHOR}.json" ]; then
     PRIOR_ANCHOR_OK=1
@@ -273,7 +273,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # Hard contract: the review-log must be structurally valid before any severity
   # or coverage reasoning trusts its fields. A malformed/forged log fails schema
   # and is refused here, before hc_review_blocking/hc_review_coverage_gap run.
-  if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+  if hc_has_fn hc_validate; then
     if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
       echo "error: refusing to write — review-log fails contract (schema) for HEAD ${VERIFIED_SHA:0:7}; the log is malformed or missing required fields" >&2
       exit 1
@@ -286,7 +286,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
   # Explicit availability guard (parity with the hc_tree_status fallback): if the
   # library failed to source, force ERR so we refuse the write, never write silently.
-  if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+  if hc_has_fn hc_review_blocking; then
     P_OPEN=$(hc_review_blocking "$REVIEW_LOG" "$MIN_LEVEL")
   else
     P_OPEN="ERR"
@@ -303,7 +303,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # agent the coverage feedback at /done time rather than at stop time. Same
   # fail-toward-block discipline: a computation error with a real changeset returns
   # the full changed set (non-empty → refuse), never SKIP.
-  if command -v hc_review_coverage_gap >/dev/null 2>&1 || type hc_review_coverage_gap >/dev/null 2>&1; then
+  if hc_has_fn hc_review_coverage_gap; then
     P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
   else
     # Library failed to source — the review-log refusal above already exited via
@@ -357,7 +357,7 @@ OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 # is carried. When we DO have a base, ours wins, exactly as before.
 BASE_SHA="${HC_BASE:-}"
 if [ -z "$BASE_SHA" ] \
-   && { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
+   && { hc_has_fn hc__recover_base_from_state; }; then
   BASE_SHA=$(hc__recover_base_from_state "$OUT_FILE" "$PROJECT_DIR" 2>/dev/null)
 fi
 
@@ -403,7 +403,7 @@ if [ -z "$VALIDATE_TMP" ]; then
   exit 1
 fi
 printf '%s\n' "$RESULT" > "$VALIDATE_TMP" 2>/dev/null
-if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+if hc_has_fn hc_validate; then
   if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$VALIDATE_TMP" >/dev/null 2>&1; then
     rm -f "$VALIDATE_TMP" 2>/dev/null
     echo "error: refusing to write — assembled done-state fails contract (schema); it is missing required fields or has an invalid shape" >&2

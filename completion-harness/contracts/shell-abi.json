@@ -20,6 +20,14 @@
       "sentinels": []
     },
     {
+      "name": "hc_has_fn",
+      "globals": [],
+      "args": "<name> — a function or command name to probe for",
+      "stdout": "none",
+      "return_codes": "0 if <name> is a defined function or command, 1 otherwise",
+      "sentinels": []
+    },
+    {
       "name": "hc_read_hook_input",
       "globals": [
         "HC_HOOK_RAW",

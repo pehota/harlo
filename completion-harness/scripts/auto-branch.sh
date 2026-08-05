@@ -25,7 +25,7 @@ fi
 # Read hook JSON from stdin. We need session_id to pin the task tree baseline
 # from THIS session's clean pre-edit snapshot (see below), and the edited path
 # from tool_input to apply the SCOPE rule (below).
-if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+if hc_has_fn hc_read_hook_input; then
   hc_read_hook_input
   SESSION_ID="$HC_HOOK_SESSION_ID"
   EDIT_PATH="$HC_HOOK_TOOL_FILE_PATH"
@@ -63,7 +63,7 @@ fi
 # Resolve via the shared resolver (already sourced above). HC_MODE=task means
 # branch != trunk, i.e. we are ALREADY on a feature branch → cheap off-trunk
 # fast path, no-op.
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "" 2>/dev/null
 fi
 
@@ -92,7 +92,7 @@ fi
 #
 # Fail direction: an unavailable predicate or an unknown path → treated as code
 # → branch, exactly as before.
-if [ -n "$EDIT_PATH" ] && { command -v hc_path_is_noncode >/dev/null 2>&1 || type hc_path_is_noncode >/dev/null 2>&1; }; then
+if [ -n "$EDIT_PATH" ] && { hc_has_fn hc_path_is_noncode; }; then
   # tool_input.file_path is absolute; the globs are repo-relative.
   REL_PATH="$EDIT_PATH"
   case "$REL_PATH" in
@@ -112,7 +112,7 @@ fi
 # instruction the user gave in chat, "work only on main", is recorded) over the
 # repo config, and probes with has() so a literal `false` survives.
 AUTO_BRANCH="false"
-if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+if hc_has_fn hc_cfg; then
   AUTO_BRANCH=$(hc_cfg auto_branch "false")
 fi
 
@@ -125,7 +125,7 @@ fi
 # branch_prefix default task/. checkout -b carries any uncommitted WIP onto the
 # new branch (git's default behaviour).
 PREFIX="task/"
-if command -v hc_cfg >/dev/null 2>&1 || type hc_cfg >/dev/null 2>&1; then
+if hc_has_fn hc_cfg; then
   PREFIX=$(hc_cfg branch_prefix "task/")
   [ -n "$PREFIX" ] || PREFIX="task/"
 fi
@@ -155,7 +155,7 @@ if git -C "$PROJECT_DIR" checkout -b "$BRANCH" >/dev/null 2>&1; then
   # at that clean baseline. Copying the SessionStart snapshot is strictly better
   # than re-snapshotting live: it also blocks anything created via bash between
   # SessionStart and this first edit. Everything guarded; never fail the hook.
-  if [ -n "$SESSION_ID" ] && (command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1); then
+  if [ -n "$SESSION_ID" ] && (hc_has_fn hc_resolve); then
     hc_resolve "$SESSION_ID" 2>/dev/null
     if [ "$HC_MODE" = "task" ] && [ -n "$HC_TREE_BASE_FILE" ] && [ ! -f "$HC_TREE_BASE_FILE" ]; then
       mkdir -p "$(dirname "$HC_TREE_BASE_FILE")" 2>/dev/null

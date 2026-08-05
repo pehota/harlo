@@ -64,7 +64,7 @@ fi
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
 say "session: $SESSION_ID"
 
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 say "mode: ${HC_MODE:-unknown}  task_key: ${HC_TASK_KEY:-unknown}"
@@ -103,7 +103,7 @@ if [ "${HC_MODE:-}" = "session" ] && [ -f "$SHA_FILE" ]; then
   PF_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
   if [ -n "$PF_BASE" ] && [ -n "$PF_HEAD" ] && [ "$PF_BASE" != "$PF_HEAD" ]; then
     PF_AUTHORED="0"
-    if command -v hc__session_authored_count >/dev/null 2>&1 || type hc__session_authored_count >/dev/null 2>&1; then
+    if hc_has_fn hc__session_authored_count; then
       PF_AUTHORED=$(hc__session_authored_count "$PF_BASE" "$PF_HEAD" "$SESSION_ID" 2>/dev/null)
     fi
     if [ "$PF_AUTHORED" = "0" ]; then
@@ -127,7 +127,7 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ -z "$TEST_CMD" ]; then
 fi
 
 # --- Check 5: tree state via the shared classifier --------------------------
-if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+if hc_has_fn hc_tree_status; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     prob "working tree has changes that will BLOCK the gate (deadlock risk): $(hc_tree_remediation)"

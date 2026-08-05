@@ -45,7 +45,7 @@ fi
 # posture is "no jq -> allow the stop", not "carry on with empty fields".
 command -v jq >/dev/null 2>&1 || exit 0
 
-if command -v hc_read_hook_input >/dev/null 2>&1 || type hc_read_hook_input >/dev/null 2>&1; then
+if hc_has_fn hc_read_hook_input; then
   hc_read_hook_input
   SESSION_ID="$HC_HOOK_SESSION_ID"
   STOP_HOOK_ACTIVE="$HC_HOOK_STOP_ACTIVE"
@@ -64,7 +64,7 @@ fi
 # when session_id is absent (both fall back to "unknown-session").
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown-session"
 
-if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
+if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
 [ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
@@ -158,7 +158,7 @@ if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_
   if [ -n "$ANCHOR_MARKER_ID" ] && [ "$ANCHOR_MARKER_ID" != "$SESSION_ID" ]; then
     MARKER_ANCHOR=$(cat "$HARNESS_DIR/baselines/${ANCHOR_MARKER_ID}.sha" 2>/dev/null | tr -d '\r\n')
     if [ -n "$MARKER_ANCHOR" ] \
-       && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
+       && { hc_has_fn hc__is_object_id; } \
        && hc__is_object_id "$MARKER_ANCHOR" \
        && git -C "$PROJECT_DIR" cat-file -e "${MARKER_ANCHOR}^{commit}" 2>/dev/null \
        && git -C "$PROJECT_DIR" merge-base --is-ancestor "$MARKER_ANCHOR" "$HEAD_SHA" 2>/dev/null; then
@@ -189,7 +189,7 @@ if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_
 fi
 
 HC_BASE_RECOVERED=""
-if { command -v hc__recover_base_from_state >/dev/null 2>&1 || type hc__recover_base_from_state >/dev/null 2>&1; }; then
+if { hc_has_fn hc__recover_base_from_state; }; then
   # The base recovered from OUR OWN key's done-state — only meaningful when the
   # resolver (and 2a-0 above) found no anchor.
   if [ -z "$HC_BASE" ]; then
@@ -304,11 +304,11 @@ fi
 # Fail-safe: hc_changeset_is_code returns "code" on ANY error → we do NOT exit →
 # normal gating. An unavailable predicate/classifier also falls through (safe).
 TREE_STATUS_DONE=0
-if command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+if hc_has_fn hc_tree_status; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   TREE_STATUS_DONE=1
 fi
-if command -v hc_changeset_is_code >/dev/null 2>&1 || type hc_changeset_is_code >/dev/null 2>&1; then
+if hc_has_fn hc_changeset_is_code; then
   SCOPE=$(hc_changeset_is_code "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
   if [ "$SCOPE" = "noncode" ]; then
     exit 0
@@ -331,7 +331,7 @@ if [ "$TREE_STATUS_DONE" -eq 1 ]; then
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     block "finish the slice ($(hc_tree_remediation)), then commit"
   fi
-elif command -v hc_tree_status >/dev/null 2>&1 || type hc_tree_status >/dev/null 2>&1; then
+elif hc_has_fn hc_tree_status; then
   hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     block "finish the slice ($(hc_tree_remediation)), then commit"
@@ -393,7 +393,7 @@ fi
 # suppressed and S2_REASON stays the bare instruction.
 S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
 if [ -n "$COVER_BASE" ] \
-   && { command -v hc_changeset_summary >/dev/null 2>&1 || type hc_changeset_summary >/dev/null 2>&1; }; then
+   && { hc_has_fn hc_changeset_summary; }; then
   HC_SESSION_ID="$SESSION_ID"
   CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$COVER_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
   [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
@@ -436,7 +436,7 @@ fi
 # file itself → hc_validate nonzero → BLOCK (broken install, safe direction). The
 # jq-missing degrade at the top of the gate already exited before this point, so
 # this never fires on a jq-less host.
-if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+if hc_has_fn hc_validate; then
   if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" >/dev/null 2>&1; then
     block "$S2_REASON"
   fi
@@ -478,7 +478,7 @@ fi
 # sourced library must never exit its caller. An unavailable library forces
 # "stale", i.e. BLOCK, never an accidental allow.
 VERIFIED_SHA=$(jq -r '.verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
-if command -v hc_verification_state >/dev/null 2>&1 || type hc_verification_state >/dev/null 2>&1; then
+if hc_has_fn hc_verification_state; then
   VSTATE=$(hc_verification_state "$DONE_STATE_FILE" "$HEAD_SHA" "$HEAD_TREE" "$PROJECT_DIR")
 else
   VSTATE="stale"
@@ -598,7 +598,7 @@ CHAIN_ADMIT=""
 # uses. On the sha-equal path that resolves to HEAD_SHA, so it changes nothing
 # there; on a carry it names the log Step 5 just proved still describes HEAD.
 ANCHOR_SHA=$(jq -r '.review_anchor_sha // .verified_sha // ""' "$DONE_STATE_FILE" 2>/dev/null)
-if [ -n "$ANCHOR_SHA" ] && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; }; then
+if [ -n "$ANCHOR_SHA" ] && { hc_has_fn hc__is_object_id; }; then
   if hc__is_object_id "$ANCHOR_SHA" && [ -f "$HARNESS_DIR/review-log/$ANCHOR_SHA.json" ]; then
     if [ ! -f "$REVIEW_LOG" ]; then
       REVIEW_LOG="$HARNESS_DIR/review-log/$ANCHOR_SHA.json"
@@ -614,7 +614,7 @@ fi
 # Hard contract: the review-log must be structurally valid before its
 # findings[]/files_reviewed are trusted by the severity + coverage checks below.
 # A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
-if command -v hc_validate >/dev/null 2>&1 || type hc_validate >/dev/null 2>&1; then
+if hc_has_fn hc_validate; then
   if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
     block "$S2_REASON"
   fi
@@ -625,7 +625,7 @@ MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-confi
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
 # Explicit availability guard (parity with the hc_tree_status fallback): if the
 # library failed to source, force ERR so we fail toward BLOCK, never toward allow.
-if command -v hc_review_blocking >/dev/null 2>&1 || type hc_review_blocking >/dev/null 2>&1; then
+if hc_has_fn hc_review_blocking; then
   OPEN=$(hc_review_blocking "$REVIEW_LOG" "$MIN_LEVEL")
 else
   OPEN="ERR"
