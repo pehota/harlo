@@ -28,6 +28,14 @@
       "sentinels": []
     },
     {
+      "name": "hc_die",
+      "globals": [],
+      "args": "<message> — reads prefix from HC_DIE_PREFIX (default \"harness\")",
+      "stdout": "none (writes to stderr)",
+      "return_codes": "never returns; exits 1",
+      "sentinels": []
+    },
+    {
       "name": "hc_read_hook_input",
       "globals": [
         "HC_HOOK_RAW",

@@ -39,7 +39,17 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-die()  { printf 'finish-worktree: %s\n' "$1" >&2; exit 1; }
+
+# Source shared helpers early (before the first die() call below) so hc_die
+# is available. Sourcing has no dependency on anything checked in this
+# script — it only sets HC_CONTRACTS_DIR and a few path constants.
+# shellcheck source=harness-common.sh
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
+fi
+
+HC_DIE_PREFIX="finish-worktree"
+die()  { hc_die "$1"; }
 say()  { printf '%s\n' "$1"; }
 warn() { printf '%s\n' "$1" >&2; }
 
@@ -63,11 +73,10 @@ fi
 MAIN=$(git -C "$WT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
 [ -n "$MAIN" ] && [ -d "$MAIN" ] || die "cannot locate the main worktree"
 
-# shellcheck source=harness-common.sh
-if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
-  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
-fi
-type hc_resolve >/dev/null 2>&1 || die "harness-common.sh could not be sourced"
+# Sourced above (before the first die() call); if it failed, die() itself is
+# unusable (it delegates to hc_die), so this one check stays a literal.
+type hc_resolve >/dev/null 2>&1 \
+  || { printf 'finish-worktree: harness-common.sh could not be sourced\n' >&2; exit 1; }
 
 BRANCH=$(git -C "$WT" symbolic-ref --short -q HEAD 2>/dev/null)
 [ -n "$BRANCH" ] || die "worktree HEAD is detached — check out the task branch first"

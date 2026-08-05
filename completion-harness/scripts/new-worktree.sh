@@ -29,7 +29,16 @@ BRANCH="${1:-}"
 WT_PATH_ARG="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-die() { printf 'new-worktree: %s\n' "$1" >&2; exit 1; }
+# Source shared helpers early (before the first die() call below) so hc_die
+# is available. Sourcing has no dependency on anything checked in this
+# script — it only sets HC_CONTRACTS_DIR and a few path constants.
+# shellcheck source=harness-common.sh
+if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
+  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
+fi
+
+HC_DIE_PREFIX="new-worktree"
+die() { hc_die "$1"; }
 say() { printf '%s\n' "$1"; }
 
 [ -n "$BRANCH" ] || die "usage: new-worktree.sh <branch-name> [worktree-path]"
@@ -40,12 +49,11 @@ TOPLEVEL=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)
 [ -n "$TOPLEVEL" ] || die "not a git repository: $PROJECT_DIR"
 PROJECT_DIR="$TOPLEVEL"
 
-# shellcheck source=harness-common.sh
-if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
-  . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
-fi
 command -v jq >/dev/null 2>&1 || die "jq is required"
-type hc__detect_trunk >/dev/null 2>&1 || die "harness-common.sh could not be sourced (needed for trunk resolution)"
+# If sourcing failed above, die() itself is unusable (it delegates to
+# hc_die), so this one check stays a literal.
+type hc__detect_trunk >/dev/null 2>&1 \
+  || { printf 'new-worktree: harness-common.sh could not be sourced (needed for trunk resolution)\n' >&2; exit 1; }
 
 # --- trunk: the harness's own resolution, not a second one ------------------
 # hc__detect_trunk reads .claude/done-config.json's `trunk` override first, then

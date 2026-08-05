@@ -47,6 +47,21 @@ hc_has_fn() {
 }
 
 # ---------------------------------------------------------------------------
+# hc_die <message>
+#
+# Prints "<prefix>: <message>" to stderr and exits 1. The prefix comes from
+# HC_DIE_PREFIX, set by the caller near its own top (e.g. its script name) —
+# finish-worktree.sh and new-worktree.sh each used to define their own
+# die() { printf '<script>: %s\n' "$1" >&2; exit 1; } with the name hardcoded.
+# NOT usable before this library is sourced; callers that die on conditions
+# checked pre-source (jq missing, harness-common.sh itself failing to source)
+# keep a literal fallback for that one call site.
+hc_die() {
+  printf '%s: %s\n' "${HC_DIE_PREFIX:-harness}" "$1" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
 # hc_read_hook_input
 #
 # Reads the hook JSON payload from stdin ONCE and parses the fields hook
