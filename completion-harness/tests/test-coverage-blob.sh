@@ -38,7 +38,7 @@ trap cleanup EXIT
 
 # mk_repo — a fresh repo on trunk `main` with base.txt committed. Returns via $REPO.
 mk_repo() {
-  REPO=$(mktemp -d 2>/dev/null); CLEANUP+=("$REPO")
+  REPO=$(hc__test_mktemp_d); CLEANUP+=("$REPO")
   git -C "$REPO" init -q -b main 2>/dev/null
   git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1
   git -C "$REPO" config user.name  "Test" >/dev/null 2>&1
@@ -231,7 +231,7 @@ fi
 
 # b) unconfident trunk (branch develop, no main/master, no config trunk) → the
 #    widening skips, but HEAD + tips are still emitted.
-R2REPO=$(mktemp -d); CLEANUP+=("$R2REPO")
+R2REPO=$(hc__test_mktemp_d); CLEANUP+=("$R2REPO")
 git -C "$R2REPO" init -q -b develop
 git -C "$R2REPO" config user.email t@t; git -C "$R2REPO" config user.name t
 printf 'a\n' > "$R2REPO/a.txt"; git -C "$R2REPO" add -A; git -C "$R2REPO" commit -qm c1 >/dev/null 2>&1

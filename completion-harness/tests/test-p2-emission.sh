@@ -401,7 +401,7 @@ SESSION_CFG_PHRASE="session-config.json"
 # production non-code globs so the S_OOS case below is reachable.
 make_trunk_repo() {
   local dir
-  dir=$(mktemp -d)
+  dir=$(hc__test_mktemp_d)
   CLEANUP_DIRS="$CLEANUP_DIRS $dir"
   git -C "$dir" init -q -b main
   git -C "$dir" config user.email "t@t.t"

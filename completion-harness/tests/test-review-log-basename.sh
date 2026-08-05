@@ -45,7 +45,7 @@ is_block() { printf '%s' "$1" | jq -e '.decision == "block"' >/dev/null 2>&1; }
 # Sets REPO, RLDIR. The object format decides whether shas are 40 or 64 hex.
 mk_repo() {
   local fmt="${1:-sha1}"
-  REPO=$(mktemp -d 2>/dev/null); CLEANUP+=("$REPO")
+  REPO=$(hc__test_mktemp_d); CLEANUP+=("$REPO")
   git -C "$REPO" init -q -b main --object-format="$fmt" 2>/dev/null
   git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1
   git -C "$REPO" config user.name  "Test" >/dev/null 2>&1

@@ -21,8 +21,8 @@ trap 'for d in "${CLEANUP[@]}"; do rm -rf "$d" 2>/dev/null; done' EXIT
 # make_pair → sets ORIGIN and REPO: a bare origin plus a clone on main with a
 # .gitignore, a couple of gitignored local configs and a package.json.
 make_pair() {
-  ORIGIN=$(mktemp -d); CLEANUP+=("$ORIGIN")
-  REPO=$(mktemp -d);   CLEANUP+=("$REPO")
+  ORIGIN=$(hc__test_mktemp_d); CLEANUP+=("$ORIGIN")
+  REPO=$(hc__test_mktemp_d);   CLEANUP+=("$REPO")
   git init -q --bare -b main "$ORIGIN" 2>/dev/null || {
     git init -q --bare "$ORIGIN" >/dev/null 2>&1
   }
@@ -362,7 +362,7 @@ git -C "$WT" add -A >/dev/null 2>&1
 git -C "$WT" commit -qm "branch edits app.js" >/dev/null 2>&1
 seed_green "$WT"
 # Move origin/main so the same line conflicts.
-OTHER=$(mktemp -d); CLEANUP+=("$OTHER")
+OTHER=$(hc__test_mktemp_d); CLEANUP+=("$OTHER")
 git clone -q "$ORIGIN" "$OTHER" >/dev/null 2>&1
 git -C "$OTHER" config user.email o@o; git -C "$OTHER" config user.name o
 printf 'trunk side\n' > "$OTHER/src/app.js"

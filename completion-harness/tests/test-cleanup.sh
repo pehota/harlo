@@ -44,7 +44,7 @@ seed_task_state() {
 # ============================================================================
 # PART 2 — TERMINAL REAP: merged branch reaped, unmerged branch kept.
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t
 git -C "$R" config user.name t
@@ -89,7 +89,7 @@ rm -rf "$R"
 # PART 2 — GONE branch: a br-* key with no matching branch is reaped; a key that
 # matches a live unmerged branch is kept.
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/\n' > "$R/.gitignore"; printf 'a\n' > "$R/a.txt"
@@ -116,7 +116,7 @@ rm -rf "$R"
 # ============================================================================
 # PART 2 — TRUNK UNCONFIDENT: no main/master, no config trunk → SKIP reap.
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b develop
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/\n' > "$R/.gitignore"; printf 'a\n' > "$R/a.txt"
@@ -137,7 +137,7 @@ rm -rf "$R"
 # PART 3 — REVIEW-LOG HYGIENE: current HEAD + live branch tip kept; random
 # superseded sha deleted.
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/\n' > "$R/.gitignore"; printf 'a\n' > "$R/a.txt"
@@ -177,7 +177,7 @@ rm -rf "$R"
 # whole chain, so it is still load-bearing. hc_live_review_shas widens the
 # keep-set to every commit in base..tip of a live branch (given its pinned base).
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/\n' > "$R/.gitignore"; printf 'a\n' > "$R/a.txt"
@@ -215,7 +215,7 @@ rm -rf "$R"
 # ============================================================================
 # Fresh session-mode repo (on trunk main → session mode).
 mk_session_repo() {
-  local r; r=$(mktemp -d)
+  local r; r=$(hc__test_mktemp_d)
   git -C "$r" init -q -b main
   git -C "$r" config user.email t@t; git -C "$r" config user.name t
   printf '.claude/\n' > "$r/.gitignore"; printf 'a\n' > "$r/a.txt"
@@ -291,7 +291,7 @@ rm -rf "$R"
 # ============================================================================
 # HELPER UNIT — hc_live_task_keys: pure keep-set decision, testable w/o deletion.
 # ============================================================================
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf 'a\n' > "$R/a.txt"; git -C "$R" add -A; git -C "$R" commit -qm c1

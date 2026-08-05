@@ -46,7 +46,7 @@ SID=carry
 # a.js, and a done-state carrying head_tree + review_anchor_sha exactly as the
 # writer produces them. Sets REPO, BASE, HEAD0, TREE0, HDIR.
 mk_verified() {
-  REPO=$(mktemp -d 2>/dev/null); CLEANUP+=("$REPO")
+  REPO=$(hc__test_mktemp_d); CLEANUP+=("$REPO")
   git -C "$REPO" init -q -b main 2>/dev/null
   git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1
   git -C "$REPO" config user.name  "Test" >/dev/null 2>&1

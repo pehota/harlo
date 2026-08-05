@@ -19,7 +19,7 @@ trap cleanup EXIT
 
 # Fresh temp git repo on trunk `main`, no remote, local identity.
 new_repo() {
-  REPO=$(mktemp -d 2>/dev/null)
+  REPO=$(hc__test_mktemp_d)
   CLEANUP+=("$REPO")
   git init -b main "$REPO" >/dev/null 2>&1 || {
     git init "$REPO" >/dev/null 2>&1

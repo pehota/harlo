@@ -53,7 +53,7 @@ resolve() {
 
 # Create a fresh temp git repo with trunk `main`, no remote, local identity.
 new_repo() {
-  REPO=$(mktemp -d 2>/dev/null)
+  REPO=$(hc__test_mktemp_d)
   git init -b main "$REPO" >/dev/null 2>&1 || {
     git init "$REPO" >/dev/null 2>&1
     ( cd "$REPO" && git branch -M main >/dev/null 2>&1 )

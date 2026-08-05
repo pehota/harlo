@@ -543,7 +543,7 @@ rm -rf "$R"
 #      a well-formed sha from an unrelated history). Judging emptiness against
 #      another line of history is meaningless → not adopted → no-anchor block.
 R=$(make_repo); GATE_SID=gate-i3; MARK_SID=marker-i3
-FOREIGN=$(mktemp -d)
+FOREIGN=$(hc__test_mktemp_d)
 git -C "$FOREIGN" init -q -b main
 git -C "$FOREIGN" config user.email t@t; git -C "$FOREIGN" config user.name t
 printf 'z\n' > "$FOREIGN/z.js"; git -C "$FOREIGN" add -A; git -C "$FOREIGN" commit -qm z

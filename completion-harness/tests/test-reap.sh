@@ -25,7 +25,7 @@ echo "== test-reap (baseline-snapshot age-based cleanup) =="
 # reaps a merged/GONE br-* task's state) is SKIPPED for safety and cannot touch
 # the stale gone-branch pins this suite seeds. Terminal reap is covered by
 # test-cleanup.sh.
-REPO=$(mktemp -d)
+REPO=$(hc__test_mktemp_d)
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b work
 git -C "$REPO" config user.email "test@test.local"

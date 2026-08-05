@@ -580,7 +580,7 @@ rm -rf "$R"
 # which must not count as introduced work (that caused a commit→re-review
 # cascade). A TRACKED, modified done-config.json must classify as WARNING, not
 # BLOCKER; a genuinely introduced file alongside it must still BLOCK.
-R=$(mktemp -d)
+R=$(hc__test_mktemp_d)
 git -C "$R" init -q -b main
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf '.claude/.harness/\n' > "$R/.gitignore"   # track .claude/done-config.json

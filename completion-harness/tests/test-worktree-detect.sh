@@ -22,7 +22,7 @@ trap 'for d in "${CLEANUP[@]}"; do rm -rf "$d" 2>/dev/null; done' EXIT
 
 # new_repo → a fresh git repo on main with one commit. Echoes the path.
 new_repo() {
-  local r; r=$(mktemp -d); CLEANUP+=("$r")
+  local r; r=$(hc__test_mktemp_d); CLEANUP+=("$r")
   git -C "$r" init -q -b main 2>/dev/null || {
     git init "$r" >/dev/null 2>&1; ( cd "$r" && git branch -M main >/dev/null 2>&1 )
   }

@@ -35,7 +35,7 @@ if ! command -v jq >/dev/null 2>&1; then
   echo; echo "test-install: $PASS passed, $FAIL failed"; exit 1
 fi
 
-TMP=$(mktemp -d)
+TMP=$(hc__test_mktemp_d)
 trap 'rm -rf "$TMP" 2>/dev/null' EXIT INT TERM
 
 # --- run the installer ------------------------------------------------------

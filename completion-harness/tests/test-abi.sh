@@ -67,7 +67,7 @@ trap cleanup EXIT
 
 # Fresh repo on a FEATURE branch off trunk `main` → hc_resolve picks TASK mode.
 new_task_repo() {
-  REPO=$(mktemp -d 2>/dev/null); CLEANUP+=("$REPO")
+  REPO=$(hc__test_mktemp_d); CLEANUP+=("$REPO")
   git -C "$REPO" init -q -b main 2>/dev/null || {
     git init "$REPO" >/dev/null 2>&1; ( cd "$REPO" && git branch -M main >/dev/null 2>&1 )
   }

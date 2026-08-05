@@ -42,7 +42,7 @@ SID="S"
 echo "== test-chain (integration: baseline-snapshot -> gate -> write-state -> gate) =="
 
 # --- throwaway repo mirroring the trial fixture -----------------------------
-REPO=$(mktemp -d)
+REPO=$(hc__test_mktemp_d)
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q
 git -C "$REPO" config user.email "test@test.local"
