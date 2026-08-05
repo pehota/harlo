@@ -48,6 +48,14 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
+# Verify sourcing succeeded BEFORE die() is defined or called anywhere below.
+# die() delegates to hc_die, which does not exist if sourcing failed — without
+# set -e, a bare `|| die ...` in that state would 127-and-continue instead of
+# exiting, silently skipping every check that follows. This one check stays a
+# literal (not die) for the same reason.
+type hc_resolve >/dev/null 2>&1 \
+  || { printf 'finish-worktree: harness-common.sh could not be sourced\n' >&2; exit 1; }
+
 HC_DIE_PREFIX="finish-worktree"
 die()  { hc_die "$1"; }
 say()  { printf '%s\n' "$1"; }
@@ -72,11 +80,6 @@ fi
 # would fail for a reason that has nothing to do with the work.
 MAIN=$(git -C "$WT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
 [ -n "$MAIN" ] && [ -d "$MAIN" ] || die "cannot locate the main worktree"
-
-# Sourced above (before the first die() call); if it failed, die() itself is
-# unusable (it delegates to hc_die), so this one check stays a literal.
-type hc_resolve >/dev/null 2>&1 \
-  || { printf 'finish-worktree: harness-common.sh could not be sourced\n' >&2; exit 1; }
 
 BRANCH=$(git -C "$WT" symbolic-ref --short -q HEAD 2>/dev/null)
 [ -n "$BRANCH" ] || die "worktree HEAD is detached — check out the task branch first"

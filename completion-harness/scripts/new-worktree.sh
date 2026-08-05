@@ -37,6 +37,14 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
+# Verify sourcing succeeded BEFORE die() is defined or called anywhere below.
+# die() delegates to hc_die, which does not exist if sourcing failed — without
+# set -e, a bare `|| die ...` in that state would 127-and-continue instead of
+# exiting, silently skipping every check that follows. This one check stays a
+# literal (not die) for the same reason.
+type hc__detect_trunk >/dev/null 2>&1 \
+  || { printf 'new-worktree: harness-common.sh could not be sourced (needed for trunk resolution)\n' >&2; exit 1; }
+
 HC_DIE_PREFIX="new-worktree"
 die() { hc_die "$1"; }
 say() { printf '%s\n' "$1"; }
@@ -50,10 +58,6 @@ TOPLEVEL=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)
 PROJECT_DIR="$TOPLEVEL"
 
 hc_has_jq || die "jq is required"
-# If sourcing failed above, die() itself is unusable (it delegates to
-# hc_die), so this one check stays a literal.
-type hc__detect_trunk >/dev/null 2>&1 \
-  || { printf 'new-worktree: harness-common.sh could not be sourced (needed for trunk resolution)\n' >&2; exit 1; }
 
 # --- trunk: the harness's own resolution, not a second one ------------------
 # hc__detect_trunk reads .claude/done-config.json's `trunk` override first, then
