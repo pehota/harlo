@@ -36,6 +36,17 @@ HC_HARNESS_REL=".claude/.harness"
 HC_SESSION_CONFIG_REL="$HC_HARNESS_REL/session-config.json"
 
 # ---------------------------------------------------------------------------
+# hc__harness_dir [project_root]
+#
+# Prints "<project_root>/$HC_HARNESS_REL" ($PROJECT_DIR when project_root is
+# omitted). Single place callers derive the harness state dir path from a
+# root other than the already-resolved $HARNESS_DIR global (e.g. a worktree
+# root) — do not re-spell the concatenation at call sites.
+hc__harness_dir() {
+  printf '%s/%s\n' "${1:-$PROJECT_DIR}" "$HC_HARNESS_REL"
+}
+
+# ---------------------------------------------------------------------------
 # hc_cfg <key> [default]
 #
 # THE single config read. Prints the effective value of a flat top-level key,

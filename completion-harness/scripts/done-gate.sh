@@ -82,7 +82,7 @@ HEAD_TREE=$(git -C "$PROJECT_DIR" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/nul
 # --- paths (task-mandated locations under .harness) -------------------------
 # Done-state is keyed by HC_TASK_KEY (task mode: br-<branch>; session mode:
 # session-<id>) so a task's done-state is shared across resuming sessions.
-HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
+HARNESS_DIR="$(hc__harness_dir)"
 DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
 # --- Step 2a: changeset-anchor recovery (empty HC_BASE) ---------------------
@@ -402,7 +402,7 @@ fi
 # whole change removes. Those steps keep the generic reason.
 S2_NO_ANCHOR=""
 if [ -z "$COVER_BASE" ]; then
-  S2_NO_ANCHOR="no changeset anchor was recorded for this session — .claude/.harness/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
+  S2_NO_ANCHOR="no changeset anchor was recorded for this session — $(hc__harness_dir)/baselines/${SESSION_ID}.sha is missing, so the harness cannot tell an empty changeset from a whole session of unverified commits, and blocks rather than guess. Likely cause: .claude/.harness was deleted mid-session, the baseline was age-reaped, or SessionStart never ran for this session id. Restart the session so SessionStart records a baseline, then re-run /done."
 fi
 
 # --- Step 4: missing done-state -> BLOCK ------------------------------------

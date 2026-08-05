@@ -18,6 +18,7 @@
 # it and tells the user to restart the session; it does not paper over it.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Literal, not hc__harness_dir: harness-common.sh isn't sourced until below.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
 

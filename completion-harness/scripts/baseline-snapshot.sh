@@ -35,6 +35,8 @@ fi
 IS_COMPACT=0
 [ "$SOURCE" = "compact" ] && IS_COMPACT=1
 
+# Literal, not hc__harness_dir: harness-common.sh (which defines it) is not
+# sourced until below — this runs before that, so it must self-bootstrap.
 HARNESS_DIR="$PROJECT_DIR/.claude/.harness"
 BASELINE_DIR="$HARNESS_DIR/baselines"
 mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalation" 2>/dev/null
@@ -340,7 +342,7 @@ if [ -n "$HC_WARN" ]; then
     # useful — gets it.
     case "$HC_STATE" in S_OOS) ;; *)
     ADDL_CTX="${ADDL_CTX:+$ADDL_CTX
-}[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to .claude/.harness/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
+}[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to $(hc__harness_dir)/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
     ;;
     esac
   fi

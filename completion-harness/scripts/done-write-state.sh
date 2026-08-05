@@ -43,6 +43,7 @@ fi
 # deliberately NOT used — it leaks into child/subagent shells and test
 # subprocesses, so the per-project marker is the trustworthy source.
 SESSION_ID="${1:-}"
+# Literal, not hc__harness_dir: harness-common.sh isn't sourced until below.
 BASELINE_DIR="$PROJECT_DIR/.claude/.harness/baselines"
 if [ -z "$SESSION_ID" ] && [ -f "$PROJECT_DIR/.claude/.harness/current-session" ]; then
   SESSION_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
@@ -85,7 +86,7 @@ fi
 if [ "$HC_MODE" = "session" ] && [ -d "$BASELINE_DIR" ] && ls "$BASELINE_DIR"/*.sha >/dev/null 2>&1; then
   if [ ! -f "$BASELINE_DIR/${SESSION_ID}.sha" ]; then
     VALID_IDS=$(ls -t "$BASELINE_DIR"/*.sha 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//' | tr '\n' ' ')
-    MARKER_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
+    MARKER_ID=$(cat "$(hc__harness_dir)/current-session" 2>/dev/null)
     echo "error: refusing to write — session id '${SESSION_ID}' has no baselines/${SESSION_ID}.sha, so the done-state key 'session-${SESSION_ID}' is one the Stop gate never reads (silent forever-block). Pass the id the gate uses: the current-session marker (${MARKER_ID:-none recorded}), or one of the valid ids: ${VALID_IDS:-none}" >&2
     exit 1
   fi
@@ -219,12 +220,12 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # The resolved anchor is recorded below as this state's own review_anchor_sha,
   # so the chain does not break at the next HEAD move — and so the gate, reading
   # that field back, admits exactly what this write did.
-  REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${VERIFIED_SHA}.json"
+  REVIEW_LOG="$(hc__harness_dir)/review-log/${VERIFIED_SHA}.json"
   REVIEW_ANCHOR_SHA="$VERIFIED_SHA"
   CHAIN_ADMIT=""
   HEAD_LOG_EXISTS=0
   [ -f "$REVIEW_LOG" ] && HEAD_LOG_EXISTS=1
-  PRIOR_STATE="$PROJECT_DIR/.claude/.harness/done-state/${HC_TASK_KEY}.json"
+  PRIOR_STATE="$(hc__harness_dir)/done-state/${HC_TASK_KEY}.json"
   PRIOR_ANCHOR=""
   PRIOR_TREE=""
   if [ -f "$PRIOR_STATE" ]; then
@@ -247,13 +248,13 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   if [ -n "$PRIOR_ANCHOR" ] \
      && { command -v hc__is_object_id >/dev/null 2>&1 || type hc__is_object_id >/dev/null 2>&1; } \
      && hc__is_object_id "$PRIOR_ANCHOR" \
-     && [ -f "$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json" ]; then
+     && [ -f "$(hc__harness_dir)/review-log/${PRIOR_ANCHOR}.json" ]; then
     PRIOR_ANCHOR_OK=1
   fi
   if [ "$HEAD_LOG_EXISTS" -eq 0 ]; then
     # Tree-equality carry. `[ -n "$HEAD_TREE" ]` keeps two empties from matching.
     if [ -n "$HEAD_TREE" ] && [ "$PRIOR_TREE" = "$HEAD_TREE" ] && [ "$PRIOR_ANCHOR_OK" -eq 1 ]; then
-      REVIEW_LOG="$PROJECT_DIR/.claude/.harness/review-log/${PRIOR_ANCHOR}.json"
+      REVIEW_LOG="$(hc__harness_dir)/review-log/${PRIOR_ANCHOR}.json"
       REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
       EXTRA_ADMIT="$PRIOR_ANCHOR"
     fi
@@ -265,7 +266,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
     REVIEW_ANCHOR_SHA="$PRIOR_ANCHOR"
   fi
   if [ ! -f "$REVIEW_LOG" ]; then
-    echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} (.claude/.harness/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
+    echo "error: refusing to write — no independent review-log for HEAD ${VERIFIED_SHA:0:7} ($(hc__harness_dir)/review-log/${VERIFIED_SHA}.json); run the Step-4 review, or supply an escalation" >&2
     exit 1
   fi
   # Hard contract: the review-log must be structurally valid before any severity
@@ -328,7 +329,7 @@ fi
 # NEVER a precondition: an absent/malformed plan yields null → no plan field, and
 # the write still succeeds.
 PLAN_JSON="null"
-PLAN_FILE="$PROJECT_DIR/.claude/.harness/done-plan/${HC_TASK_KEY}.json"
+PLAN_FILE="$(hc__harness_dir)/done-plan/${HC_TASK_KEY}.json"
 if [ -f "$PLAN_FILE" ]; then
   CAND=$(jq -c '.' "$PLAN_FILE" 2>/dev/null)
   if [ -n "$CAND" ]; then
@@ -337,7 +338,7 @@ if [ -f "$PLAN_FILE" ]; then
 fi
 
 # --- merge injected facts over the payload (facts win) ----------------------
-DONE_STATE_DIR="$PROJECT_DIR/.claude/.harness/done-state"
+DONE_STATE_DIR="$(hc__harness_dir)/done-state"
 mkdir -p "$DONE_STATE_DIR" 2>/dev/null
 OUT_FILE="$DONE_STATE_DIR/${HC_TASK_KEY}.json"
 
@@ -428,7 +429,7 @@ fi
 # this exact HEAD: a new commit moves HEAD → new sha → no sidecar → re-block.
 # Guarded; a write failure here does not fail the done-state write above.
 if [ "$HAS_ESCALATION" = "yes" ]; then
-  ESC_DIR="$PROJECT_DIR/.claude/.harness/escalation-accept"
+  ESC_DIR="$(hc__harness_dir)/escalation-accept"
   mkdir -p "$ESC_DIR" 2>/dev/null
   ESC_OBJ=$(printf '%s' "$PAYLOAD" | jq -c '.escalation' 2>/dev/null)
   if [ -n "$ESC_OBJ" ] && [ "$ESC_OBJ" != "null" ]; then

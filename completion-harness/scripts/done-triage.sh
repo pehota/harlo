@@ -72,11 +72,11 @@ fi
 [ "$DEPLOY_CHECK" = "null" ] && DEPLOY_CHECK=""
 
 # --- resolve session id + task_key (same precedence as writer/SKILL Step 1) --
-MARKER="$PROJECT_DIR/.claude/.harness/current-session"
+MARKER="$(hc__harness_dir)/current-session"
 SID=""
 if [ -f "$MARKER" ]; then SID=$(cat "$MARKER" 2>/dev/null); fi
 if [ -z "$SID" ]; then
-  SID=$(ls -t "$PROJECT_DIR"/.claude/.harness/baselines/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//')
+  SID=$(ls -t "$(hc__harness_dir)"/baselines/*.sha 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.sha$//')
 fi
 if command -v hc_resolve >/dev/null 2>&1 || type hc_resolve >/dev/null 2>&1; then
   hc_resolve "$SID" 2>/dev/null
@@ -167,7 +167,7 @@ fi
 rm -f "$TMP_JSON" 2>/dev/null
 
 # --- write the plan (best-effort — a write failure must NOT block stdout) ----
-PLAN_DIR="$PROJECT_DIR/.claude/.harness/done-plan"
+PLAN_DIR="$(hc__harness_dir)/done-plan"
 mkdir -p "$PLAN_DIR" 2>/dev/null
 PLAN_FILE="$PLAN_DIR/${TASK_KEY}.json"
 printf '%s\n' "$PLAN_JSON" > "$PLAN_FILE" 2>/dev/null

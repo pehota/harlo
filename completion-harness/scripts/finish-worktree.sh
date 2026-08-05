@@ -89,7 +89,7 @@ TRUNK=$(hc__detect_trunk)
 PROJECT_DIR="$WT"
 export CLAUDE_PROJECT_DIR="$WT"
 hc_resolve "finish-worktree" 2>/dev/null
-HARNESS_DIR="$WT/.claude/.harness"
+HARNESS_DIR="$(hc__harness_dir "$WT")"
 TASK_KEY="${HC_TASK_KEY:-br-$(hc__sanitize "$BRANCH")}"
 DONE_STATE="$HARNESS_DIR/done-state/$TASK_KEY.json"
 
