@@ -94,6 +94,11 @@ push — run your push again to include the release commit. Bypass with
 git config --local include.path ../.gitconfig
 ```
 
+This trusts not just today's `pre-push` script but **any future content** of
+`.githooks/` — git executes whatever lands there with no further
+confirmation. Review `.githooks/` changes the same way you'd review any other
+code change before pulling them.
+
 Preview or apply the bump manually:
 
 ```
