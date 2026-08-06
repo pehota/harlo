@@ -95,8 +95,13 @@ echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 # defaults, so a fresh install has none.
 CONFIG_FILE="$CLAUDE_DIR/done-config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
-  jq '. + {"source_fingerprint": "none", "detected": {}}' \
-    "$CLAUDE_DIR/contracts/done-config.default.json" > "$CONFIG_FILE"
+  STARTER=$(jq '. + {"source_fingerprint": "none", "detected": {}}' \
+    "$CLAUDE_DIR/contracts/done-config.default.json" 2>/dev/null)
+  if [ -z "$STARTER" ]; then
+    echo "error: failed to build starter done-config.json from contracts/done-config.default.json" >&2
+    exit 1
+  fi
+  printf '%s\n' "$STARTER" > "$CONFIG_FILE"
   echo "  created starter done-config.json"
 else
   echo "  done-config.json already present — left untouched"
