@@ -1,0 +1,10 @@
+# Versioned repo config. Not auto-loaded by git (it never trusts a repo's own
+# tracked config automatically) — each clone opts in once with:
+#
+#     git config --local include.path ../.gitconfig
+#
+# After that one-time bootstrap, everything below applies automatically and
+# stays in sync with this file's history.
+
+[core]
+	hooksPath = .githooks

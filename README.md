@@ -86,6 +86,14 @@ higher version than `plugin.json` declares, it **auto-applies the bump**
 push — run your push again to include the release commit. Bypass with
 `git push --no-verify`.
 
+**One-time per clone** — the hook lives in the tracked `.githooks/` (not
+`.git/hooks/`, which is never versioned), wired up via the also-tracked
+`.gitconfig`. Opt in once:
+
+```
+git config --local include.path ../.gitconfig
+```
+
 Preview or apply the bump manually:
 
 ```
