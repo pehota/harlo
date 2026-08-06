@@ -86,34 +86,17 @@ chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapsh
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------
-# This literal is the canonical default's ONE permitted duplicate: install.sh
-# runs before harness-common.sh (and its sibling contracts/) exist on a fresh
-# install, so it cannot source-load contracts/done-config.default.json the
-# way done-detect.sh does. Keep the two in sync by hand — every key below
-# (except contract_version/source_fingerprint/detected, which are per-run)
-# must match contracts/done-config.default.json.
+# Read straight from the just-copied contracts/done-config.default.json
+# instead of duplicating its keys here: contracts/ is copied a few lines
+# above (line ~77), so the default file already exists on disk by this
+# point, and jq is a hard requirement of this script already (checked at
+# the top, used again below for merging hooks). Only source_fingerprint and
+# detected are added on top — they're per-run detection results, not
+# defaults, so a fresh install has none.
 CONFIG_FILE="$CLAUDE_DIR/done-config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
-  cat > "$CONFIG_FILE" <<'JSON'
-{
-  "contract_version": 1,
-  "source_fingerprint": "none",
-  "detected": {},
-  "overrides": {},
-  "max_fix_attempts": 3,
-  "max_review_rounds": 2,
-  "baseline_snapshot": true,
-  "deploy_check_cmd": null,
-  "start_check_cmd": null,
-  "start_timeout": 30,
-  "trunk": null,
-  "auto_branch": false,
-  "branch_prefix": "task/",
-  "untracked_policy": "baseline",
-  "min_review_level": "high",
-  "noncode_globs": ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"]
-}
-JSON
+  jq '. + {"source_fingerprint": "none", "detected": {}}' \
+    "$CLAUDE_DIR/contracts/done-config.default.json" > "$CONFIG_FILE"
   echo "  created starter done-config.json"
 else
   echo "  done-config.json already present — left untouched"
