@@ -11,9 +11,7 @@
     "untracked_policy",
     "min_review_level",
     "auto_branch",
-    "branch_prefix",
-    "headless_max_turns",
-    "headless_timeout_minutes"
+    "branch_prefix"
   ],
   "properties": {
     "contract_version": { "const": 1 },
