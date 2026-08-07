@@ -43,6 +43,25 @@
 # it, defeating headless operation entirely. The actual safety boundary is
 # worktree isolation + the no-push shim above, not the permission mode.
 #
+# OBSERVABILITY, not notification: the child runs with `--output-format
+# stream-json --verbose` (the latter is a hard requirement of the former —
+# `claude -p` refuses to start without it), so TRANSCRIPT is captured as full
+# JSONL, not plain text. This is structural, unforgeable evidence of what
+# actually happened in that specific run — not prose the model chose to
+# report:
+#   - the first line is a `type:"system",subtype:"init"` event carrying the
+#     live `tools`/`mcp_servers`/`plugins` the session actually started with —
+#     proof the `--strict-mcp-config`/`--plugin-dir` isolation above held for
+#     THIS run, instead of trusting the model's own say-so.
+#   - `type:"system",subtype:"hook_started"/"hook_response"` events prove the
+#     harness's own hooks (SessionStart, etc.) actually fired.
+#   - a final `type:"result"` event carries the model's closing summary plus
+#     cost/duration/turn-count metadata.
+# The raw JSONL is kept byte-for-byte in transcript.log for a human to `jq`
+# through later. report.json additionally lifts two fields out of it
+# (session_init, final_result — see step 7) purely as additive convenience;
+# nothing about the verdict computation below reads the transcript at all.
+#
 # Verification reuses the Stop gate's OWN shared predicates
 # (hc_tree_status, hc_verification_state, hc_done_state_blocked) rather than
 # re-implementing sha/tree-clean/blocking-findings comparison from scratch —
@@ -235,6 +254,7 @@ START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   cd "$WT_PATH" || exit 127
   PATH="$SHIM_DIR:$PATH" timeout "${TIMEOUT_MIN}m" \
     claude -p "$PROMPT" --permission-mode bypassPermissions --max-turns "$MAX_TURNS" \
+      --output-format stream-json --verbose \
       --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
       --plugin-dir "$PLUGIN_DIR"
 ) > "$TRANSCRIPT" 2>&1
@@ -318,6 +338,27 @@ if [ -f "$DONE_STATE" ]; then
   [ -n "$T" ] && TESTS_SUMMARY="$T"
 fi
 
+# session_init / final_result — pulled out of the raw JSONL transcript as pure
+# additive observability (see step 5's header note). `jq -R` reads the
+# transcript one RAW line at a time rather than parsing it as one JSON
+# document, so a crash-before-first-line transcript, stray stderr text mixed
+# in by `2>&1`, or any other non-JSONL content degrades a single line to
+# `fromjson?` producing nothing (the `?` swallows the parse error) instead of
+# aborting the whole extraction — exactly the capture-then-check pattern used
+# for TESTS_SUMMARY/COMMITS above, never a raw pipe straight into --argjson.
+SESSION_INIT="null"
+SI=$(jq -R -c 'fromjson? | select(.type=="system" and .subtype=="init") | {tools, mcp_servers, plugins}' \
+     "$TRANSCRIPT" 2>/dev/null | head -n1)
+if [ -n "$SI" ] && printf '%s' "$SI" | jq -e . >/dev/null 2>&1; then
+  SESSION_INIT="$SI"
+fi
+
+FINAL_RESULT="null"
+FR=$(jq -R -c 'fromjson? | select(.type=="result") | .result' "$TRANSCRIPT" 2>/dev/null | tail -n1)
+if [ -n "$FR" ] && printf '%s' "$FR" | jq -e . >/dev/null 2>&1; then
+  FINAL_RESULT="$FR"
+fi
+
 REPORT_TMP="$REPORT.tmp.$$"
 if jq -n \
   --arg task_id "$TASK_ID" \
@@ -334,6 +375,8 @@ if jq -n \
   --argjson tests "$TESTS_SUMMARY" \
   --argjson commits "$COMMITS" \
   --arg transcript "$TRANSCRIPT" \
+  --argjson session_init "$SESSION_INIT" \
+  --argjson final_result "$FINAL_RESULT" \
   '{
     task_id: $task_id,
     task: $task,
@@ -348,7 +391,9 @@ if jq -n \
     task_base: (if $task_base == "" then null else $task_base end),
     tests: $tests,
     commits: $commits,
-    transcript: $transcript
+    transcript: $transcript,
+    session_init: $session_init,
+    final_result: $final_result
   }' > "$REPORT_TMP" 2>/dev/null; then
   mv -f "$REPORT_TMP" "$REPORT" 2>/dev/null || warn "could not write $REPORT"
 else

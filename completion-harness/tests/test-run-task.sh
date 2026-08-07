@@ -62,6 +62,20 @@ MODE="${HC_TEST_CLAUDE_MODE:-green}"
 git config user.email t@t >/dev/null 2>&1
 git config user.name  t   >/dev/null 2>&1
 
+# Emit a minimal fake stream-json payload to stdout BEFORE any file/git work,
+# mirroring the shape of real `claude -p --output-format stream-json
+# --verbose` output: an init line (proving tool/MCP/plugin isolation) and a
+# final result line. run-task.sh's report.json extraction reads these back
+# out of the transcript. "garbage" mode emits non-JSONL instead, to prove
+# run-task.sh degrades to session_init/final_result: null rather than failing
+# the whole report-write step.
+if [ "$MODE" != "garbage" ]; then
+  printf '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"plugins":[]}\n'
+  printf '{"type":"result","subtype":"success","result":"fake final result text"}\n'
+else
+  printf 'not valid json at all {{{\n'
+fi
+
 write_green_state() {
   local head br key hd base files
   head=$(git rev-parse HEAD)
@@ -89,6 +103,12 @@ case "$MODE" in
     echo work >> src/app.js
     git add -A >/dev/null 2>&1
     git commit -qm "feat: headless work, never ran /done" >/dev/null 2>&1
+    ;;
+  garbage)
+    echo work >> src/app.js
+    git add -A >/dev/null 2>&1
+    git commit -qm "feat: headless work, garbage transcript" >/dev/null 2>&1
+    write_green_state
     ;;
   pushdistractor)
     echo work >> src/app.js
@@ -172,6 +192,16 @@ if jq -e '.commits | length > 0' "$REPORT" >/dev/null 2>&1; then
 else
   bad "report.json has no commits: $(cat "$REPORT" 2>/dev/null)"
 fi
+if jq -e '.session_init.mcp_servers == [] and .session_init.tools == [] and .session_init.plugins == []' "$REPORT" >/dev/null 2>&1; then
+  ok "report.json captures session_init from the stream-json init line"
+else
+  bad "report.json session_init wrong: $(cat "$REPORT" 2>/dev/null)"
+fi
+if jq -e '.final_result == "fake final result text"' "$REPORT" >/dev/null 2>&1; then
+  ok "report.json captures final_result from the stream-json result line"
+else
+  bad "report.json final_result wrong: $(cat "$REPORT" 2>/dev/null)"
+fi
 if [ -f "$(dirname "$REPORT")/transcript.log" ]; then
   ok "transcript.log written"
 else
@@ -211,6 +241,34 @@ if jq -e '.verdict == "NO_STATE" and (.block_reason | type == "string")' "$REPOR
   ok "report.json records NO_STATE with a block_reason"
 else
   bad "report.json wrong: $(cat "$REPORT" 2>/dev/null)"
+fi
+
+# ===========================================================================
+# GRACEFUL DEGRADATION — non-JSONL transcript still yields a written report.
+# ===========================================================================
+echo "-- run-task: session_init/final_result degrade to null on a non-JSONL transcript --"
+make_pair
+fake_claude_bin
+MODE="garbage"
+run_task "$REPO" "add a feature with a broken transcript" "task/headless-garbage"
+
+ENTRY=$(last_index_entry "$REPO")
+TASK_ID=$(printf '%s' "$ENTRY" | jq -r '.task_id' 2>/dev/null)
+REPORT=$(report_path_for "$REPO" "$TASK_ID")
+if [ -f "$REPORT" ] && jq -e '.verdict == "PASSED"' "$REPORT" >/dev/null 2>&1; then
+  ok "report.json still written successfully despite a non-JSONL transcript"
+else
+  bad "report.json missing or wrong verdict on garbage transcript: $(cat "$REPORT" 2>/dev/null)"
+fi
+if jq -e '.session_init == null' "$REPORT" >/dev/null 2>&1; then
+  ok "session_init degrades to null on a non-JSONL transcript"
+else
+  bad "session_init did not degrade to null: $(cat "$REPORT" 2>/dev/null)"
+fi
+if jq -e '.final_result == null' "$REPORT" >/dev/null 2>&1; then
+  ok "final_result degrades to null on a non-JSONL transcript"
+else
+  bad "final_result did not degrade to null: $(cat "$REPORT" 2>/dev/null)"
 fi
 
 # ===========================================================================
