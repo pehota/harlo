@@ -15,5 +15,30 @@
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high",
-  "contract_version": 1
+  "contract_version": 1,
+  "worktree": {
+    "detected": {
+      "install_cmd": null,
+      "setup_cmd": null,
+      "setup_candidates": [],
+      "link": [
+        ".claude/settings.local.json"
+      ],
+      "link_overflow": [],
+      "link_candidates": [],
+      "link_candidates_overflow": [],
+      "skipped": {
+        "nested_in_ignored_dir": 0,
+        "over_depth": 0,
+        "over_size": 0
+      },
+      "limits": {
+        "max_depth": 5,
+        "max_bytes": 65536,
+        "max_link": 50
+      }
+    },
+    "source_fingerprint": "f9af11fc60dbbb049df08a266d040a3d998ed046c88b82e987365df2bad218a9",
+    "overrides": {}
+  }
 }

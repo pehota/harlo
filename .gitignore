@@ -6,3 +6,6 @@ test-expectations/
 
 # Harness runtime state (plugin active — machine-local, seeded at runtime)
 .claude/.harness/
+
+# Task worktrees (new-worktree.sh / run-task.sh) — ephemeral, machine-local
+.worktrees/
