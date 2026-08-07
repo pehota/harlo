@@ -20,5 +20,7 @@
   "min_review_level": "high",
   "auto_branch": false,
   "branch_prefix": "task/",
-  "noncode_globs": []
+  "noncode_globs": [],
+  "headless_max_turns": 60,
+  "headless_timeout_minutes": 45
 }

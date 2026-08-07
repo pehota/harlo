@@ -12,5 +12,7 @@
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high",
-  "noncode_globs": ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"]
+  "noncode_globs": ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"],
+  "headless_max_turns": 60,
+  "headless_timeout_minutes": 45
 }

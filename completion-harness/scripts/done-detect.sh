@@ -261,7 +261,8 @@ else
         | reduce ["overrides","max_fix_attempts","baseline_snapshot","trunk",
                   "auto_branch","branch_prefix","untracked_policy",
                   "max_review_rounds","min_review_level","noncode_globs",
-                  "start_check_cmd","start_timeout"][] as $k
+                  "start_check_cmd","start_timeout",
+                  "headless_max_turns","headless_timeout_minutes"][] as $k
             (.; if has($k) then . else .[$k] = $defaults[$k] end)
       ' "$CONFIG_FILE" > "$TMP" 2>/dev/null
       # Write-time gate: never overwrite existing valid state with an invalid one.

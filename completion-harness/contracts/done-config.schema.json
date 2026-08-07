@@ -11,7 +11,9 @@
     "untracked_policy",
     "min_review_level",
     "auto_branch",
-    "branch_prefix"
+    "branch_prefix",
+    "headless_max_turns",
+    "headless_timeout_minutes"
   ],
   "properties": {
     "contract_version": { "const": 1 },
@@ -39,6 +41,8 @@
     "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
     "auto_branch": { "type": "boolean" },
     "branch_prefix": { "type": "string" },
+    "headless_max_turns": { "type": "integer" },
+    "headless_timeout_minutes": { "type": "integer" },
     "noncode_globs": {
       "type": "array",
       "items": { "type": "string" }

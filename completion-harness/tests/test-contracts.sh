@@ -77,7 +77,7 @@ if ! vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-notrunbad.json"; then
 else bad "done-state tests not_run WITHOUT reason → nonzero"; fi
 
 cat > "$TMP/done-config.json" <<'JSON'
-{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/"}
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","headless_max_turns":60,"headless_timeout_minutes":45}
 JSON
 if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config.json"; then
   ok "done-config minimal valid → 0"
@@ -85,7 +85,7 @@ else bad "done-config minimal valid → 0"; fi
 
 # done-config WITH noncode_globs (array of strings) → valid (#5).
 cat > "$TMP/done-config-noncode.json" <<'JSON'
-{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","noncode_globs":["*.md","LICENSE","*.png"]}
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","noncode_globs":["*.md","LICENSE","*.png"],"headless_max_turns":60,"headless_timeout_minutes":45}
 JSON
 if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-noncode.json"; then
   ok "done-config with noncode_globs (string array) → 0"
