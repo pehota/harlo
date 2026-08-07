@@ -65,7 +65,7 @@
 # actually happened in that specific run — not prose the model chose to
 # report:
 #   - the first line is a `type:"system",subtype:"init"` event carrying the
-#     live `tools`/`mcp_servers`/`plugins` the session actually started with —
+#     live `tools`/`mcp_servers`/`plugins`/`skills` the session actually started with —
 #     proof the `--strict-mcp-config`/`--plugin-dir` isolation above held for
 #     THIS run, instead of trusting the model's own say-so.
 #   - `type:"system",subtype:"hook_started"/"hook_response"` events prove the
@@ -363,7 +363,7 @@ fi
 # aborting the whole extraction — exactly the capture-then-check pattern used
 # for TESTS_SUMMARY/COMMITS above, never a raw pipe straight into --argjson.
 SESSION_INIT="null"
-SI=$(jq -R -c 'fromjson? | select(.type=="system" and .subtype=="init") | {tools, mcp_servers, plugins}' \
+SI=$(jq -R -c 'fromjson? | select(.type=="system" and .subtype=="init") | {tools, mcp_servers, plugins, skills}' \
      "$TRANSCRIPT" 2>/dev/null | head -n1)
 if [ -n "$SI" ] && printf '%s' "$SI" | jq -e . >/dev/null 2>&1; then
   SESSION_INIT="$SI"

@@ -70,7 +70,7 @@ git config user.name  t   >/dev/null 2>&1
 # run-task.sh degrades to session_init/final_result: null rather than failing
 # the whole report-write step.
 if [ "$MODE" != "garbage" ]; then
-  printf '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"plugins":[]}\n'
+  printf '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"plugins":[],"skills":["completion-harness:done"]}\n'
   printf '{"type":"result","subtype":"success","result":"fake final result text"}\n'
 else
   printf 'not valid json at all {{{\n'
@@ -192,7 +192,7 @@ if jq -e '.commits | length > 0' "$REPORT" >/dev/null 2>&1; then
 else
   bad "report.json has no commits: $(cat "$REPORT" 2>/dev/null)"
 fi
-if jq -e '.session_init.mcp_servers == [] and .session_init.tools == [] and .session_init.plugins == []' "$REPORT" >/dev/null 2>&1; then
+if jq -e '.session_init.mcp_servers == [] and .session_init.tools == [] and .session_init.plugins == [] and .session_init.skills == ["completion-harness:done"]' "$REPORT" >/dev/null 2>&1; then
   ok "report.json captures session_init from the stream-json init line"
 else
   bad "report.json session_init wrong: $(cat "$REPORT" 2>/dev/null)"
