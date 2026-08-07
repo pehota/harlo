@@ -53,8 +53,18 @@ fi
 # set -e, a bare `|| die ...` in that state would 127-and-continue instead of
 # exiting, silently skipping every check that follows. This one check stays a
 # literal (not die) for the same reason.
-type hc__detect_trunk >/dev/null 2>&1 \
-  || { printf 'run-task: harness-common.sh could not be sourced (needed for trunk resolution)\n' >&2; exit 1; }
+#
+# Checks hc_done_state_blocked specifically — the LAST function this script
+# calls (harness-common.sh:1917 of ~2100), not an early one like
+# hc__detect_trunk. A `source` that dies partway through a syntax error still
+# defines every function textually before the break, so an early check proves
+# nothing about functions defined later in the file. This script's own verdict
+# logic depends on hc_resolve/hc_tree_status/hc_done_state_blocked, all
+# defined well after hc__detect_trunk — a truncated source there would let
+# every call site's `2>/dev/null` swallow a 127 and silently compute
+# VERDICT=PASSED with none of the actual DoD checks having run.
+type hc_done_state_blocked >/dev/null 2>&1 \
+  || { printf 'run-task: harness-common.sh could not be fully sourced (needed for DoD verification)\n' >&2; exit 1; }
 
 HC_DIE_PREFIX="run-task"
 die()  { hc_die "$1"; }
@@ -150,17 +160,22 @@ SHIM_DIR=$(mktemp -d) && [ -n "$SHIM_DIR" ] && [ -d "$SHIM_DIR" ] \
 cat > "$SHIM_DIR/git" <<SHIM
 #!/bin/bash
 # no-push guardrail for run-task.sh's child claude process. Every subcommand
-# passes through to the real git except 'push', which is refused outright —
-# a human reviews and pushes this branch, never the unattended session.
-case "\${1:-}" in
-  push)
-    printf 'git push is disabled under run-task.sh: a human reviews and pushes this branch.\n' >&2
-    exit 1
-    ;;
-  *)
-    exec "$REAL_GIT" "\$@"
-    ;;
-esac
+# passes through to the real git except 'push'/'send-pack', which are refused
+# outright — a human reviews and pushes this branch, never the unattended
+# session. Scans the WHOLE argument list, not just \$1: 'git -c x=y push' and
+# 'git -C . push' put a global option ahead of the subcommand, and a bare \$1
+# check misses both — this only needs to catch an unintentional push from a
+# confused-not-adversarial run, not survive a model deliberately evading it
+# (aliases/plumbing that reimplement push are out of scope for that reason).
+for arg in "\$@"; do
+  case "\$arg" in
+    push|send-pack)
+      printf 'git push is disabled under run-task.sh: a human reviews and pushes this branch.\n' >&2
+      exit 1
+      ;;
+  esac
+done
+exec "$REAL_GIT" "\$@"
 SHIM
 chmod +x "$SHIM_DIR/git"
 # Cleanup only removes the shim tempdir; PATH itself is scoped to the child's

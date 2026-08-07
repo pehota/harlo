@@ -99,6 +99,11 @@ case "$MODE" in
     if git push origin HEAD:main; then
       : > PUSH_SUCCEEDED
     fi
+    # A global option ahead of the subcommand — the exact form that used to
+    # slip past a bare "$1" check (case "${1:-}" saw "-c", not "push").
+    if git -c foo.bar=baz push origin HEAD:main; then
+      : > PUSH_SUCCEEDED_WITH_C_FLAG
+    fi
     ;;
 esac
 exit 0
@@ -223,6 +228,11 @@ if [ ! -f "$WT/PUSH_SUCCEEDED" ]; then
   ok "the child's git push did NOT succeed"
 else
   bad "the no-push shim failed to stop a push"
+fi
+if [ ! -f "$WT/PUSH_SUCCEEDED_WITH_C_FLAG" ]; then
+  ok "git -c foo=bar push (global option ahead of the subcommand) also refused"
+else
+  bad "the shim only checked \$1 — a global-option-prefixed push slipped through"
 fi
 if [ "$(git -C "$ORIGIN" rev-parse main)" = "$BEFORE_REMOTE" ]; then
   ok "the real remote is byte-identical — nothing was pushed"
