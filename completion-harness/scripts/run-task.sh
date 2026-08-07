@@ -18,6 +18,25 @@
 #     process ONLY — every subcommand passes through to the real git except
 #     `push`, which is refused. The shimmed PATH never leaks into this
 #     script's own execution after the child exits.
+#   - `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` on the child
+#     invocation, so it starts with ZERO MCP servers regardless of what is
+#     registered ambient on the machine (user-level marketplace entries —
+#     Atlassian, Figma, Gmail, Chrome DevTools, etc.). Nobody is watching a
+#     headless run to notice one of those get invoked or interfere. This is
+#     an empty allowlist by design, not a configurable one — no per-task MCP
+#     needs exist yet, and adding a config surface for a need that does not
+#     exist is exactly the kind of speculative flexibility this harness
+#     avoids elsewhere.
+#   - `--plugin-dir "$PLUGIN_DIR"` (an absolute path resolved from
+#     completion-harness/, one level above this script) on the same child
+#     invocation, loading THIS repo's own plugin bundle explicitly. Locking
+#     out ambient MCP servers/plugins must not also lock out the harness's
+#     own /done skill and SessionStart/Stop/PreToolUse hooks — the entire
+#     headless design depends on the model being able to invoke /done and on
+#     those hooks firing regardless of whatever plugin registration exists
+#     (or doesn't) ambient on the machine. Same reasoning as the MCP
+#     isolation above: an explicit, reproducible allowlist of exactly one
+#     entry, not dependence on ambient global state.
 #
 # `--permission-mode bypassPermissions` is a deliberate, flagged tradeoff:
 # without it, any tool-approval prompt hangs forever with nobody to answer
@@ -198,13 +217,21 @@ looping."
 # ===========================================================================
 # 5. invoke claude -p, from inside the worktree, with the shimmed PATH.
 # ===========================================================================
+# completion-harness/ (this repo's own bundle, one level up from this script)
+# is itself a valid plugin root (.claude-plugin/plugin.json, hooks/, skills/
+# directly underneath) — resolved to an absolute path the same way SCRIPT_DIR
+# is above, never passed to --plugin-dir as a literal "..".
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)" || die "cannot resolve plugin dir from $SCRIPT_DIR/.."
+
 say "invoking claude -p …"
 say ""
 START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 (
   cd "$WT_PATH" || exit 127
   PATH="$SHIM_DIR:$PATH" timeout "${TIMEOUT_MIN}m" \
-    claude -p "$PROMPT" --permission-mode bypassPermissions --max-turns "$MAX_TURNS"
+    claude -p "$PROMPT" --permission-mode bypassPermissions --max-turns "$MAX_TURNS" \
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+      --plugin-dir "$PLUGIN_DIR"
 ) > "$TRANSCRIPT" 2>&1
 CLAUDE_RC=$?
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
