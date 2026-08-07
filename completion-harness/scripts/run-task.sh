@@ -212,7 +212,12 @@ yourself before considering the work finished; the harness's Definition-of-
 Done checklist is the actual completion criterion, not your own judgment.
 Never attempt to push or open a pull request — a human reviews this branch
 afterward. If you are genuinely blocked, stop and explain rather than
-looping."
+looping. This is a single unattended turn (claude -p) — there is no
+interactive loop to resume you when a background task finishes, unlike a
+normal session. Run tests and other verification commands in the
+FOREGROUND and wait for them to finish, even if slow; backgrounding a
+command and ending your turn before it completes means the harness never
+sees the result and the run is scored incomplete."
 
 # ===========================================================================
 # 5. invoke claude -p, from inside the worktree, with the shimmed PATH.
