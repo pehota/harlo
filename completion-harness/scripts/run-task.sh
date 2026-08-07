@@ -29,14 +29,29 @@
 #     avoids elsewhere.
 #   - `--plugin-dir "$PLUGIN_DIR"` (an absolute path resolved from
 #     completion-harness/, one level above this script) on the same child
-#     invocation, loading THIS repo's own plugin bundle explicitly. Locking
-#     out ambient MCP servers/plugins must not also lock out the harness's
-#     own /done skill and SessionStart/Stop/PreToolUse hooks — the entire
-#     headless design depends on the model being able to invoke /done and on
-#     those hooks firing regardless of whatever plugin registration exists
-#     (or doesn't) ambient on the machine. Same reasoning as the MCP
-#     isolation above: an explicit, reproducible allowlist of exactly one
-#     entry, not dependence on ambient global state.
+#     invocation, loading THIS repo's own plugin bundle explicitly — needed
+#     so /done's own skill and SessionStart/Stop/PreToolUse hooks are
+#     available regardless of whatever plugin registration exists (or
+#     doesn't) ambient on the machine.
+#   - `--setting-sources ""`, WITHOUT WHICH `--plugin-dir` is additive, not
+#     exclusive: measured directly (`claude -p ... --output-format
+#     stream-json --verbose`, reading the `type:"system",subtype:"init"`
+#     event's `plugins`/`skills` fields) that `--plugin-dir` alone still
+#     loads every ambient user-level plugin ALONGSIDE the explicit one, and
+#     that at least one of them (ponytail) has a SessionStart hook that
+#     actually fires and injects its own persona into the session — real,
+#     observed cross-plugin interference, not a theoretical risk. Neither
+#     `--bare` nor `--safe-mode` fixes this cleanly: `--bare` does not
+#     reduce the ambient plugin list at all; `--safe-mode` does, but also
+#     suppresses the explicitly-requested `--plugin-dir` plugin's own skill
+#     (`completion-harness:done` disappears too) — too blunt, breaks the
+#     thing this design needs. `--setting-sources ""` excludes every
+#     settings tier (user/project/local) that ambient plugin registration is
+#     actually pulled from, while `--plugin-dir`'s explicit session-scoped
+#     load is independent of settings sources and still works. Verified:
+#     only `completion-harness` in `plugins`, zero ambient plugin skills,
+#     zero unwanted hook injections, `completion-harness:done` and the
+#     harness's own SessionStart hook both still present and firing.
 #
 # `--permission-mode bypassPermissions` is a deliberate, flagged tradeoff:
 # without it, any tool-approval prompt hangs forever with nobody to answer
@@ -256,7 +271,8 @@ START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     claude -p "$PROMPT" --permission-mode bypassPermissions --max-turns "$MAX_TURNS" \
       --output-format stream-json --verbose \
       --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-      --plugin-dir "$PLUGIN_DIR"
+      --plugin-dir "$PLUGIN_DIR" \
+      --setting-sources ""
 ) > "$TRANSCRIPT" 2>&1
 CLAUDE_RC=$?
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
