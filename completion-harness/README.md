@@ -147,6 +147,63 @@ deliberately never auto-detected into something runnable: candidates are reporte
 for you to promote, because running a `setup` target found by heuristic is how a
 provisioning script drops a database.
 
+### Headless execution — `run-task.sh`
+
+```
+scripts/run-task.sh "<task description>" [branch-name]
+```
+
+Kicks off an implementation task with `claude -p` and walks away, trusting the
+harness to enforce the same Definition-of-Done it enforces interactively, then
+leaving a full record of what happened. **Observability, not notification** —
+there is no push alert; the record is `report.json` + `transcript.log` + an
+append-only `index.jsonl`, all under the MAIN checkout's `.claude/.harness/`
+(so they survive even if the worktree is later removed).
+
+What it does, in order:
+
+1. Provisions a worktree (`new-worktree.sh`, off `origin/<trunk>`) and pins
+   its tree baseline (`baseline-snapshot.sh`, standalone).
+2. Installs a **no-push guardrail**: a `git` shim placed first on `PATH` for
+   the child `claude` process only. Every subcommand passes through to the
+   real `git` except `push`, which is refused with a clear message. This —
+   not a prompt instruction the model could ignore under pressure — is the
+   actual safety boundary, together with worktree isolation.
+3. Runs, from inside the worktree, with the shimmed `PATH`:
+   `timeout <headless_timeout_minutes>m claude -p "<prompt>" --permission-mode
+   bypassPermissions --max-turns <headless_max_turns>`. The prompt is the task
+   text plus fixed instructions: the branch is already set up; run `/done`
+   yourself before considering the work finished; never push or open a PR — a
+   human reviews the branch afterward; if genuinely blocked, stop and explain.
+   `bypassPermissions` is a deliberate, flagged tradeoff — without it, any
+   tool-approval prompt hangs forever with nobody to answer it.
+4. After the process exits, **verifies independently** — never trusts the
+   model's own claim of completion. Reuses the Stop gate's own shared
+   predicates (`hc_tree_status`, `hc_verification_state`,
+   `hc_done_state_blocked`) to compute one verdict: `PASSED`, `BLOCKED` (a
+   done-state exists but the gate's conditions are not met), `NO_STATE` (the
+   model never ran `/done`), `TIMED_OUT`, or `ERROR`.
+5. Writes the report and exits non-zero unless the verdict is `PASSED`, so
+   scripting/CI around this can branch on exit code.
+
+**Never merges, never pushes, never opens a PR.** The worktree and branch are
+left in place for you to inspect and finish by hand — with `finish-worktree.sh`
+above, or later PR automation, which is explicitly out of scope for this
+iteration.
+
+Config (`.claude/done-config.json`):
+
+- `headless_max_turns` (default `60`) — the `--max-turns` bound.
+- `headless_timeout_minutes` (default `45`) — the wrapping `timeout` bound.
+
+Inspecting past runs:
+
+```
+jq . .claude/.harness/headless-tasks/<task-id>/report.json
+jq -s 'sort_by(.timestamp)' .claude/.harness/headless-tasks/index.jsonl
+jq 'select(.verdict != "PASSED")' .claude/.harness/headless-tasks/index.jsonl
+```
+
 ## Uninstall
 
 - Remove the two hook entries from `<project>/.claude/settings.local.json`

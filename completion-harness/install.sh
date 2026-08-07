@@ -47,6 +47,7 @@ cp "$SCRIPT_DIR/scripts/done-preflight.sh"    "$CLAUDE_DIR/scripts/done-prefligh
 cp "$SCRIPT_DIR/scripts/worktree-detect.sh"   "$CLAUDE_DIR/scripts/worktree-detect.sh"
 cp "$SCRIPT_DIR/scripts/new-worktree.sh"      "$CLAUDE_DIR/scripts/new-worktree.sh"
 cp "$SCRIPT_DIR/scripts/finish-worktree.sh"   "$CLAUDE_DIR/scripts/finish-worktree.sh"
+cp "$SCRIPT_DIR/scripts/run-task.sh"          "$CLAUDE_DIR/scripts/run-task.sh"
 # Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
 # harness-resolve.sh is the executable wrapper; auto-branch.sh is the
 # PreToolUse hook.
@@ -82,6 +83,7 @@ chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapsh
          "$CLAUDE_DIR/scripts/done-preflight.sh" \
          "$CLAUDE_DIR/scripts/worktree-detect.sh" \
          "$CLAUDE_DIR/scripts/new-worktree.sh" "$CLAUDE_DIR/scripts/finish-worktree.sh" \
+         "$CLAUDE_DIR/scripts/run-task.sh" \
          "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
