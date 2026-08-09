@@ -8,7 +8,8 @@
 #   2. check-version.sh: if the range needs a higher version than plugin.json
 #      declares, AUTO-BUMP (bump-version.sh writes + commits the bump) and then
 #      ABORT so the release-bump commit gets included on the next push.
-#   3. run-tests.sh: run the harness test suites.
+#   3. run-tests.sh: run the harness test suites, against an isolated detached
+#      worktree of the pushed commit — never in-place in this checkout.
 #
 # Tracked here (.githooks/) so it is shared and reviewable. It is NOT active
 # until installed into this clone's hook path. To enable (does not disturb the
@@ -72,9 +73,32 @@ else
   echo "pre-push: version OK."
 fi
 
-# --- 3. tests ---------------------------------------------------------------
-echo "pre-push: running harness test suites…"
-if ! bash run-tests.sh; then
+# --- 3. tests (run against an isolated worktree of the pushed commit) ------
+# Never run the suite in-place against this checkout: a bug in a test fixture
+# (e.g. one that resolves an empty/wrong path and then runs real git ops)
+# must corrupt a throwaway worktree, not this repo's refs or remote. This
+# guards against exactly that incident class, not just the one instance of it
+# already fixed in the fixtures themselves.
+if [ -z "$HEAD" ]; then
+  echo "pre-push: no HEAD to test — skipping test suite."
+  exit 0
+fi
+
+echo "pre-push: running harness test suites (isolated worktree @ $HEAD)…"
+WT_DIR=$(mktemp -d) && [ -n "$WT_DIR" ] && [ -d "$WT_DIR" ] \
+  || { echo "pre-push: mktemp -d failed — cannot isolate the test run — push aborted." >&2; exit 1; }
+cleanup_wt() {
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1
+  rm -rf "$WT_DIR" 2>/dev/null
+}
+trap cleanup_wt EXIT
+
+if ! git worktree add --detach --quiet "$WT_DIR" "$HEAD" >/dev/null 2>&1; then
+  echo "pre-push: could not create isolated worktree at $HEAD — push aborted." >&2
+  exit 1
+fi
+
+if ! (cd "$WT_DIR" && bash run-tests.sh); then
   echo "pre-push: tests FAILED — push aborted. (bypass with 'git push --no-verify' if you must.)" >&2
   exit 1
 fi
