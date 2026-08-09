@@ -26,7 +26,7 @@ echo "== test-triage =="
 # $1 = detected JSON, $2 = start_check_cmd (json), $3 = deploy_check_cmd (json).
 run_triage() {
   local detected="$1" start_check="${2:-null}" deploy_check="${3:-null}"
-  T_TMP=$(mktemp -d)
+  T_TMP=$(hc__test_mktemp_d)
   mkdir -p "$T_TMP/.claude/.harness/baselines"
   cat > "$T_TMP/.claude/done-config.json" <<JSON
 {"contract_version":1,"detected":${detected},"overrides":{},"start_check_cmd":${start_check},"deploy_check_cmd":${deploy_check}}
@@ -103,7 +103,7 @@ else bad "Step 4 not applicable in deploy-only config"; fi
 cleanup_triage
 
 # --- 5. overrides win: detected lint absent but override sets it → applicable
-T5=$(mktemp -d); mkdir -p "$T5/.claude/.harness/baselines"
+T5=$(hc__test_mktemp_d); mkdir -p "$T5/.claude/.harness/baselines"
 cat > "$T5/.claude/done-config.json" <<'JSON'
 {"contract_version":1,"detected":{},"overrides":{"lint":"eslint ."},"start_check_cmd":null,"deploy_check_cmd":null}
 JSON
@@ -113,7 +113,7 @@ if echo "$OUT5" | grep -q '^\[2-lint\]'; then ok "override lint wins → 2-lint 
 rm -rf "$T5"
 
 # --- 6. hard-error path (jq missing) → non-zero exit + EMPTY stdout ----------
-T6=$(mktemp -d); mkdir -p "$T6/nojq" "$T6/.claude/.harness/baselines"
+T6=$(hc__test_mktemp_d); mkdir -p "$T6/nojq" "$T6/.claude/.harness/baselines"
 cat > "$T6/.claude/done-config.json" <<'JSON'
 {"contract_version":1,"detected":{"lint":"x"},"overrides":{}}
 JSON

@@ -122,7 +122,7 @@ fi
 
 echo "-- new-worktree: refuses an existing worktree path --"
 make_pair
-ALT=$(mktemp -d); CLEANUP+=("$ALT")
+ALT=$(hc__test_mktemp_d); CLEANUP+=("$ALT")
 mkdir -p "$ALT/occupied"
 if CLAUDE_PROJECT_DIR="$REPO" bash "$NEW" "task/occupied" "$ALT/occupied" >/dev/null 2>&1; then
   bad "did not refuse an existing worktree path"

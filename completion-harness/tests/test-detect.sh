@@ -8,7 +8,7 @@ SCRIPT="$(cd "$(dirname "$0")/../scripts" && pwd)/done-detect.sh"
 # shellcheck source=./test-helpers.sh
 . "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
-TMP=$(mktemp -d)
+TMP=$(hc__test_mktemp_d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.claude"
 

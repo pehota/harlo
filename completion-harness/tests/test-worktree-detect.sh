@@ -421,7 +421,7 @@ else
 fi
 
 echo "-- degrades outside a git repo --"
-NOGIT=$(mktemp -d); CLEANUP+=("$NOGIT")
+NOGIT=$(hc__test_mktemp_d); CLEANUP+=("$NOGIT")
 mkdir -p "$NOGIT/.claude"
 OUT=$(CLAUDE_PROJECT_DIR="$NOGIT" bash "$DETECT" 2>/dev/null); RC=$?
 if [ "$RC" -eq 0 ] && has "$OUT" '.link == []'; then

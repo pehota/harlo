@@ -20,7 +20,7 @@ trap 'for d in "${CLEANUP[@]}"; do rm -rf "$d" 2>/dev/null; done' EXIT
 
 # mk <file>... → a fresh tmpdir containing each named (empty) file. Echoes it.
 mk() {
-  local d; d=$(mktemp -d); CLEANUP+=("$d")
+  local d; d=$(hc__test_mktemp_d); CLEANUP+=("$d")
   local f
   for f in "$@"; do : > "$d/$f"; done
   printf '%s' "$d"

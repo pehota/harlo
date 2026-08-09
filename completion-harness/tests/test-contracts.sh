@@ -11,7 +11,7 @@ CONTRACTS="$(cd "$(dirname "$0")/../contracts" && pwd)"
 # shellcheck source=./test-helpers.sh
 . "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
 
-TMP=$(mktemp -d)
+TMP=$(hc__test_mktemp_d)
 trap 'rm -rf "$TMP"' EXIT
 
 # Validate schema $1 against fixture $2 — returns hc_validate exit code.
