@@ -27,7 +27,7 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
 
-if command -v hc_require_jq >/dev/null 2>&1 || type hc_require_jq >/dev/null 2>&1; then
+if hc_has_fn hc_require_jq; then
   hc_require_jq "error: jq is required to build done-state"
 elif ! command -v jq >/dev/null 2>&1; then
   echo "error: jq is required to build done-state" >&2

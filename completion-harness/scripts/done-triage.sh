@@ -29,7 +29,7 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
 fi
 
 # jq is mandatory — without it we cannot read config or build/validate the plan.
-if command -v hc_require_jq >/dev/null 2>&1 || type hc_require_jq >/dev/null 2>&1; then
+if hc_has_fn hc_require_jq; then
   hc_require_jq 'done-triage: jq is required — cannot compute plan; run ALL steps (fallback)'
 elif ! command -v jq >/dev/null 2>&1; then
   printf 'done-triage: jq is required — cannot compute plan; run ALL steps (fallback)\n' >&2
@@ -158,9 +158,9 @@ if [ -z "$TMP_JSON" ]; then
   exit 1
 fi
 printf '%s\n' "$PLAN_JSON" > "$TMP_JSON"
-if ! hc_validate "$HC_CONTRACTS_DIR/done-plan.schema.json" "$TMP_JSON" >/dev/null 2>&1; then
-  printf 'done-triage: plan failed contract validation: %s; run ALL steps (fallback)\n' \
-    "$(hc_validate "$HC_CONTRACTS_DIR/done-plan.schema.json" "$TMP_JSON" 2>&1)" >&2
+VALIDATION_ERR=$(hc_validate "$HC_CONTRACTS_DIR/done-plan.schema.json" "$TMP_JSON" 2>&1)
+if [ $? -ne 0 ]; then
+  printf 'done-triage: plan failed contract validation: %s; run ALL steps (fallback)\n' "$VALIDATION_ERR" >&2
   rm -f "$TMP_JSON" 2>/dev/null
   exit 1
 fi

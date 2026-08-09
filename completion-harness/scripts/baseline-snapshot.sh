@@ -177,6 +177,20 @@ if hc_has_fn hc_live_task_keys; then
   fi
 fi
 
+# --- helper: delete *.json files in a dir whose basename-minus-.json is not
+# in the live-sha keep-set --------------------------------------------------
+prune_by_live_shas() {
+  local dir="$1" live_shas="$2" f sha
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    sha=$(basename "$f" .json)
+    if ! printf '%s\n' "$live_shas" | grep -Fxq -- "$sha" 2>/dev/null; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done
+  return 0
+}
+
 # --- review-log hygiene: prune superseded fix-churn logs --------------------
 # review-log/<HEAD>.json accumulates one per fix commit. A log is load-bearing
 # ONLY if its <HEAD> is a commit the gate might check — the tip of some local
@@ -188,26 +202,14 @@ if { [ -d "$HARNESS_DIR/review-log" ] || [ -d "$HARNESS_DIR/escalation-accept" ]
   # Only prune when we could compute a keep-set (git ok). Empty keep-set in a git
   # repo means no branches AND no HEAD — treat as "cannot judge" → keep all.
   if [ -n "$LIVE_SHAS" ]; then
-    for f in "$HARNESS_DIR/review-log"/*.json; do
-      [ -e "$f" ] || continue
-      sha=$(basename "$f" .json)
-      if ! printf '%s\n' "$LIVE_SHAS" | grep -Fxq -- "$sha" 2>/dev/null; then
-        rm -f "$f" 2>/dev/null || true
-      fi
-    done
+    prune_by_live_shas "$HARNESS_DIR/review-log" "$LIVE_SHAS"
     # escalation-accept/<sha>.json (P2-b, #6) is governed by the SAME keep-set:
     # exempt from the 14-day age-reap (above), pruned ONLY when its SHA is no
     # longer reachable (unreachable commit → acceptance is dead). Mirrors the
     # review-log prune so a live task's per-commit acceptance survives as long as
     # its commit does, and no longer.
     if [ -d "$HARNESS_DIR/escalation-accept" ]; then
-      for f in "$HARNESS_DIR/escalation-accept"/*.json; do
-        [ -e "$f" ] || continue
-        sha=$(basename "$f" .json)
-        if ! printf '%s\n' "$LIVE_SHAS" | grep -Fxq -- "$sha" 2>/dev/null; then
-          rm -f "$f" 2>/dev/null || true
-        fi
-      done
+      prune_by_live_shas "$HARNESS_DIR/escalation-accept" "$LIVE_SHAS"
     fi
   fi
 fi
@@ -377,7 +379,7 @@ if [ "$SNAPSHOT_ENABLED" = "true" ] && [ ! -f "$TESTS_FILE" ]; then
   # known yet. Run the (idempotent) detector to seed/refresh done-config.json,
   # then re-read the effective test command. Guarded; never fails the hook.
   if [ -z "$TEST_CMD" ]; then
-    if [ -x "$SCRIPT_DIR/done-detect.sh" ] || [ -f "$SCRIPT_DIR/done-detect.sh" ]; then
+    if [ -f "$SCRIPT_DIR/done-detect.sh" ]; then
       bash "$SCRIPT_DIR/done-detect.sh" >/dev/null 2>&1
     fi
     if hc_has_jq && [ -f "$CONFIG_FILE" ]; then

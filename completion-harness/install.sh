@@ -37,23 +37,28 @@ CLAUDE_DIR="$TARGET_DIR/.claude"
 mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod" "$CLAUDE_DIR/contracts"
 
 # --- copy bundle files ------------------------------------------------------
-cp "$SCRIPT_DIR/scripts/done-gate.sh"         "$CLAUDE_DIR/scripts/done-gate.sh"
-cp "$SCRIPT_DIR/scripts/baseline-snapshot.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh"
-cp "$SCRIPT_DIR/scripts/done-detect.sh"       "$CLAUDE_DIR/scripts/done-detect.sh"
-cp "$SCRIPT_DIR/scripts/done-write-state.sh"  "$CLAUDE_DIR/scripts/done-write-state.sh"
-cp "$SCRIPT_DIR/scripts/done-triage.sh"       "$CLAUDE_DIR/scripts/done-triage.sh"
-cp "$SCRIPT_DIR/scripts/done-preflight.sh"    "$CLAUDE_DIR/scripts/done-preflight.sh"
-# Worktree provisioning: a Step-0-shaped probe plus the two operator scripts.
-cp "$SCRIPT_DIR/scripts/worktree-detect.sh"   "$CLAUDE_DIR/scripts/worktree-detect.sh"
-cp "$SCRIPT_DIR/scripts/new-worktree.sh"      "$CLAUDE_DIR/scripts/new-worktree.sh"
-cp "$SCRIPT_DIR/scripts/finish-worktree.sh"   "$CLAUDE_DIR/scripts/finish-worktree.sh"
-cp "$SCRIPT_DIR/scripts/run-task.sh"          "$CLAUDE_DIR/scripts/run-task.sh"
-# Shared identity resolver: harness-common.sh is SOURCED (stays non-exec);
-# harness-resolve.sh is the executable wrapper; auto-branch.sh is the
-# PreToolUse hook.
-cp "$SCRIPT_DIR/scripts/harness-common.sh"    "$CLAUDE_DIR/scripts/harness-common.sh"
-cp "$SCRIPT_DIR/scripts/harness-resolve.sh"   "$CLAUDE_DIR/scripts/harness-resolve.sh"
-cp "$SCRIPT_DIR/scripts/auto-branch.sh"       "$CLAUDE_DIR/scripts/auto-branch.sh"
+# Executable scripts: copied AND chmod +x below. harness-common.sh (sourced,
+# never executed directly) is copied separately and deliberately excluded
+# from this list so it stays non-exec.
+EXEC_SCRIPTS=(
+  done-gate.sh
+  baseline-snapshot.sh
+  done-detect.sh
+  done-write-state.sh
+  done-triage.sh
+  done-preflight.sh
+  worktree-detect.sh
+  new-worktree.sh
+  finish-worktree.sh
+  run-task.sh
+  harness-resolve.sh
+  auto-branch.sh
+)
+for s in "${EXEC_SCRIPTS[@]}"; do
+  cp "$SCRIPT_DIR/scripts/$s" "$CLAUDE_DIR/scripts/$s"
+done
+# Shared identity resolver library — sourced, stays non-exec.
+cp "$SCRIPT_DIR/scripts/harness-common.sh" "$CLAUDE_DIR/scripts/harness-common.sh"
 # The bundle SKILL.md is plugin-native (resolves code/data at
 # ${CLAUDE_PLUGIN_ROOT}/...). For the non-plugin install, rewrite that root to
 # the mirrored .claude/ layout so scripts resolve at
@@ -77,14 +82,9 @@ cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/dod/base-dod.md"
 # harness-common.sh resolves them at .claude/contracts/ (sibling of scripts/).
 cp "$SCRIPT_DIR/contracts/"*.json "$CLAUDE_DIR/contracts/"
 echo "  copied contracts/"
-chmod +x "$CLAUDE_DIR/scripts/done-gate.sh" "$CLAUDE_DIR/scripts/baseline-snapshot.sh" \
-         "$CLAUDE_DIR/scripts/done-detect.sh" "$CLAUDE_DIR/scripts/done-write-state.sh" \
-         "$CLAUDE_DIR/scripts/done-triage.sh" \
-         "$CLAUDE_DIR/scripts/done-preflight.sh" \
-         "$CLAUDE_DIR/scripts/worktree-detect.sh" \
-         "$CLAUDE_DIR/scripts/new-worktree.sh" "$CLAUDE_DIR/scripts/finish-worktree.sh" \
-         "$CLAUDE_DIR/scripts/run-task.sh" \
-         "$CLAUDE_DIR/scripts/harness-resolve.sh" "$CLAUDE_DIR/scripts/auto-branch.sh"
+for s in "${EXEC_SCRIPTS[@]}"; do
+  chmod +x "$CLAUDE_DIR/scripts/$s"
+done
 echo "  copied scripts/, skills/done/, and dod/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------

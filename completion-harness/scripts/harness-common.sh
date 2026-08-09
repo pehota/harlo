@@ -2202,41 +2202,18 @@ hc_state() {
   # --- committed work exists, tree clean: locate the done-state. --------------
   local done_state_file="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 
-  # S2 committed-unverified: done-state MISSING, schema-invalid, or stale. Any of
-  # these means the current changeset was never verified at THIS HEAD (gate
-  # Steps 4 / 4b / 5). Because done-write-state.sh only stamps verified_sha=HEAD
-  # on a successful/escalated write, a failed plain /done attempt lands here (its
-  # verified_sha != HEAD), not in S4.
-  #
-  # "STALE" is TREE equality, not sha equality — the identical test gate Step 5
-  # applies. Classifying by sha alone made the harness CONTRADICT ITSELF after a
-  # tree-identical HEAD move (an amend that only rewords, a rebase replaying the
-  # same patches): the Stop gate carried the verification and ALLOWED, while the
-  # next SessionStart still classified S2 and steered "run /done" for a changeset
-  # already verified. Same sources, same order, same fail direction as Step 5:
-  # the done-state's recorded head_tree, else — for LEGACY states written before
-  # that field existed — the tree recomputed live from verified_sha; and when
-  # verified_sha still resolves, its tree is cross-checked too. An empty
-  # head_tree, an unobtainable recorded tree, or any mismatch → NOT valid at head
-  # → S2, exactly as before.
-  local verified_sha=""
+  # S2 committed-unverified: done-state MISSING, schema-invalid, or not FRESH at
+  # this HEAD. Freshness (exact sha match, or tree-identical carry) is decided by
+  # hc_verification_state — the single implementation of that question, also used
+  # by done-gate.sh's Step 5 and finish-worktree.sh, so this classifier and the
+  # gate can never diverge on it again.
   local valid_at_head=0
-  if [ -f "$done_state_file" ]; then
-    if hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$done_state_file" >/dev/null 2>&1; then
-      verified_sha=$(jq -r '.verified_sha // ""' "$done_state_file" 2>/dev/null)
-      if [ -n "$verified_sha" ] && [ "$verified_sha" = "$head_sha" ]; then
-        valid_at_head=1
-      elif [ -n "$verified_sha" ] && [ -n "$head_tree" ]; then
-        local ds_tree vs_tree
-        ds_tree=$(jq -r '.head_tree // ""' "$done_state_file" 2>/dev/null)
-        vs_tree=$(git -C "$proj" rev-parse -q --verify "${verified_sha}^{tree}" 2>/dev/null)
-        [ -z "$ds_tree" ] && ds_tree="$vs_tree"
-        if [ -n "$ds_tree" ] && [ "$ds_tree" = "$head_tree" ] \
-           && { [ -z "$vs_tree" ] || [ "$vs_tree" = "$head_tree" ]; }; then
-          valid_at_head=1
-        fi
-      fi
-    fi
+  if [ -f "$done_state_file" ] && hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$done_state_file" >/dev/null 2>&1; then
+    local vstate
+    vstate=$(hc_verification_state "$done_state_file" "$head_sha" "$head_tree" "$proj")
+    case "$vstate" in
+      exact|carry) valid_at_head=1 ;;
+    esac
   fi
   if [ "$valid_at_head" -eq 0 ]; then
     HC_STATE="S2"

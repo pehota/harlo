@@ -80,6 +80,29 @@ block() {
   exit 0
 }
 
+# --- helper: validate a file against a schema or block ---------------------
+validate_or_block() {
+  local schema="$1" file="$2" reason="$3"
+  if hc_has_fn hc_validate; then
+    hc_validate "$schema" "$file" >/dev/null 2>&1 || block "$reason"
+  else
+    block "$reason"
+  fi
+}
+
+# --- helper: read+sanitize the current-session marker file -----------------
+# Prints the marker's contents with a plain-component filter applied (only
+# [A-Za-z0-9._-]; empty, '.', or '..' become empty). Untrusted file contents,
+# used only to build a filename component.
+read_marker_id() {
+  local raw
+  raw=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
+  case "$raw" in
+    ''|'.'|'..'|*[!A-Za-z0-9._-]*) raw="" ;;
+  esac
+  printf '%s' "$raw"
+}
+
 # --- Step 1: loop guard -----------------------------------------------------
 # A block must never trap the agent forever.
 if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
@@ -149,12 +172,7 @@ DONE_STATE_FILE="$HARNESS_DIR/done-state/$HC_TASK_KEY.json"
 # live sessions in one checkout, which is already unsupported (they race on the
 # tree); the single-session model this marker exists to serve cannot hit it.
 if [ -z "$HC_BASE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_DIR/current-session" ]; then
-  ANCHOR_MARKER_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
-  # Same path hygiene as the marker-state lookup below: the file's contents are
-  # untrusted for filename purposes.
-  case "$ANCHOR_MARKER_ID" in
-    ''|'.'|'..'|*[!A-Za-z0-9._-]*) ANCHOR_MARKER_ID="" ;;
-  esac
+  ANCHOR_MARKER_ID=$(read_marker_id)
   if [ -n "$ANCHOR_MARKER_ID" ] && [ "$ANCHOR_MARKER_ID" != "$SESSION_ID" ]; then
     MARKER_ANCHOR=$(cat "$HARNESS_DIR/baselines/${ANCHOR_MARKER_ID}.sha" 2>/dev/null | tr -d '\r\n')
     if [ -n "$MARKER_ANCHOR" ] \
@@ -232,12 +250,7 @@ if { hc_has_fn hc__recover_base_from_state; }; then
   # state, session mode, and the marker state supplies a usable base_sha) are what
   # bound it; the state of HC_BASE never was.
   if [ ! -f "$DONE_STATE_FILE" ] && [ "${HC_MODE:-session}" = "session" ] && [ -f "$HARNESS_DIR/current-session" ]; then
-    MARKER_ID=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
-    # Path hygiene: the marker is a file, so treat its contents as untrusted for
-    # filename purposes. Only a plain [A-Za-z0-9._-] component may name a state.
-    case "$MARKER_ID" in
-      ''|'.'|'..'|*[!A-Za-z0-9._-]*) MARKER_ID="" ;;
-    esac
+    MARKER_ID=$(read_marker_id)
     if [ -n "$MARKER_ID" ] && [ "$MARKER_ID" != "$SESSION_ID" ]; then
       MARKER_STATE="$HARNESS_DIR/done-state/session-$MARKER_ID.json"
       MARKER_BASE=$(hc__recover_base_from_state "$MARKER_STATE" "$PROJECT_DIR" 2>/dev/null)
@@ -328,11 +341,6 @@ fi
 # escalation (Step 7). hc_tree_status already ran in Step 3a (TREE_STATUS_DONE);
 # only call it here if that path was unavailable.
 if [ "$TREE_STATUS_DONE" -eq 1 ]; then
-  if [ -n "$HC_TREE_BLOCKERS" ]; then
-    block "finish the slice ($(hc_tree_remediation)), then commit"
-  fi
-elif hc_has_fn hc_tree_status; then
-  hc_tree_status "$SESSION_ID" 2>/dev/null
   if [ -n "$HC_TREE_BLOCKERS" ]; then
     block "finish the slice ($(hc_tree_remediation)), then commit"
   fi
@@ -436,13 +444,7 @@ fi
 # file itself → hc_validate nonzero → BLOCK (broken install, safe direction). The
 # jq-missing degrade at the top of the gate already exited before this point, so
 # this never fires on a jq-less host.
-if hc_has_fn hc_validate; then
-  if ! hc_validate "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" >/dev/null 2>&1; then
-    block "$S2_REASON"
-  fi
-else
-  block "$S2_REASON"
-fi
+validate_or_block "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" "$S2_REASON"
 
 # --- Step 5: verified_sha != HEAD -> BLOCK unless the TREE is identical ------
 # Re-check live, do not trust any stored convenience flag. This is enforced
@@ -614,13 +616,7 @@ fi
 # Hard contract: the review-log must be structurally valid before its
 # findings[]/files_reviewed are trusted by the severity + coverage checks below.
 # A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
-if hc_has_fn hc_validate; then
-  if ! hc_validate "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" >/dev/null 2>&1; then
-    block "$S2_REASON"
-  fi
-else
-  block "$S2_REASON"
-fi
+validate_or_block "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" "$S2_REASON"
 MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
 # Explicit availability guard (parity with the hc_tree_status fallback): if the

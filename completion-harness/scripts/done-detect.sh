@@ -172,6 +172,26 @@ emit_effective() {
   printf '%s\n' "$DETECTED_JSON"
 }
 
+# --- helper: publish a validated candidate config, or abort ------------------
+# Takes the path to a tempfile already containing candidate JSON. On valid,
+# atomically moves it over CONFIG_FILE. On invalid, removes the tempfile,
+# emits the current effective config, and exits 1. Call as a bare statement —
+# do not branch on its return status; its last statement is a cleanup test
+# (`[ -f "$tmp" ] && rm -f ...`) that is 1 on the success path (the file was
+# already moved away), not a meaningful success/failure signal.
+publish_config_or_abort() {
+  local tmp="$1"
+  if validate_config_file "$tmp"; then
+    mv "$tmp" "$CONFIG_FILE" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+    emit_effective
+    exit 1
+  fi
+  [ -f "$tmp" ] && rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
 if [ "$have_jq" != true ]; then
   # Can't safely rewrite JSON without jq; emit best-effort and bail.
   emit_effective
@@ -211,14 +231,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
       }
     ' > "$TMP" 2>/dev/null
     # Write-time gate: only publish a contract-valid config.
-    if validate_config_file "$TMP"; then
-      mv "$TMP" "$CONFIG_FILE" 2>/dev/null
-    else
-      rm -f "$TMP" 2>/dev/null
-      emit_effective
-      exit 1
-    fi
-    [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
+    publish_config_or_abort "$TMP"
   fi
 
 else
@@ -266,14 +279,7 @@ else
             (.; if has($k) then . else .[$k] = $defaults[$k] end)
       ' "$CONFIG_FILE" > "$TMP" 2>/dev/null
       # Write-time gate: never overwrite existing valid state with an invalid one.
-      if validate_config_file "$TMP"; then
-        mv "$TMP" "$CONFIG_FILE" 2>/dev/null
-      else
-        rm -f "$TMP" 2>/dev/null
-        emit_effective
-        exit 1
-      fi
-      [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null
+      publish_config_or_abort "$TMP"
     fi
   fi
   # else: fingerprint unchanged AND already at contract v1 → leave the file

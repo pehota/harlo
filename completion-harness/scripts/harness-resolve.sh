@@ -50,9 +50,9 @@ if [ -z "$TMP_JSON" ]; then
 fi
 printf '%s\n' "$OUT_JSON" > "$TMP_JSON"
 
-if ! hc_validate "$HC_CONTRACTS_DIR/resolver-output.schema.json" "$TMP_JSON" >/dev/null 2>&1; then
-  printf 'harness-resolve: resolver output failed contract validation: %s\n' \
-    "$(hc_validate "$HC_CONTRACTS_DIR/resolver-output.schema.json" "$TMP_JSON" 2>&1)" >&2
+VALIDATION_ERR=$(hc_validate "$HC_CONTRACTS_DIR/resolver-output.schema.json" "$TMP_JSON" 2>&1)
+if [ $? -ne 0 ]; then
+  printf 'harness-resolve: resolver output failed contract validation: %s\n' "$VALIDATION_ERR" >&2
   rm -f "$TMP_JSON" 2>/dev/null
   exit 1
 fi

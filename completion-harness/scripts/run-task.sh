@@ -174,9 +174,9 @@ mkdir -p "$REPORT_DIR" || die "cannot create report dir: $REPORT_DIR"
 # Read from the MAIN checkout's config — the worktree does not exist yet, and
 # a fresh worktree may not even carry done-config.json if it is gitignored.
 MAX_TURNS=$(hc_cfg headless_max_turns "60" "$MAIN_DIR")
-{ [ -n "$MAX_TURNS" ] && [ "$MAX_TURNS" != "null" ]; } || MAX_TURNS=60
+[ -n "$MAX_TURNS" ] || MAX_TURNS=60
 TIMEOUT_MIN=$(hc_cfg headless_timeout_minutes "45" "$MAIN_DIR")
-{ [ -n "$TIMEOUT_MIN" ] && [ "$TIMEOUT_MIN" != "null" ]; } || TIMEOUT_MIN=45
+[ -n "$TIMEOUT_MIN" ] || TIMEOUT_MIN=45
 
 say "task:      $TASK_DESC"
 say "branch:    $BRANCH"
