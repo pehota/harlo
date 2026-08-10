@@ -21,6 +21,7 @@
   "auto_branch": false,
   "branch_prefix": "task/",
   "noncode_globs": [],
+  "metadata_json_allowlist": [],
   "headless_max_turns": 60,
   "headless_timeout_minutes": 45
 }

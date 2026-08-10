@@ -166,6 +166,22 @@
       "args": "<repo_relative_path> [globs]"
     },
     {
+      "name": "hc_metadata_json_allowlist",
+      "globals": [],
+      "stdout": "the effective metadata_json_allowlist, as a compact JSON array",
+      "return_codes": "always 0",
+      "sentinels": [],
+      "args": "[proj]"
+    },
+    {
+      "name": "hc_path_is_metadata_json_safe",
+      "globals": [],
+      "stdout": "nothing",
+      "return_codes": "0 the file's changed top-level keys are all within an allowlist entry matching the path, 1 unsafe/no match/error; optional 5th arg is the pre-read allowlist JSON",
+      "sentinels": [],
+      "args": "<repo_relative_path> <base> <head> [proj] [allowlist_json]"
+    },
+    {
       "name": "hc_changeset_is_code",
       "globals": [],
       "stdout": "code | noncode | empty",

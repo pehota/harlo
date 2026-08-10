@@ -99,6 +99,22 @@ if ! vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-noncode-bad.json
   ok "done-config noncode_globs non-string items → nonzero"
 else bad "done-config noncode_globs non-string items → nonzero"; fi
 
+# done-config WITH metadata_json_allowlist (array of {glob,keys}) → valid.
+cat > "$TMP/done-config-metajson.json" <<'JSON'
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","metadata_json_allowlist":[{"glob":"package.json","keys":["version"]}],"headless_max_turns":60,"headless_timeout_minutes":45}
+JSON
+if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-metajson.json"; then
+  ok "done-config with metadata_json_allowlist (glob+keys) → 0"
+else bad "done-config with metadata_json_allowlist (glob+keys) → 0"; fi
+
+# done-config with metadata_json_allowlist entry MISSING "keys" → nonzero.
+cat > "$TMP/done-config-metajson-bad.json" <<'JSON'
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","metadata_json_allowlist":[{"glob":"package.json"}]}
+JSON
+if ! vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config-metajson-bad.json"; then
+  ok "done-config metadata_json_allowlist entry missing keys → nonzero"
+else bad "done-config metadata_json_allowlist entry missing keys → nonzero"; fi
+
 # --- done-plan schema (computed /done plan, #7) -----------------------------
 cat > "$TMP/done-plan.json" <<'JSON'
 {"contract_version":1,"task_key":"session-x","steps":[{"id":"0","title":"Preflight","status":"applicable","ref":"dod-protocol.md#step-0"},{"id":"2-lint","title":"Lint","status":"excluded","ref":"dod-protocol.md#step-2-lint","reason":"no lint command configured"}]}

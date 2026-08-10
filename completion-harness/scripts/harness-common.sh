@@ -1103,17 +1103,132 @@ hc_path_is_noncode() {
   return "$rc"
 }
 
+# ---------------------------------------------------------------------------
+# hc_metadata_json_allowlist [proj]
+#
+# The effective `metadata_json_allowlist` — the structured sibling to
+# `noncode_globs` for JSON manifests that mix pure metadata with real config
+# (package.json, plugin manifests, ...). Unlike noncode_globs this is NOT a
+# flat string list (hc_cfg's `join(" ")` can't represent an array of objects),
+# so it is read directly here rather than through hc_cfg, but at the SAME two
+# layers and in the SAME precedence order (session config, then repo config)
+# so it never disagrees with how every other sticky key resolves.
+#
+# Prints the effective list as a compact JSON array (never empty-but-invalid;
+# always valid JSON). Falls back to the built-in generic defaults — npm
+# `package.json` and the Claude Code plugin manifest `plugin.json` — when the
+# key is absent at every layer, mirroring hc_noncode_globs's built-in default.
+# A layer that sets the key to `[]` explicitly opts OUT (same "present wins,
+# even empty" rule as hc_cfg): every file falls through to the ordinary code
+# classification, the strict/safe direction.
+hc_metadata_json_allowlist() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local default='[{"glob":"package.json","keys":["version"]},{"glob":"*package.json","keys":["version"]},{"glob":".claude-plugin/plugin.json","keys":["version"]},{"glob":"*.claude-plugin/plugin.json","keys":["version"]}]'
+
+  hc_has_jq || { printf '%s' "$default"; return 0; }
+
+  local f v
+  for f in "$proj/$HC_SESSION_CONFIG_REL" "$proj/$HC_CONFIG_REL"; do
+    [ -f "$f" ] || continue
+    jq -e 'has("metadata_json_allowlist")' "$f" >/dev/null 2>&1 || continue
+    v=$(jq -c '.metadata_json_allowlist' "$f" 2>/dev/null) || continue
+    [ "$v" = "null" ] && continue
+    printf '%s' "$v"
+    return 0
+  done
+
+  printf '%s' "$default"
+}
+
+# ---------------------------------------------------------------------------
+# hc_path_is_metadata_json_safe <repo_relative_path> <base> <head> [proj] [allowlist_json]
+#
+# Structural per-file check: is this ONE JSON file's change across
+# <base>..<head> confined to keys an `metadata_json_allowlist` entry marks as
+# pure metadata (e.g. "version")? A whole-file noncode_globs entry would be
+# UNSAFE for a manifest like package.json/plugin.json — those files also carry
+# dependencies, scripts, permissions — so this diffs the file's TOP-LEVEL keys
+# structurally instead of trusting a glob on the path alone. The glob only says
+# "this file MAY be a version-only bump"; the key diff is what actually proves
+# it.
+#
+# Safe (return 0) iff: the path matches >=1 allowlist entry's glob (same
+# `[[ == $glob ]]` matching as hc_path_is_noncode), the file parses as a JSON
+# object at BOTH <base>:<path> and <head>:<path>, at least one top-level key
+# differs (added/removed/changed value), and EVERY differing key is in the
+# union of `keys` from the matching entries.
+#
+# Fails toward CODE (return 1, unsafe) on: no matching entry, the path missing
+# at base or head (added/deleted, not a pure edit), either side not a JSON
+# object, a git/jq error, or ANY differing key outside the allowed set — same
+# fail-safe direction as every other predicate in this file. Prints nothing.
+hc_path_is_metadata_json_safe() {
+  local path="${1:-}" base="${2:-}" head="${3:-}"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local allowlist="${5:-}"
+  [ -n "$path" ] && [ -n "$base" ] && [ -n "$head" ] || return 1
+  hc_has_jq || return 1
+  [ -n "$allowlist" ] || allowlist=$(hc_metadata_json_allowlist "$proj")
+  printf '%s' "$allowlist" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+
+  # Union the `keys` of every allowlist entry whose glob matches this path.
+  # Glob matching is bash's `[[ == $glob ]]` (same rule as hc_path_is_noncode:
+  # `*` spans `/`), so it has to happen here, not in jq.
+  local restore_glob=0
+  case "$-" in *f*) ;; *) restore_glob=1 ;; esac
+  set -f
+  local entry entry_glob matched_entries="[]"
+  while IFS= read -r entry; do
+    [ -z "$entry" ] && continue
+    entry_glob=$(printf '%s' "$entry" | jq -r '.glob // empty' 2>/dev/null)
+    [ -n "$entry_glob" ] || continue
+    if [[ "$path" == $entry_glob ]]; then
+      matched_entries=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$matched_entries" 2>/dev/null)
+      [ -n "$matched_entries" ] || matched_entries="[]"
+    fi
+  done < <(printf '%s' "$allowlist" | jq -c '.[]' 2>/dev/null)
+  [ "$restore_glob" -eq 1 ] && set +f
+  [ "$matched_entries" != "[]" ] || return 1
+
+  local allowed_keys
+  allowed_keys=$(printf '%s' "$matched_entries" | jq -c '[.[].keys[]?] | unique' 2>/dev/null)
+  [ -n "$allowed_keys" ] || return 1
+
+  # Both sides must resolve as committed objects — a file present only at one
+  # end (added/deleted) is not a pure edit, so git show failing on either side
+  # is itself the unsafe verdict, not just a missing-content edge case.
+  local old_json new_json
+  old_json=$(git -C "$proj" show "${base}:${path}" 2>/dev/null) || return 1
+  new_json=$(git -C "$proj" show "${head}:${path}" 2>/dev/null) || return 1
+  [ -n "$old_json" ] && [ -n "$new_json" ] || return 1
+
+  local verdict
+  verdict=$(jq -n --argjson a "$old_json" --argjson b "$new_json" --argjson allowed "$allowed_keys" '
+    if ($a | type) != "object" or ($b | type) != "object" then false
+    else
+      (($a | keys) + ($b | keys) | unique) as $allkeys
+      | [ $allkeys[] | select($a[.] != $b[.]) ] as $changed
+      | ($changed | length) > 0 and (($changed - $allowed) | length) == 0
+    end
+  ' 2>/dev/null)
+  [ "$verdict" = "true" ]
+}
+
 hc_changeset_is_code() {
   local base="$1" head="$2"
   local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
 
   # --- assemble the changed-file set (union, newline-separated) ---------------
-  local files="" line path
+  # diff_out declared here (not inside the `if` below) and pre-emptied: the
+  # classify loop further down reads it with `[ -n "$diff_out" ]` unconditionally,
+  # and a caller running under `set -u` (this file has none, but sourcers may)
+  # must not see an unbound variable when base/head is empty.
+  local files="" line path diff_out=""
 
   # (1) committed range base..head. Only when we have a real base AND head; a
   # git failure here is an ERROR → fail toward CODE (return 0 below).
   if [ -n "$base" ] && [ -n "$head" ]; then
-    local diff_out diff_rc
+    local diff_rc
     diff_out=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null)
     diff_rc=$?
     if [ "$diff_rc" -ne 0 ]; then
@@ -1144,19 +1259,31 @@ EOF
     return 2
   fi
 
-  # --- classify: NON-CODE only if EVERY file matches >=1 noncode glob ---------
-  # Config read ONCE, outside the loop — see hc_noncode_globs on why a per-path
-  # read is a gate-disarming timeout risk, not a micro-optimisation.
-  local globs f verdict="noncode" rc=1
+  # --- classify: NON-CODE only if EVERY file is noncode OR a proven ----------
+  # metadata-only manifest edit (version bump, etc.). Config read ONCE, outside
+  # the loop — see hc_noncode_globs on why a per-path read is a gate-disarming
+  # timeout risk, not a micro-optimisation.
+  local globs allowlist f verdict="noncode" rc=1
   globs=$(hc_noncode_globs "$proj")
+  allowlist=$(hc_metadata_json_allowlist "$proj")
   while IFS= read -r f; do
     [ -z "$f" ] && continue
-    if ! hc_path_is_noncode "$f" "$globs"; then
-      # A single unrecognised (code / unknown-ext) file → whole changeset CODE.
-      verdict="code"
-      rc=0
-      break
+    if hc_path_is_noncode "$f" "$globs"; then
+      continue
     fi
+    # The metadata-JSON check only applies to a file from the COMMITTED range:
+    # it diffs <base>:<path> against <head>:<path> via `git show`, which reads
+    # committed objects — an introduced (uncommitted) tree-dirt file's actual
+    # working-copy content is not what that comparison would see, so falling
+    # through to CODE for tree dirt here is the fail-safe choice, not a gap.
+    if [ -n "$diff_out" ] && printf '%s\n' "$diff_out" | grep -qxF "$f" \
+       && hc_path_is_metadata_json_safe "$f" "$base" "$head" "$proj" "$allowlist"; then
+      continue
+    fi
+    # A single unrecognised (code / unknown-ext) file → whole changeset CODE.
+    verdict="code"
+    rc=0
+    break
   done <<EOF
 $files
 EOF
