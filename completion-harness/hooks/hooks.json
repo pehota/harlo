@@ -8,6 +8,9 @@
     ],
     "PreToolUse": [
       { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/auto-branch.sh\"" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-ledger.sh\"" } ] }
     ]
   }
 }
