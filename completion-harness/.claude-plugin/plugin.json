@@ -1,7 +1,7 @@
 {
   "name": "completion-harness",
   "description": "Structural Definition-of-Done gate: blocks task completion until tests, lint, an independent changeset review, and task-specific checks pass. Task/branch-scoped state survives across sessions.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "author": {
     "name": "Dimitar Apostolov"
   },
