@@ -163,20 +163,45 @@ is out of scope by choice — the limit is stated rather than assumed away.
   **Task mode never advances the base** — the pinned fork point IS the anchor, so
   `HC_BASE_ORIG` always mirrors `HC_BASE`.
 - SESSION mode → `base = baselines/<session_id>.sha` (HEAD at SessionStart), then
-  **advanced past leading CONFIDENTLY-FOREIGN commits** (authorship-scoped changeset, #6):
-  `hc_resolve` walks `HC_BASE_ORIG..HEAD` oldest→newest and, while the leading commit's
-  committer email is **non-empty and provably differs** from the session's
-  `git config user.email` (also non-empty), advances `HC_BASE` to it; it **STOPS** at the
-  first commit that is not confidently foreign (same email, either email empty, or any git
-  error) and keeps that commit and everything after it in the changeset. This is the
-  fail-safe direction — any uncertainty keeps the commit in the gate; we never advance past
-  a commit that might be the session's, which would let the gate PASS with real work
-  unverified. The predicate is **email-only** by design: the old mutable
-  `committer_date >= mtime(baseline.sha)` signal was dropped (a touch/copy/clock-skew could
-  advance the mtime past a genuinely-authored commit → misclassify it foreign → false
-  PASS), and ancestry already bounds the range to commits after the baseline. `HC_BASE_ORIG`
-  retains the **unadvanced** baseline so `hc_changeset_summary` (the block-message enricher)
-  can honestly report "N authored this session".
+  **advanced past a leading run of NOT-this-session's commits** (authorship-scoped
+  changeset, #6): `hc_resolve` walks `HC_BASE_ORIG..HEAD` oldest→newest and, while the
+  leading commit is confidently-foreign, advances `HC_BASE` to it; it **STOPS** at the
+  first commit that is not, and keeps that commit and everything after it in the
+  changeset. This is the fail-safe direction — any uncertainty keeps the commit in the
+  gate; we never advance past a commit that might be the session's, which would let the
+  gate PASS with real work unverified. It now applies to **two** attribution mechanisms,
+  tried in order:
+  - **Ledger membership (primary)**, via the `PostToolUse(Bash)` hook `commit-ledger.sh`.
+    It fires after every Bash call and, on a commit-shaped command (`git commit`, `merge`,
+    `rebase`, `cherry-pick`, `revert`, `am`, `pull`), appends the SHAs that landed to
+    `baselines/<session_id>.own-commits` — a positive, directly-observed record of "this
+    session's own tool calls produced this commit." When that ledger file EXISTS for the
+    session, `hc_resolve` treats it as authoritative: a commit is confidently-foreign iff
+    it is **NOT** a line in the ledger. This is what the old predicate below could never
+    do — tell apart a human's own direct commit (terminal, `!` passthrough) from the
+    session's own work when both share the **same git identity**, which is the common
+    case: there is no separate "Claude" committer email. Under email-only that false
+    positive meant a foreign commit range sharing the session's email never advanced,
+    and the gate nagged forever over commits nobody wanted reviewed. The ledger survives
+    history rewrites too: on `--is-ancestor` failure (amend/rebase moved the tip out from
+    under the ledger's last-recorded cursor) it retries once against the session's `.sha`
+    baseline rather than going permanently stale — the naive "leave it and try again"
+    would otherwise wedge the cursor forever, since every future call re-derives the same
+    orphaned tail.
+  - **Committer email (fallback)**, used only when no ledger file exists for the session
+    (the hook never fired — e.g. a session that made zero Bash calls before this Stop
+    check, or an older/unwired install). Unchanged from before: a commit is
+    confidently-foreign iff its committer email is **non-empty and provably differs**
+    from the session's `git config user.email` (also non-empty); same email, either email
+    empty, or any git error → not confidently foreign → stop. The predicate is
+    **email-only** by design: the old mutable `committer_date >= mtime(baseline.sha)`
+    signal was dropped (a touch/copy/clock-skew could advance the mtime past a
+    genuinely-authored commit → misclassify it foreign → false PASS), and ancestry
+    already bounds the range to commits after the baseline.
+
+  `HC_BASE_ORIG` retains the **unadvanced** baseline either way, so `hc_changeset_summary`
+  (the block-message enricher) can honestly report "N authored this session" — itself now
+  ledger-preferring via `hc__commit_session_authored`, with the same email fallback.
 - Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
   mid-session, so SessionStart isn't the only place it must pin).
 
@@ -196,6 +221,7 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 | Task base (pinned) | `.claude/.harness/task-base/<task_key>.sha` | task (branch) |
 | Task tree-base (pinned) | `.claude/.harness/tree-base/<task_key>.dirty` | task (branch) — pinned ONCE at the fork; classifier's "pre-existing" set |
 | Session baseline | `.claude/.harness/baselines/<session_id>.sha` | session (fallback + test-snapshot anchor) |
+| Session commit ledger | `.claude/.harness/baselines/<session_id>.own-commits` | session — append-only, one SHA per line; primary base-advance signal, email is the fallback when this file is absent |
 | Current-session marker | `.claude/.harness/current-session` | authoritative session id (written each SessionStart from hook stdin; the id source for the skill/writer) |
 | Session tree-base | `.claude/.harness/baselines/<session_id>.dirty` | session — rewritten each SessionStart; classifier's "pre-existing" set |
 | Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |

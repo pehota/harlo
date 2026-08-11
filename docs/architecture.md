@@ -81,7 +81,7 @@ C4Context
   System_Ext(tool, "Project toolchain", "test / lint / start commands")
 
   Rel(agent, runtime, "Declares done (ends turn)")
-  Rel(runtime, harness, "Fires Stop / SessionStart / PreToolUse hooks")
+  Rel(runtime, harness, "Fires Stop / SessionStart / PreToolUse / PostToolUse hooks")
   Rel(harness, runtime, "BLOCK (stdout JSON, exit 0) or ALLOW (exit 0, empty)")
   Rel(user, runtime, "Invokes /done")
   Rel(runtime, harness, "Runs /done skill steps")
@@ -100,7 +100,7 @@ git facts; everything the agent *says* is trust-but-falsifiable.
 
 ## 3. C4 Level 2 — Containers
 
-The harness is three hooks + one skill + one sourced library + config + a state
+The harness is four hooks + one skill + one sourced library + config + a state
 store. Each hook fires on a different runtime event. The **shared resolver
 library** (`harness-common.sh`) is *sourced* by every script that needs identity
 or tree classification — never reimplemented — so the gate, the writer, and the
@@ -117,6 +117,7 @@ C4Container
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
+    Container(post, "PostToolUse hook", "commit-ledger.sh", "matcher Bash — session mode only; commit-shaped commands (commit/merge/rebase/cherry-pick/revert/am/pull) append newly-landed SHAs to baselines/&lt;sid&gt;.own-commits; recovers from amend/rebase by retrying against the session's .sha baseline")
     Container(skill, "/done skill (thin)", "skills/done/SKILL.md + dod-protocol.md", "Thin entry point: runs triage, then reads each applicable step's section from dod-protocol.md on demand (progressive disclosure)")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base, authorship base-advance) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_changeset_is_code (scope) + hc_review_blocking/hc_review_coverage_gap (blob-keyed) + hc_validate (jq-only schema validator) + hc_state (S0/S_OOS/S1/S2/S4/S5)")
     Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as a self-validated JSON object (resolver-output contract)")
@@ -134,11 +135,13 @@ C4Container
   Rel(agent, gate, "turn exit → fires")
   Rel(agent, start, "session begins → fires")
   Rel(agent, pre, "Write/Edit → fires")
+  Rel(agent, post, "Bash → fires (session mode only)")
   Rel(user, skill, "invokes /done")
 
   Rel(gate, lib, "sources → hc_resolve, hc_tree_status")
   Rel(start, lib, "sources → hc_resolve (pins base + tree-base)")
   Rel(pre, lib, "sources → hc_resolve")
+  Rel(post, lib, "sources → hc_resolve (session-mode gate)")
   Rel(write, lib, "sources → hc_resolve, hc_tree_status")
   Rel(pf, lib, "sources → hc_resolve, hc_tree_status")
   Rel(skill, wrap, "runs → reads base/task_key")
@@ -152,6 +155,7 @@ C4Container
   Rel(gate, state, "reads done-state + review-log")
   Rel(start, state, "writes baselines/tree-base/task-base")
   Rel(pre, state, "writes tree-base")
+  Rel(post, state, "appends baselines/&lt;sid&gt;.own-commits")
   Rel(write, state, "writes done-state")
   Rel(detect, cfg, "seed/refresh + write-time validate")
   Rel(gate, schemas, "hc_validate done-state + review-log")
@@ -166,7 +170,10 @@ C4Container
 **How to read this / key decisions.**
 - **Hook timing:** SessionStart runs once at session begin (before any edit) →
   it is the *only* reliable place to pin a clean tree baseline. PreToolUse fires
-  before *every* Write/Edit (cheap off-trunk fast-path). Stop fires on *every*
+  before *every* Write/Edit (cheap off-trunk fast-path). PostToolUse fires
+  after *every* Bash call (session mode only) — a commit-shaped command appends
+  the SHAs it just landed to the session's own-commits ledger, feeding
+  base-advance's ledger-first predicate (§10, §12). Stop fires on *every*
   turn exit — the structurally unavoidable enforcement point.
 - **Sourced, not shelled:** the gate/writer/preflight `. harness-common.sh` and
   call `hc_resolve`/`hc_tree_status`/`hc_validate` as shell functions. The skill
@@ -302,6 +309,7 @@ sequenceDiagram
   AG->>GIT: edits code (Write/Edit)
   RT->>GIT: PreToolUse (auto-branch.sh)<br/>on trunk → checkout -b task/&lt;ts&gt;; pin tree-base
   AG->>GIT: git commit
+  RT->>ST: PostToolUse (commit-ledger.sh)<br/>session mode + commit-shaped command → append landed SHA(s) to baselines/&lt;sid&gt;.own-commits
   AG-->>RT: ends turn ("done")
   RT->>ST: Stop (done-gate.sh) reads done-state/&lt;task_key&gt;
   ST-->>RT: absent
@@ -780,6 +788,7 @@ flowchart LR
   BL --> B1["&lt;sid&gt;.sha"]
   BL --> B2["&lt;sid&gt;.dirty"]
   BL --> B3["&lt;sha&gt;.tests.json"]
+  BL --> B4["&lt;sid&gt;.own-commits"]
   TB --> T1["&lt;task_key&gt;.sha"]
   TRB --> TR1["&lt;task_key&gt;.dirty"]
   DS --> D1["&lt;task_key&gt;.json"]
@@ -794,6 +803,7 @@ flowchart LR
 | `baselines/<sid>.sha` | HEAD at SessionStart (session base) | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present) | age 14d |
 | `current-session` | authoritative session id (from SessionStart hook stdin) | — (single file) | baseline-snapshot | rewritten each SessionStart (all sources incl. compact) | age 14d |
 | `baselines/<sid>.dirty` | fork-point porcelain (session mode tree baseline); 0 bytes = genuinely clean at SessionStart | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present); **atomic** temp+`mv`, and on a failed `git status` **no file is left** — a stale one is removed too | age 14d |
+| `baselines/<sid>.own-commits` | commit ledger: SHAs landed via THIS session's own Bash tool calls, one per line | **session id** | commit-ledger.sh (PostToolUse Bash, session mode only) | **append-only**; created (empty) on first Bash call, appended to only on commit-shaped commands; presence alone (even empty) means the hook has run — the primary signal `hc__resolve_session_base` checks before falling back to email | age 14d |
 | `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | age 14d |
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded; same atomic capture / no-file-on-failure rule | age-**excluded**; **terminal reap** on merge/gone |
@@ -877,7 +887,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Stop-hook loop guard** | `stop_hook_active==true` → exit 0 immediately (a block never traps forever) | `done-gate.sh` Step 1 |
 | **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 3b tree-check | `done-gate.sh` Step 3 |
 | **Empty committed changeset** | No introduced tree blockers AND `git diff --quiet HC_BASE HEAD` (range empty — e.g. after authorship base-advance left HEAD atop an identical tree) → exit 0 (nothing to verify) | `done-gate.sh` Step 3c; `git diff --quiet` |
-| **Leading foreign commits (session mode)** | `hc_resolve` advances HC_BASE past leading commits whose committer email provably differs from the session's; `HC_BASE_ORIG` keeps the unadvanced base for honest "N authored this session" reporting. Fail-safe: any doubt → keep the commit in the changeset | `hc__resolve_session_base`; `hc__commit_confidently_foreign`; `hc_changeset_summary` |
+| **Leading foreign commits (session mode)** | `hc_resolve` advances HC_BASE past a leading run of NOT-this-session's commits; `HC_BASE_ORIG` keeps the unadvanced base for honest "N authored this session" reporting. Two-tier predicate, ledger first: if `baselines/<sid>.own-commits` EXISTS (the PostToolUse(Bash) ledger hook has fired this session), foreign = NOT a line in it — directly observed, immune to a human committing under the session's own git identity from a terminal. If the ledger is ABSENT (zero Bash calls this session, or an older/unwired install), degrade to the original email-only predicate: foreign iff committer email is non-empty and provably differs from the session's. Fail-safe both ways: any doubt → keep the commit in the changeset | `hc__resolve_session_base`; `hc__commit_in_ledger`; `hc__commit_confidently_foreign`; `hc_changeset_summary`; `commit-ledger.sh` |
 | **Cross-turn escalation question** | `/done` writes `pending-escalation/<task_key>.json` before AskUserQuestion; the gate consumes it and allows **exactly once** so the question reaches the user; next Stop re-gates | `done-gate.sh` Step 2b; `dod-protocol.md` escalation rules |
 | **Cross-session accepted escalation** | Accepted escalation persisted as `escalation-accept/<HEAD>.json`; a fresh session with no done-state still passes at that exact HEAD via Step 3d; any new commit → new sha → re-block | `done-gate.sh` Step 3d; `done-write-state.sh` sidecar write |
 | **Tests could not run** | `tests:{status:"not_run", reason}` accepted **only** with an escalation; without one → BLOCK ("tests were not run and there is no escalation") | `done-gate.sh` Step 8 `not_run` guard; `done-write-state.sh` refusal |

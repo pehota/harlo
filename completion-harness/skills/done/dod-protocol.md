@@ -32,6 +32,16 @@ requirements from the task statement ("visually verify the button", "confirm the
 endpoint returns 200") and record them into done-state `task_checks`. They drift out
 of focus by the end otherwise. Step 4 only *runs* them.
 
+**Also ask, every task, whether it needs a docs-sync check.** Does this changeset
+touch something the project's own documentation describes — architecture docs,
+design docs, README, API reference, whatever this repo actually maintains? If so,
+add a task_check now (`desc: "sync <doc> for <mechanism>"`) — same reason as above,
+it drifts out of focus otherwise. This is task-specific, not universal: a one-line
+fix, a test-only change, or anything that doesn't alter documented behavior gets no
+such check. Don't rubber-stamp it onto every task; the base DoD (`dod/base-dod.md`)
+stays silent on docs precisely so this stays a per-task judgment call, not a blanket
+gate. No assumed file or location — same setup-agnostic stance as Step 0.5 below.
+
 <a id="step-0"></a>
 ## Step 0 — Preflight: prove the gate is winnable
 
