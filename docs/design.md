@@ -190,7 +190,9 @@ is out of scope by choice — the limit is stated rather than assumed away.
     orphaned tail.
   - **Committer email (fallback)**, used only when no ledger file exists for the session
     (the hook never fired — e.g. a session that made zero Bash calls before this Stop
-    check, or an older/unwired install). Unchanged from before: a commit is
+    check, or the `install.sh` distribution mode, which does not wire PostToolUse at
+    all (architecture.md §3, "Two distribution modes") — so it runs email-only
+    *permanently*, not as a transitional edge case). Unchanged from before: a commit is
     confidently-foreign iff its committer email is **non-empty and provably differs**
     from the session's `git config user.email` (also non-empty); same email, either email
     empty, or any git error → not confidently foreign → stop. The predicate is

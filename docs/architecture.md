@@ -193,7 +193,9 @@ C4Container
     the plugin *is* the install.
   - **`install.sh` mirror**: copies the bundle into the target's `.claude/`
     (including `contracts/` → `.claude/contracts/`, the schema store `hc_validate`
-    reads), wires the three hooks into `settings.local.json` via a `jq` merge, and
+    reads), wires **only** Stop + SessionStart + PreToolUse into
+    `settings.local.json` via a `jq` merge (PostToolUse/`commit-ledger.sh` is
+    plugin-only — see §12's edge-case matrix), and
     `sed`-rewrites `${CLAUDE_PLUGIN_ROOT}` → `$CLAUDE_PROJECT_DIR/.claude` in the
     copied `SKILL.md`. State refs (`$CLAUDE_PROJECT_DIR/.claude/.harness/...`) are
     untouched. `install.sh` copies `dod/base-dod.md` → **`.claude/dod/base-dod.md`**
@@ -787,8 +789,8 @@ flowchart LR
   H --> EA["escalation-accept/"]
   BL --> B1["&lt;sid&gt;.sha"]
   BL --> B2["&lt;sid&gt;.dirty"]
-  BL --> B3["&lt;sha&gt;.tests.json"]
-  BL --> B4["&lt;sid&gt;.own-commits"]
+  BL --> B3["&lt;sid&gt;.own-commits"]
+  BL --> B4["&lt;sha&gt;.tests.json"]
   TB --> T1["&lt;task_key&gt;.sha"]
   TRB --> TR1["&lt;task_key&gt;.dirty"]
   DS --> D1["&lt;task_key&gt;.json"]
@@ -1043,6 +1045,21 @@ commits moved the gate ahead of the docs; this re-sync brought them back:
   that the skill prefers `$CLAUDE_CODE_SESSION_ID` (it deliberately does not); the
   §10 claim that `review-log/` is age-reaped (it is age-excluded); and §8's stale
   "⚠ doc drift" note about surfaced warnings, which `design.md` no longer contains.
+
+**PostToolUse commit ledger (added 2026-08-11).** Commit `9f79286` added the
+`PostToolUse(Bash)` hook `commit-ledger.sh` and a ledger-first base-advance
+predicate ahead of the docs; this re-sync brought §2/§3's container/context
+diagrams, the lifecycle sequence, §10's state-store table and §12's edge-case
+matrix in line. Also disambiguated: §3's "wires the three hooks" line is
+`install.sh`-mirror-specific (that mirror's jq merge only ever wires
+Stop/SessionStart/PreToolUse, never PostToolUse) and now says so explicitly,
+since it previously sat right next to §3's new "the harness is four hooks"
+opener with nothing reconciling the two counts. The edge-case matrix's
+"email-only fallback" row previously called the no-ledger case an
+"older/unwired install," implying a transitional state; it does not apply to
+`install.sh` installs at all, which run email-only permanently since that
+distribution mode never wires PostToolUse. `design.md`'s matching predicate
+description was corrected the same way.
 
 ---
 
