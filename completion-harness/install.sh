@@ -8,7 +8,7 @@
 # project's .claude/ so the bundle's plugin-native SKILL resolves with a single
 # path substitution.
 #
-# Idempotently wires the Stop + SessionStart + PreToolUse hooks into a TARGET
+# Idempotently wires the Stop + SessionStart + PreToolUse + PostToolUse hooks into a TARGET
 # project's machine-local settings, copies the bundle into the project's
 # .claude/, seeds a starter done-config.json, and gitignores harness state.
 #
@@ -53,6 +53,7 @@ EXEC_SCRIPTS=(
   run-task.sh
   harness-resolve.sh
   auto-branch.sh
+  commit-ledger.sh
 )
 for s in "${EXEC_SCRIPTS[@]}"; do
   cp "$SCRIPT_DIR/scripts/$s" "$CLAUDE_DIR/scripts/$s"
@@ -116,16 +117,19 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.local.json"
 STOP_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/done-gate.sh"'
 START_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/baseline-snapshot.sh"'
 PRE_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
+POST_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh"'
 
 MERGED=$(jq \
   --arg stop "$STOP_CMD" \
   --arg start "$START_CMD" \
-  --arg pre "$PRE_CMD" '
+  --arg pre "$PRE_CMD" \
+  --arg post "$POST_CMD" '
   # ensure hooks containers exist
   .hooks = (.hooks // {})
   | .hooks.Stop = (.hooks.Stop // [])
   | .hooks.SessionStart = (.hooks.SessionStart // [])
   | .hooks.PreToolUse = (.hooks.PreToolUse // [])
+  | .hooks.PostToolUse = (.hooks.PostToolUse // [])
 
   # append Stop hook only if this exact command is not already wired
   | ([ .hooks.Stop[]?.hooks[]?.command ] | any(. == $stop)) as $hasStop
@@ -145,6 +149,12 @@ MERGED=$(jq \
   | if $hasPre then .
     else .hooks.PreToolUse += [ {"matcher":"Write|Edit","hooks": [ {"type":"command","command":$pre} ]} ]
     end
+
+  # append PostToolUse(Bash) commit-ledger hook only if not already wired.
+  | ([ .hooks.PostToolUse[]?.hooks[]?.command ] | any(. == $post)) as $hasPost
+  | if $hasPost then .
+    else .hooks.PostToolUse += [ {"matcher":"Bash","hooks": [ {"type":"command","command":$post} ]} ]
+    end
 ' "$SETTINGS_FILE" 2>/dev/null)
 
 if [ -z "$MERGED" ]; then
@@ -152,7 +162,7 @@ if [ -z "$MERGED" ]; then
   exit 1
 fi
 printf '%s\n' "$MERGED" > "$SETTINGS_FILE"
-echo "  wired Stop + SessionStart + PreToolUse hooks into settings.local.json"
+echo "  wired Stop + SessionStart + PreToolUse + PostToolUse hooks into settings.local.json"
 
 # --- gitignore machine-local harness state ----------------------------------
 # .harness/ (per-session state) and settings.local.json (machine-local hooks)
