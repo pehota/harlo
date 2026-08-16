@@ -84,6 +84,29 @@ fi
 TASK_KEY="${HC_TASK_KEY:-session-$SID}"
 [ -z "$TASK_KEY" ] && TASK_KEY="session-"
 
+# --- non-code changeset short-circuit (mirrors Stop-gate Step 3a stand-down) -
+# done-gate.sh silently stands down (exit 0, no done-state check) when the
+# WHOLE changeset matches noncode_globs (hc_changeset_is_code == "noncode").
+# Before this, triage never consulted that predicate, so /done always ran the
+# full checklist — including two independent-review rounds — on doc-only
+# changesets the gate was going to wave through for free regardless (observed:
+# 13-15 min, $2-4.55 for a single markdown file). Mirror the SAME call shape
+# done-gate.sh uses (hc_tree_status then hc_changeset_is_code with HC_BASE from
+# the hc_resolve call above) so the two never disagree.
+#
+# Fail toward gating: any missing predicate, HC_BASE, or HEAD leaves SCOPE
+# empty, which changes nothing below — every step keeps its normal status.
+HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
+SCOPE=""
+if [ -n "$HC_BASE" ] && [ -n "$HEAD_SHA" ] && hc_has_fn hc_tree_status && hc_has_fn hc_changeset_is_code; then
+  hc_tree_status "$SID" 2>/dev/null
+  SCOPE=$(hc_changeset_is_code "$HC_BASE" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
+fi
+NONCODE_REASON=""
+if [ "$SCOPE" = "noncode" ]; then
+  NONCODE_REASON="changeset is entirely non-code (noncode_globs) — the Stop gate already stands down (S_OOS) for it; no DoD verification is required"
+fi
+
 # --- applicability ----------------------------------------------------------
 # id → anchor mapping: 0.5→step-0-5, 2-lint→step-2-lint, else step-<id>.
 anchor_for() {
@@ -105,6 +128,18 @@ if [ -z "$START" ] && [ -z "$START_CHECK" ] && [ -z "$DEPLOY_CHECK" ]; then
   STEP3_STATUS="excluded"; STEP3_REASON="no start/start_check_cmd/deploy_check_cmd configured"
 fi
 
+# ALWAYS_STATUS/REASON drive every step that is otherwise unconditionally
+# "applicable". The noncode short-circuit above overrides ALL steps —
+# including 2-lint/3, whose own per-config reason would otherwise survive —
+# because a fully non-code changeset needs none of them regardless of what is
+# configured; the gate itself never reaches Steps 2/2-lint/3/4/5.
+ALWAYS_STATUS="applicable"; ALWAYS_REASON=""
+if [ -n "$NONCODE_REASON" ]; then
+  ALWAYS_STATUS="excluded"; ALWAYS_REASON="$NONCODE_REASON"
+  LINT_STATUS="excluded"; LINT_REASON="$NONCODE_REASON"
+  STEP3_STATUS="excluded"; STEP3_REASON="$NONCODE_REASON"
+fi
+
 # Canonical ordered step table: id | title | status | reason.
 # Always-applicable steps carry status "applicable" and no reason. Step 4 is
 # ALWAYS listed (triage cannot see task_checks; the step self-skips when empty).
@@ -122,17 +157,17 @@ emit_step() {
 
 STEPS_JSON=$(
   {
-    emit_step "0"      "Preflight — prove the gate is winnable"   "applicable" ""
-    emit_step "0.5"    "Assemble the effective DoD"               "applicable" ""
-    emit_step "1"      "Changeset scope"                          "applicable" ""
-    emit_step "2"      "Tests (before/after checkpoint)"          "applicable" ""
+    emit_step "0"      "Preflight — prove the gate is winnable"   "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "0.5"    "Assemble the effective DoD"               "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "1"      "Changeset scope"                          "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "2"      "Tests (before/after checkpoint)"          "$ALWAYS_STATUS" "$ALWAYS_REASON"
     emit_step "2-lint" "Lint (when configured)"                   "$LINT_STATUS" "$LINT_REASON"
     emit_step "3"      "App startup"                              "$STEP3_STATUS" "$STEP3_REASON"
-    emit_step "4"      "Task-specific checks"                     "applicable" ""
-    emit_step "5"      "Code review (independent subagent)"       "applicable" ""
-    emit_step "6"      "Address findings (bounded loop)"          "applicable" ""
-    emit_step "7"      "Write done-state (script)"                "applicable" ""
-    emit_step "8"      "Report"                                   "applicable" ""
+    emit_step "4"      "Task-specific checks"                     "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "5"      "Code review (independent subagent)"       "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "6"      "Address findings (bounded loop)"          "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "7"      "Write done-state (script)"                "$ALWAYS_STATUS" "$ALWAYS_REASON"
+    emit_step "8"      "Report"                                   "$ALWAYS_STATUS" "$ALWAYS_REASON"
   } | jq -sc '.'
 )
 
@@ -175,8 +210,13 @@ printf '%s\n' "$PLAN_JSON" > "$PLAN_FILE" 2>/dev/null
 # --- STDOUT: header + one line per APPLICABLE step, canonical order ----------
 APPLICABLE=$(printf '%s' "$PLAN_JSON" | jq -r '[.steps[] | select(.status=="applicable")] | length' 2>/dev/null)
 TOTAL=$(printf '%s' "$PLAN_JSON" | jq -r '.steps | length' 2>/dev/null)
-printf 'done plan: %s of %s steps apply (full plan incl. excluded → %s)\n' \
-  "${APPLICABLE:-?}" "${TOTAL:-?}" "$PLAN_FILE"
+if [ -n "$NONCODE_REASON" ]; then
+  printf 'done plan: 0 of %s steps apply — %s (full plan → %s)\n' \
+    "${TOTAL:-?}" "$NONCODE_REASON" "$PLAN_FILE"
+else
+  printf 'done plan: %s of %s steps apply (full plan incl. excluded → %s)\n' \
+    "${APPLICABLE:-?}" "${TOTAL:-?}" "$PLAN_FILE"
+fi
 
 # `[id] <intent, padded> → dod-protocol.md#<anchor>` per applicable step.
 printf '%s' "$PLAN_JSON" | jq -r '

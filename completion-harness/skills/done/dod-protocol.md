@@ -69,6 +69,18 @@ only when the source changed — preserving `overrides`, `max_fix_attempts`,
 `max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`. No LLM guessing of command
 names.
 
+**Non-code changeset stand-down.** Triage also checks whether the WHOLE changeset
+(committed range + any introduced tree dirt) matches `noncode_globs` — the same
+predicate (`hc_changeset_is_code`) the Stop hook itself uses to silently stand down
+(exit 0, no done-state required) for doc/prose-only changesets. When it does, triage
+prints **zero applicable steps** with a header explaining the stand-down instead of a
+step list: the gate was never going to check this changeset, so running tests, app
+startup, or (the expensive part) two independent-review rounds against it is pure
+waste. Report the stand-down to the user and stop — see SKILL.md's "zero applicable
+steps" note. Any uncertainty (no git base resolved, predicate unavailable) leaves this
+check inert and every step keeps its normal applicability — fail toward gating, never
+toward skipping.
+
 <a id="step-0-5"></a>
 ## Step 0.5 — Assemble the effective DoD
 
