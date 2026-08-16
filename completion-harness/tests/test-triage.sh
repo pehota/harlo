@@ -199,6 +199,30 @@ if ! jq -e '[.steps[]|.reason? // ""|test("noncode_globs")]|any' "$PLAN10" >/dev
 else bad "code changeset: noncode reason leaked onto a real-code changeset" "$(jq -c '.steps' "$PLAN10" 2>/dev/null)"; fi
 rm -rf "$T10"
 
+# --- 11. no resolvable HC_BASE -> short-circuit stays INERT (pins the ---
+# --- deliberate conservative divergence from done-gate.sh, not a gap) -------
+# Session mode, no baselines/<sid>.sha ever written for this session id (no
+# SessionStart in this throwaway repo) -> hc__resolve_session_base leaves
+# HC_BASE empty. The tree is 100% non-code (an untracked .md file), which
+# WOULD trip hc_changeset_is_code's "noncode" verdict if triage called it with
+# an empty base the way done-gate.sh tolerates — but triage's guard requires a
+# non-empty HC_BASE first, so it must NOT call the predicate at all here, and
+# every step must keep its normal (non-noncode) status.
+T11=$(hc__test_make_repo)
+jq '.noncode_globs = ["*.md"]' "$T11/.claude/done-config.json" > "$T11/.claude/done-config.json.tmp" \
+  && mv "$T11/.claude/done-config.json.tmp" "$T11/.claude/done-config.json"
+echo "hello" > "$T11/docs.md"
+EFF11=$(jq -c '.detected // {}' "$T11/.claude/done-config.json")
+OUT11=$(CLAUDE_PROJECT_DIR="$T11" printf '%s' "$EFF11" | CLAUDE_PROJECT_DIR="$T11" bash "$SCRIPT" 2>/dev/null)
+PLAN11=$(ls "$T11"/.claude/.harness/done-plan/*.json 2>/dev/null | head -1)
+if echo "$OUT11" | grep -q "Stop gate already stands down"; then
+  bad "no-anchor changeset: wrongly fired the noncode stand-down" "$OUT11"
+else ok "no-anchor changeset: noncode stand-down does NOT fire without a resolvable base"; fi
+if jq -e '[.steps[]|select(.status=="applicable")]|length == 9' "$PLAN11" >/dev/null 2>&1; then
+  ok "no-anchor changeset: 9 steps applicable (unaffected, same as a normal code changeset)"
+else bad "no-anchor changeset: applicable-step count wrong" "$(jq -c '.steps' "$PLAN11" 2>/dev/null)"; fi
+rm -rf "$T11"
+
 # --- 8. self-sufficiency: dod-protocol.md has all old SKILL step headings ----
 MISSING_HEAD=0
 for h in "${OLD_SKILL_HEADINGS[@]}"; do

@@ -90,9 +90,19 @@ TASK_KEY="${HC_TASK_KEY:-session-$SID}"
 # Before this, triage never consulted that predicate, so /done always ran the
 # full checklist — including two independent-review rounds — on doc-only
 # changesets the gate was going to wave through for free regardless (observed:
-# 13-15 min, $2-4.55 for a single markdown file). Mirror the SAME call shape
-# done-gate.sh uses (hc_tree_status then hc_changeset_is_code with HC_BASE from
-# the hc_resolve call above) so the two never disagree.
+# 13-15 min, $2-4.55 for a single markdown file). Same call shape done-gate.sh
+# uses (hc_tree_status then hc_changeset_is_code with HC_BASE from the
+# hc_resolve call above) for the common case, but DELIBERATELY MORE
+# CONSERVATIVE, not an exact mirror: this requires a non-empty HC_BASE before
+# even asking, whereas done-gate.sh calls hc_changeset_is_code unconditionally
+# and that predicate tolerates an empty base by classifying from introduced
+# tree-dirt alone. When no anchor is resolvable (baseline aged out, deleted
+# state dir, SessionStart never ran), we deliberately do NOT attempt that
+# dirt-only classification here and just run every step — a false "run
+# everything" costs time, a false stand-down would skip verification, and this
+# predicate answers a git-history question `/done` cannot afford to get wrong
+# on unreliable signal (see #5 test-triage.sh case for a no-anchor changeset
+# that pins this as intentional, not a gap to "fix" by dropping the guard).
 #
 # Fail toward gating: any missing predicate, HC_BASE, or HEAD leaves SCOPE
 # empty, which changes nothing below — every step keeps its normal status.

@@ -81,6 +81,13 @@ steps" note. Any uncertainty (no git base resolved, predicate unavailable) leave
 check inert and every step keeps its normal applicability — fail toward gating, never
 toward skipping.
 
+**This is not a byte-for-byte mirror of the gate.** `done-gate.sh` calls
+`hc_changeset_is_code` unconditionally and that predicate tolerates an empty base
+(classifying from introduced tree-dirt alone); triage requires a resolved base first
+and stays inert without one. So a no-anchor session with an all-doc working tree can
+have the gate stand down while triage still runs the full checklist — deliberate
+(triage won't guess from history it can't anchor), not a bug.
+
 <a id="step-0-5"></a>
 ## Step 0.5 — Assemble the effective DoD
 
