@@ -25,7 +25,9 @@
         ".claude/settings.local.json"
       ],
       "link_overflow": [],
-      "link_candidates": [],
+      "link_candidates": [
+        ".nwave-ignore/.gitignore"
+      ],
       "link_candidates_overflow": [],
       "skipped": {
         "nested_in_ignored_dir": 0,
@@ -38,7 +40,7 @@
         "max_link": 50
       }
     },
-    "source_fingerprint": "f9af11fc60dbbb049df08a266d040a3d998ed046c88b82e987365df2bad218a9",
+    "source_fingerprint": "c68ca4a47180fdc6b7868c2048a9be6925bfb38e7d1c9ed6392dc12a5a14e272",
     "overrides": {}
   }
 }
