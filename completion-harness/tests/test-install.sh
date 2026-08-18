@@ -151,6 +151,65 @@ else
   bad "shipped skills/done/dod-protocol.md" "missing"
 fi
 
+# --- dod-reviewer agent shipped ---------------------------------------------
+# Step 5 spawns the shipped reviewer; on the non-plugin path it must resolve
+# bare as `dod-reviewer`, which requires the file under .claude/agents/.
+AGENT="$CL/agents/dod-reviewer.md"
+if [ -f "$AGENT" ]; then
+  ok "shipped agents/dod-reviewer.md"
+  if grep -q '^name: dod-reviewer$' "$AGENT"; then
+    ok "agents/dod-reviewer.md frontmatter has name: dod-reviewer"
+  else
+    bad "agents/dod-reviewer.md frontmatter has name: dod-reviewer" "not found"
+  fi
+  if grep -q '^description:' "$AGENT"; then
+    ok "agents/dod-reviewer.md frontmatter has description:"
+  else
+    bad "agents/dod-reviewer.md frontmatter has description:" "not found"
+  fi
+  # No plugin-root rewrite is applied to agents (they reference no plugin
+  # paths) — assert the body stayed free of the token so a future edit that
+  # introduces one is caught here rather than at runtime.
+  if grep -q 'CLAUDE_PLUGIN_ROOT' "$AGENT"; then
+    bad "agents/dod-reviewer.md references no \${CLAUDE_PLUGIN_ROOT}" \
+      "$(grep -c 'CLAUDE_PLUGIN_ROOT' "$AGENT") occurrences — install.sh applies no rewrite here"
+  else
+    ok "agents/dod-reviewer.md references no \${CLAUDE_PLUGIN_ROOT}"
+  fi
+else
+  bad "shipped agents/dod-reviewer.md" "missing"
+fi
+
+# --- idempotency: a second install changes nothing ---------------------------
+# install.sh is documented idempotent. Snapshot the installed tree, re-run, and
+# require it byte-identical — this catches a re-copied file drifting as well as a
+# duplicated hook entry in settings.local.json. .harness/ (live state) is excluded.
+SNAP="$TMP/.claude-before"
+cp -a "$CL" "$SNAP"
+if bash "$INSTALL" "$TMP" >/dev/null 2>&1; then
+  ok "install.sh exited 0 on re-run"
+else
+  bad "install.sh exited 0 on re-run" "non-zero"
+fi
+if diff -r -x '.harness' "$SNAP" "$CL" >/dev/null 2>&1; then
+  ok "re-install is idempotent (installed .claude/ byte-identical)"
+else
+  bad "re-install is idempotent" \
+    "$(diff -r -x '.harness' "$SNAP" "$CL" 2>&1 | head -3 | tr '\n' ' ')"
+fi
+if [ "$(grep -c 'done-gate.sh' "$CL/settings.local.json")" -eq 1 ]; then
+  ok "re-install did not duplicate the Stop hook entry"
+else
+  bad "re-install did not duplicate the Stop hook entry" \
+    "$(grep -c 'done-gate.sh' "$CL/settings.local.json") occurrences"
+fi
+if [ "$(grep -cxF '.claude/.harness/' "$TMP/.gitignore")" -eq 1 ]; then
+  ok "re-install did not duplicate the .gitignore entry"
+else
+  bad "re-install did not duplicate the .gitignore entry" \
+    "$(grep -cxF '.claude/.harness/' "$TMP/.gitignore") occurrences"
+fi
+
 # ---------------------------------------------------------------------------
 echo
 echo "test-install: $PASS passed, $FAIL failed"

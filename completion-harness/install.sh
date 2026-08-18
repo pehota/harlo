@@ -34,7 +34,8 @@ fi
 echo "Installing completion harness into: $TARGET_DIR"
 
 CLAUDE_DIR="$TARGET_DIR/.claude"
-mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod" "$CLAUDE_DIR/contracts"
+mkdir -p "$CLAUDE_DIR/scripts" "$CLAUDE_DIR/skills/done" "$CLAUDE_DIR/dod" \
+         "$CLAUDE_DIR/contracts" "$CLAUDE_DIR/agents"
 
 # --- copy bundle files ------------------------------------------------------
 # Executable scripts: copied AND chmod +x below. harness-common.sh (sourced,
@@ -83,10 +84,16 @@ cp "$SCRIPT_DIR/dod/base-dod.md"             "$CLAUDE_DIR/dod/base-dod.md"
 # harness-common.sh resolves them at .claude/contracts/ (sibling of scripts/).
 cp "$SCRIPT_DIR/contracts/"*.json "$CLAUDE_DIR/contracts/"
 echo "  copied contracts/"
+# Subagents: Step 5 of the protocol spawns the shipped dod-reviewer. Plugin
+# installs get it from <plugin-root>/agents/ as `completion-harness:dod-reviewer`;
+# this mirror makes it resolve bare as `dod-reviewer`. NO plugin-root rewrite is
+# applied — the agent bodies reference only $CLAUDE_PROJECT_DIR state paths, never
+# ${CLAUDE_PLUGIN_ROOT}, so there is nothing to substitute.
+cp "$SCRIPT_DIR/agents/"*.md "$CLAUDE_DIR/agents/"
 for s in "${EXEC_SCRIPTS[@]}"; do
   chmod +x "$CLAUDE_DIR/scripts/$s"
 done
-echo "  copied scripts/, skills/done/, and dod/base-dod.md"
+echo "  copied scripts/, skills/done/, agents/, and dod/base-dod.md"
 
 # --- starter done-config.json (only if absent) ------------------------------
 # Read straight from the just-copied contracts/done-config.default.json

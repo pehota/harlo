@@ -24,6 +24,10 @@ Three parts:
   baseline HEAD SHA per session and optionally caches a background test snapshot
   keyed by SHA.
 
+Plus **`agents/dod-reviewer.md`** — the shipped review subagent Step 5 spawns.
+Shipping the methodology as an agent (rather than a prompt the executor writes)
+is what keeps the executor's own suspicions out of the review.
+
 The two most error-prone `/done` steps are **scripted for determinism** (never
 hand-written by the LLM): Step 0 config detection + fingerprinting
 (`scripts/done-detect.sh`) and Step 7 done-state assembly with live-injected git
@@ -68,7 +72,8 @@ bash install.sh /path/to/project    # defaults to $PWD
 ```
 
 This is idempotent. It:
-- copies `scripts/`, `skills/done/`, and the base DoD artifact
+- copies `scripts/`, `skills/done/`, `agents/` (the `dod-reviewer` subagent the
+  review step spawns), and the base DoD artifact
   (`dod/base-dod.md` → `.claude/dod/base-dod.md`) into the project's
   `.claude/` — `/done` reads that base DoD and folds in the agent's own active
   instructions plus the task into one effective DoD per run (setup-agnostic — no
@@ -210,7 +215,8 @@ jq 'select(.verdict != "PASSED")' .claude/.harness/headless-tasks/index.jsonl
   (the ones running `done-gate.sh` / `baseline-snapshot.sh`).
 - Delete `<project>/.claude/scripts/done-gate.sh`,
   `<project>/.claude/scripts/baseline-snapshot.sh`,
-  `<project>/.claude/skills/done/`, and `<project>/.claude/.harness/`.
+  `<project>/.claude/skills/done/`, `<project>/.claude/agents/dod-reviewer.md`,
+  and `<project>/.claude/.harness/`.
 - Optionally remove `.claude/done-config.json` and the `.gitignore` line.
 
 ## Portability

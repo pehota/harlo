@@ -247,54 +247,36 @@ affected `task_checks`** so this pass is not silently invalidated.
 <a id="step-5"></a>
 ## Step 5 — Code review (independent subagent writes the review-log)
 
-**ACTION:** Spawn a **fresh, independent, Write-capable** review subagent (Task tool)
-scoped to the **Step-1 changeset diff** (e.g. `general-purpose` — *not* a review-only
-agent type lacking a Write tool, since the deliverable is a file it writes itself). May
-run **concurrently** with Step 3. Hand it the resolved `<base>` SHA and changed-file
-list, and instruct it to:
+**ACTION:** Resolve `<base>` (Step 1) and `<head>` (`git rev-parse HEAD`), then spawn the
+**shipped reviewer agent** (Task tool). May run **concurrently** with Step 3.
 
-1. Run `git diff --name-only <base> HEAD` **itself** for the authoritative changed-file
-   list, then review **EVERY** file via `git diff <base> HEAD` (never a paraphrased
-   summary — a summary leaks issues one round at a time).
-2. Record the repo-relative paths it examined into the review-log's `files_reviewed`
-   array (exactly as `git diff --name-only` emits them). **Coverage is STRUCTURALLY
-   gated:** the gate and `done-write-state.sh` require `files_reviewed ⊇ changed files`
-   (recomputed from `git diff --name-only <base>..HEAD`); a changed file not attested
-   **blocks** with "review did not cover changed files: …". Attestation must be complete
-   and truthful.
-3. **NOT re-report issues that tests/lint/type-check already catch** (formatting, style,
-   unused vars, type errors — caught deterministically in Step 2). Spend judgment on
-   logic errors, the blast-radius questions below, missing test coverage, broken
-   invariants, and security.
-4. Be **EXHAUSTIVE in round 1**: enumerate **EVERY** issue, prioritized by severity — do
-   not stop at the first few. If the changeset is too large to fully cover in one pass,
-   say so explicitly in the log's `"note"` field — never silently truncate.
-5. **Tag every finding with `severity`** (`critical | high | medium | low`). Tell it the
-   configured `min_review_level` (from config, default `high`): findings **below** it are
-   **advisory** — it must still list them (reported in Step 8) but they do not gate.
+**Do NOT author the review prompt.** The methodology — exhaustiveness, the
+blast-radius question set, the log contract — lives in the agent itself, precisely so
+your suspicions cannot narrow it. A reviewer primed with "check X" finds X and stops.
 
-**Mandatory blast-radius question set.** Instruct the subagent to *actually answer* each
-(not merely scan the diff) — a finding for every "yes":
+Try these `subagent_type`s **in order**; an unknown type returns a hard error, so fall
+through to the next:
 
-1. **Does this change widen what is read or accepted? If so, does it ALSO —
-   intentionally or not — widen what is written, allowed, or executed?** (This is
-   the highest-value question. A read-side widening that leaks into a write-,
-   permission-, or execution-side widening is the classic silent-scope bug.)
-2. Does it change an invariant, precondition, or contract that other code relies
-   on?
-3. Are new inputs / branches / error paths validated and handled the **same** as
-   the existing ones — or can a failure fall through to a success path?
-4. Does the change silently broaden a type, scope, capability, or lifetime beyond
-   what the task required?
-5. **(Confirming pass only — Step 6)** two-pronged: **(a)** does a fix in this
-   diff introduce a NEW issue elsewhere; **(b)** does it INVALIDATE a prior
-   finding or assumption about a **carried-forward** file (one that is unchanged
-   and previously reviewed, so we are NOT re-reviewing it this pass)?
+1. `completion-harness:dod-reviewer` — plugin install.
+2. `dod-reviewer` — `install.sh` / project install.
+3. **Fallback: `general-purpose`.** Neither resolved. Inline the **minimum**: `<base>`
+   and `<head>`; the log path and the exact JSON shape below; be EXHAUSTIVE, never
+   truncate silently; tag every finding `critical | high | medium | low`; and
+   `files_reviewed` lists exactly the changed paths actually reviewed, as
+   `git diff --name-only` emits them. This path **reintroduces an authored prompt** —
+   so pass **FACTS ONLY**: the base SHA, HEAD, and (round 2) the prior round's
+   findings. **Never** your own hypotheses about what is wrong.
 
-Instruct the subagent to `mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"`
-and **write** `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`
-(where `<HEAD>` is the current `git rev-parse HEAD`) with **EXACTLY** this shape —
-it must include `"contract_version": 1`:
+Pass the agent only: `<base>`, `<head>`, `min_review_level` (config, default `high`),
+and the mode — **round 1** (full changeset) or **round 2** (delta-scoped confirming
+pass, plus the prior round's findings; see Step 6).
+
+**Coverage is STRUCTURALLY gated:** the gate and `done-write-state.sh` require
+`files_reviewed ⊇ changed files` (recomputed from `git diff --name-only <base>..HEAD`);
+a changed file not attested **blocks** with "review did not cover changed files: …".
+
+The reviewer's deliverable is the file it writes itself —
+`$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`:
 
 ```json
 {
@@ -304,15 +286,15 @@ it must include `"contract_version": 1`:
   "files_reviewed": ["src/a.ts", "src/b.ts"],
   "findings": [{"severity": "high", "file": "…", "line": 0, "desc": "…"}],
   "open_findings": 0,
-  "advisory_findings": 0
+  "advisory_findings": 0,
+  "note": "…"
 }
 ```
 
-The gate validates this file against `contracts/review-log.schema.json` and **BLOCKS** if
+The gate validates it against `contracts/review-log.schema.json` and **BLOCKS** if
 `contract_version` (integer `1`), `reviewed_sha`, `min_review_level`, `files_reviewed`,
 or `findings` (each `{severity, file, line, desc}`, `severity` one of
-`critical | high | medium | low`, `line` an integer) is missing or malformed. Tell the
-subagent this plainly.
+`critical | high | medium | low`, `line` an integer) is missing or malformed.
 
 `open_findings` / `advisory_findings` are **informational** counts the subagent records;
 they are **not** what the gate trusts. **The gate and `done-write-state.sh` recompute the
@@ -371,10 +353,9 @@ Otherwise (round 1 has blocking findings):
    fix changed need re-attestation — untouched files carry forward.
 3. **Confirming pass (round 2), scoped to the delta.** Re-run Step 5, but scope the fresh
    review to the **delta since the last-verified HEAD** (`git diff <prevHEAD> HEAD`), not
-   the whole changeset — cheaper, and where regressions hide. The subagent must answer the
-   two-pronged confirming-pass question: **(a)** does this delta introduce a NEW issue
-   elsewhere, AND **(b)** does it INVALIDATE any carried-forward (unchanged,
-   previously-reviewed) file we are NOT re-reviewing? It still writes a fresh review-log
+   the whole changeset — cheaper, and where regressions hide. Pass `<prevHEAD>` as the
+   base, the new HEAD, and the **prior round's findings**; the agent runs the
+   confirming-pass question itself. It still writes a fresh review-log
    for the **new HEAD**, with `files_reviewed` listing exactly the delta's changed paths
    (blob-keyed coverage carries untouched files forward). The gate requires the new-HEAD
    log.
