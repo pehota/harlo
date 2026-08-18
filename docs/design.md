@@ -808,10 +808,19 @@ silently invalidated.
 
 ### Step 5 — Code review (independent subagent writes the review-log)
 
-Spawn a **fresh, independent, Write-capable** review subagent. **Hand it the REAL diff, not
-a summary:** give it the resolved Step-1 `<base>` SHA + the changed-file list and instruct it
-to run `git diff --name-only <base> HEAD` **itself** to get the authoritative changed-file
-list and review **every** file in the **full changeset**. Its deliverable **is
+Spawn the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`), trying
+`completion-harness:dod-reviewer` (plugin), then `dod-reviewer` (`install.sh` mirror),
+then `general-purpose` with an inlined minimum. **The executor does not author the review
+prompt** — it passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the mode
+(round-1 full changeset / round-2 delta pass). That is the point of shipping the agent: a
+prompt the executor writes carries the executor's own suspicions, and a reviewer told to
+"check X" finds X and stops. Agent availability **cannot be probed from the shell** (no CLI,
+no manifest), so the ladder is prompt-level and the `general-purpose` rung reintroduces an
+authored prompt — facts-only discipline is all that guards it there.
+
+The agent runs `git diff --name-only <base> <head>` **itself** for the authoritative
+changed-file list and reviews **every** file against the real diff, reading enough
+surrounding context to judge (a hunk alone is not enough). Its deliverable **is
 the file** `.claude/.harness/review-log/<HEAD>.json` — it writes the log itself:
 `{ "contract_version": 1, "reviewed_sha": "<HEAD>", "min_review_level": "high",
 "files_reviewed": [paths …], "findings": [ {severity, file, line, desc} … ],
@@ -827,9 +836,11 @@ is told **not** to re-report what the Step-2 tests/lint/type-check already catch
 style, unused vars, type errors) — that is advisory noise — and to spend its judgment on
 what those tools cannot catch (logic errors, blast-radius, missing test coverage, broken
 invariants, security). Because the deliverable is a
-*written* file, the agent type must have a Write tool (e.g. `general-purpose`); a review-only
-type that lacks Write (e.g. `feature-dev:code-reviewer`) cannot produce the log and must not
-be used. The main agent does **not** transcribe a count from its own context (that would be
+*written* file, the reviewer needs a Write tool — `dod-reviewer` grants
+`Read, Grep, Glob, Bash, Write, WebFetch, WebSearch` and deliberately **no `Edit`** (it
+reviews, it never modifies code); a fallback type that lacks Write (e.g.
+`feature-dev:code-reviewer`) cannot produce the log and must not be used. The main agent
+does **not** transcribe a count from its own context (that would be
 self-review — the harness requires an independent reviewer; don't grade your own homework).
 
 The reviewer must be **EXHAUSTIVE**: enumerate **every** issue prioritized by severity, not
@@ -837,7 +848,11 @@ stop early, and if the diff is too large to fully cover, **say so explicitly** i
 this up-front thoroughness is what prevents findings trickling out one round at a time. It
 must *answer* a mandatory blast-radius question set — foremost **"does a widening of what is
 read/accepted also widen what is written, allowed, or executed?"**, plus invariant/contract
-changes, new-branch/error-path parity, and silent scope broadening — not merely scan the diff.
+changes, new-branch/error-path parity, silent scope broadening, and **declared ≠ executed**
+(walk every trigger→job, event→handler, hook→script link against the platform's documented
+semantics — WebSearch/WebFetch are granted for exactly that; the canonical trap is a tag
+pushed with the default `GITHUB_TOKEN`, which does **not** start the `push` workflow run the
+pipeline expects) — not merely scan the diff.
 
 Each finding is tagged `severity` (`critical|high|medium|low`). `open_findings`/
 `advisory_findings` are **informational** — the gate and writer **recompute the blocking
@@ -1359,13 +1374,15 @@ global use.
 | `completion-harness/scripts/done-write-state.sh` | `/done` Step 7: inject live git facts + write done-state (refuses on introduced blockers, `not_run`-without-escalation, evidence-less green); folds `.plan`; writes `escalation-accept` sidecar |
 | `completion-harness/skills/done/SKILL.md` | `/done` skill — thin entry point (runs triage, routes to `dod-protocol.md`) |
 | `completion-harness/skills/done/dod-protocol.md` | `/done` full protocol reference (all step sections + escalation rules) |
+| `completion-harness/agents/dod-reviewer.md` | Shipped Step-5 review subagent — owns the review methodology so the executor never authors the prompt |
 | `completion-harness/dod/base-dod.md` | Base DoD (assembled into the effective DoD) |
 | `completion-harness/DOD.md` | The harness project's own DoD (meta) |
 | `completion-harness/install.sh` | Idempotent installer → target `.claude/` + `settings.local.json` |
 | `completion-harness/README.md` | Install / use / uninstall / portability |
 
 **Installed into a target project** (by `install.sh`):
-`.claude/scripts/`, `.claude/skills/done/`, `.claude/dod/base-dod.md`,
+`.claude/scripts/`, `.claude/skills/done/`, `.claude/agents/` (so the reviewer resolves
+bare as `dod-reviewer`), `.claude/dod/base-dod.md`,
 `.claude/contracts/` (the schema store `hc_validate` reads),
 `.claude/done-config.json`; hooks appended to `.claude/settings.local.json` (machine-local,
 opt-in per machine); `.claude/.harness/` (baselines + done-state) gitignored.

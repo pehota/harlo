@@ -193,7 +193,9 @@ C4Container
     the plugin *is* the install.
   - **`install.sh` mirror**: copies the bundle into the target's `.claude/`
     (including `contracts/` → `.claude/contracts/`, the schema store `hc_validate`
-    reads), wires **only** Stop + SessionStart + PreToolUse into
+    reads, and `agents/` → `.claude/agents/`, so Step 5's reviewer resolves bare as
+    `dod-reviewer` instead of `completion-harness:dod-reviewer`), wires **only**
+    Stop + SessionStart + PreToolUse into
     `settings.local.json` via a `jq` merge (PostToolUse/`commit-ledger.sh` is
     plugin-only — see §12's edge-case matrix), and
     `sed`-rewrites `${CLAUDE_PLUGIN_ROOT}` → `$CLAUDE_PROJECT_DIR/.claude` in the
@@ -728,24 +730,35 @@ section).
 
 ## 9. The review loop (SKILL Steps 5-6)
 
-Step 5 spawns a fresh, **Write-capable**, independent subagent handed the **real
-diff** (it runs `git diff --name-only <base> HEAD` itself for the authoritative
-changed-file list, then reviews the **full changeset**), instructed to be
-**exhaustive**, tag every finding with a `severity`, and record the files it
-examined in `files_reviewed`; its deliverable *is* a file it writes:
-`review-log/<HEAD>.json`. Two gates apply to that log: **severity** (blocking count
-via `hc_review_blocking`) and **coverage** (`files_reviewed ⊇ changed files` via
-`hc_review_coverage_gap` — structural, so a too-narrow review can't pass as done).
-The reviewer is also told **deterministic-first**: don't re-report what Step-2
-tests/lint/type-check already catch (formatting, style, unused vars, type errors);
-spend judgment on logic, blast-radius, missing test coverage, invariants, security —
-prompt-level economy that keeps each review cheap. Step 6 is a bounded fix loop that
-exploits the HEAD-keying to make re-review free, and gates only on findings
-**at/above `min_review_level`**.
+Step 5 spawns the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`) —
+`completion-harness:dod-reviewer` on the plugin path, bare `dod-reviewer` on the
+`install.sh` path, `general-purpose` + an inlined minimum only if neither resolves.
+The executor passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the
+mode (round-1 full changeset / round-2 delta pass). It does **not** author the
+prompt — that is the structural point. A prompt the executor writes carries the
+executor's suspicions, and a reviewer told "check X" finds X and stops there; the
+methodology living in a shipped agent removes that authorship entirely.
+
+The agent runs `git diff --name-only <base> <head>` itself for the authoritative
+file list, reviews the **real diff** of every file, is **exhaustive**, tags every
+finding with a `severity`, records what it reviewed in `files_reviewed`, and is told
+**deterministic-first**: don't re-report what Step-2 tests/lint/type-check already
+catch (formatting, style, unused vars, type errors); spend judgment on logic,
+blast-radius, missing test coverage, invariants, security. Its blast-radius question
+set includes **declared ≠ executed** — walk each trigger→job, event→handler,
+hook→script link against the platform's documented semantics, with WebSearch/WebFetch
+granted for exactly that (the canonical trap: a tag pushed with the default
+`GITHUB_TOKEN` does not start the `push` workflow run you expect). Its deliverable
+*is* a file it writes: `review-log/<HEAD>.json`. Two gates apply to that log:
+**severity** (blocking count via `hc_review_blocking`) and **coverage**
+(`files_reviewed ⊇ changed files` via `hc_review_coverage_gap` — structural, so a
+too-narrow review can't pass as done). Step 6 is a bounded fix loop that exploits the
+HEAD-keying to make re-review free, and gates only on findings **at/above
+`min_review_level`**.
 
 ```mermaid
 flowchart TD
-  S4["Step 5: spawn FRESH Write-capable reviewer<br/>(general-purpose / claude — NOT a review-only type w/o Write)<br/>hand REAL diff (base SHA + file list); run git diff itself<br/>EXHAUSTIVE, tag severity; answer blast-radius Q-set<br/>write review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
+  S4["Step 5: spawn SHIPPED dod-reviewer agent<br/>completion-harness:dod-reviewer → dod-reviewer → general-purpose<br/>pass FACTS ONLY: base, head, min_review_level, mode<br/>agent runs git diff itself; EXHAUSTIVE, tags severity,<br/>answers blast-radius Q-set; writes review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
   R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate<br/>(advisory findings may remain)"]
   R1 -->|no| BATCH["batch ALL blocking findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)<br/>trivial advisory fixes only in the SAME commit"]
   BATCH --> COMMIT["commit ONCE → HEAD moves once<br/>old log (prev HEAD) now stale"]
@@ -922,9 +935,15 @@ unavoidable.
 
 **Trust-but-falsifiable (prompt-level enforcement):** the review's *quality*, the
 blast-radius answers, `task_checks` semantics, `max_review_rounds`/`max_fix_attempts`
-caps, escalation honesty. These live in `SKILL.md` prose and are obeyed by a
-cooperative agent; the transcript makes a lie *detectable* (an escalation with no
-user turn, a fabricated error string) but the shell cannot *prove* them.
+caps, escalation honesty. These live in `dod-protocol.md` and `agents/dod-reviewer.md`
+prose and are obeyed by a cooperative agent; the transcript makes a lie *detectable*
+(an escalation with no user turn, a fabricated error string) but the shell cannot
+*prove* them. Shipping the review methodology as an **agent** rather than a prompt the
+executor writes hardens one of these: the executor can no longer narrow the review by
+authoring it — but only on the two paths where the agent resolves. **Agent
+availability cannot be probed from the shell** (no CLI, no manifest to query), so the
+`general-purpose` fallback is prompt-level too, and on that path the authored prompt —
+and its leak-your-suspicions failure mode — is back.
 
 **A malicious agent can always defeat a local shell gate** — fabricate the
 review-log, hardcode `open_findings:0`, record a false `exit_code:0`. No local
@@ -1082,6 +1101,7 @@ description was corrected the same way.
 | `scripts/done-write-state.sh` | `/done` Step 7 — inject live facts (`verified_sha`, `head_tree`, `review_anchor_sha`, `base_sha`, `tree_clean`; payload values overwritten or deleted), stamp `contract_version:1`, refuse dirty/non-green (incl. `not_run` tests without escalation + evidence-less green), fold `done-plan` as `.plan`, write `escalation-accept/<HEAD>.json` sidecar, validate done-state (+ review-log) against schema before writing (refuse if invalid) |
 | `skills/done/SKILL.md` | Thin `/done` entry point — runs triage, routes to `dod-protocol.md` per applicable step (progressive disclosure) |
 | `skills/done/dod-protocol.md` | Full `/done` protocol reference — every step section (anchors) + escalation rules |
+| `agents/dod-reviewer.md` | Shipped Step-5 review subagent — carries the review methodology so the executor never authors the prompt; writes `review-log/<HEAD>.json` |
 | `dod/base-dod.md` | Base DoD folded into the effective DoD (Step 0.5) |
 | `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) |
 | `.claude-plugin/plugin.json` | Plugin manifest |
