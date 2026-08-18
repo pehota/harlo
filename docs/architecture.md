@@ -944,12 +944,13 @@ prose and are obeyed by a cooperative agent; the transcript makes a lie *detecta
 executor writes hardens one of these: the executor can no longer narrow the review by
 authoring it. The `subagent_type` ladder that reaches the agent is itself prompt-level:
 the agent **files** are on disk and are findable, but **presence on disk is not
-"loaded into the running session"** — agents register at session start, so no script
-can know what type this session actually resolved. The `general-purpose` rung therefore
-still authors a prompt; it is kept thin by pointing the agent at the shipped definition
-to follow verbatim rather than restating the methodology, so what remains prompt-level
-there is the facts-only discipline (and, when the agent file is itself under review, an
-inlined methodology).
+"loaded into the running session"** — observed: a definition dropped into
+`.claude/agents/` mid-session was still rejected as an unknown `subagent_type` in that
+same session. So no script can determine what types the running session will resolve.
+The `general-purpose` rung therefore still authors a prompt; it is kept thin by pointing
+the agent at the shipped definition to follow verbatim rather than restating the
+methodology, so what remains prompt-level there is the facts-only discipline (and, when
+the agent file is under review or unreadable, an inlined methodology).
 
 **A malicious agent can always defeat a local shell gate** — fabricate the
 review-log, hardcode `open_findings:0`, record a false `exit_code:0`. No local

@@ -264,14 +264,19 @@ through to the next:
    log. Instead tell the agent to **read the shipped agent definition and follow it
    verbatim**, trying `${CLAUDE_PLUGIN_ROOT}/agents/dod-reviewer.md` (plugin install)
    then `$CLAUDE_PROJECT_DIR/.claude/agents/dod-reviewer.md` (`install.sh` install) —
-   whichever exists — and then pass it exactly the same facts as the other rungs.
-   **Carve-out:** if that agent file is itself in the changeset under review, inline
-   the methodology instead (exhaustive, deterministic-first, read surrounding
-   context, the blast-radius question set, the round-2 confirming-pass question, the
-   log contract below) — a reviewer must not take its methodology from the artifact
-   it is judging.
-   This rung still **authors a prompt**, but a thin one: a pointer plus facts, not a
-   review spec in the executor's words. The facts-only rule still binds — the base
+   and then pass it exactly the same facts as the other rungs.
+   **Inline the methodology instead** — exhaustive, deterministic-first, read
+   surrounding context, the blast-radius question set, the round-2 confirming-pass
+   question, the log contract below — in **either** of two cases:
+   - **Carve-out — the definition is itself under review:** any path in
+     `git diff --name-only <base>..<head>` ending in `agents/dod-reviewer.md` (that
+     list is repo-relative, so match by suffix, not by the env-rooted paths above).
+     A reviewer must not take its methodology from the artifact it is judging.
+   - **Neither definition file is readable.** Never spawn this rung methodology-less.
+
+   This rung still **authors a prompt**, but a thin one: a pointer (or that inlined
+   list) plus facts, not a review spec in the executor's words. The facts-only rule
+   still binds — the base
    SHA, HEAD, `min_review_level`, the mode, and (round 2) the prior round's findings,
    and **never** your own hypotheses about what is wrong.
 

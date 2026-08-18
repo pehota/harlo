@@ -817,12 +817,15 @@ and the mode (round-1 full changeset / round-2 delta pass). That is the point of
 the agent: a prompt the executor writes carries the executor's own suspicions, and a
 reviewer told to "check X" finds X and stops. The ladder itself is prompt-level — the
 agent files are on disk, but **presence on disk is not "loaded into the running
-session"** (agents register at session start), so no script can know what type this
-session resolved. Pointing the last rung at the shipped definition keeps its authored
-prompt down to a pointer plus facts, so the same methodology runs on all three rungs.
-The one exception is the carve-out: when `agents/dod-reviewer.md` is itself in the
-changeset under review, that rung inlines the methodology instead — a reviewer must not
-take its methodology from the artifact it is judging.
+session"** — observed: a definition added to `.claude/agents/` mid-session was still
+rejected as an unknown `subagent_type` in that same session, so no script can determine
+what types the running session will resolve. Pointing the last rung at the shipped
+definition keeps its authored prompt down to a pointer plus facts, so the same
+methodology runs on all three rungs. Two cases make that rung inline the methodology
+instead: when the definition is itself under review (a changed path ending in
+`agents/dod-reviewer.md` — a reviewer must not take its methodology from the artifact it
+is judging), and when neither definition path is readable, so the rung is never spawned
+without one.
 
 The agent runs `git diff --name-only <base> <head>` **itself** for the authoritative
 changed-file list and reviews **every** file against the real diff, reading enough
