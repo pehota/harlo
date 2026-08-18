@@ -732,12 +732,14 @@ section).
 
 Step 5 spawns the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`) —
 `completion-harness:dod-reviewer` on the plugin path, bare `dod-reviewer` on the
-`install.sh` path, `general-purpose` + an inlined minimum only if neither resolves.
+`install.sh` path, and — only if neither resolves — `general-purpose` instructed to
+**read that same agent file and follow it verbatim** (inlining the methodology only in
+the carve-out where the agent file is itself in the changeset under review).
 The executor passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the
 mode (round-1 full changeset / round-2 delta pass). It does **not** author the
-prompt — that is the structural point. A prompt the executor writes carries the
+prompt — that is the point. A prompt the executor writes carries the
 executor's suspicions, and a reviewer told "check X" finds X and stops there; the
-methodology living in a shipped agent removes that authorship entirely.
+methodology living in a shipped agent keeps that authorship out of all three rungs.
 
 The agent runs `git diff --name-only <base> <head>` itself for the authoritative
 file list, reviews the **real diff** of every file, is **exhaustive**, tags every
@@ -758,7 +760,7 @@ HEAD-keying to make re-review free, and gates only on findings **at/above
 
 ```mermaid
 flowchart TD
-  S4["Step 5: spawn SHIPPED dod-reviewer agent<br/>completion-harness:dod-reviewer → dod-reviewer → general-purpose<br/>pass FACTS ONLY: base, head, min_review_level, mode<br/>agent runs git diff itself; EXHAUSTIVE, tags severity,<br/>answers blast-radius Q-set; writes review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
+  S4["Step 5: spawn SHIPPED dod-reviewer agent<br/>completion-harness:dod-reviewer → dod-reviewer → general-purpose<br/>(last rung: READ agents/dod-reviewer.md and follow it verbatim;<br/>inline it only if that file is in the changeset)<br/>pass FACTS ONLY: base, head, min_review_level, mode<br/>agent runs git diff itself; EXHAUSTIVE, tags severity,<br/>answers blast-radius Q-set; writes review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
   R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate<br/>(advisory findings may remain)"]
   R1 -->|no| BATCH["batch ALL blocking findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)<br/>trivial advisory fixes only in the SAME commit"]
   BATCH --> COMMIT["commit ONCE → HEAD moves once<br/>old log (prev HEAD) now stale"]
@@ -940,10 +942,14 @@ prose and are obeyed by a cooperative agent; the transcript makes a lie *detecta
 (an escalation with no user turn, a fabricated error string) but the shell cannot
 *prove* them. Shipping the review methodology as an **agent** rather than a prompt the
 executor writes hardens one of these: the executor can no longer narrow the review by
-authoring it — but only on the two paths where the agent resolves. **Agent
-availability cannot be probed from the shell** (no CLI, no manifest to query), so the
-`general-purpose` fallback is prompt-level too, and on that path the authored prompt —
-and its leak-your-suspicions failure mode — is back.
+authoring it. The `subagent_type` ladder that reaches the agent is itself prompt-level:
+the agent **files** are on disk and are findable, but **presence on disk is not
+"loaded into the running session"** — agents register at session start, so no script
+can know what type this session actually resolved. The `general-purpose` rung therefore
+still authors a prompt; it is kept thin by pointing the agent at the shipped definition
+to follow verbatim rather than restating the methodology, so what remains prompt-level
+there is the facts-only discipline (and, when the agent file is itself under review, an
+inlined methodology).
 
 **A malicious agent can always defeat a local shell gate** — fabricate the
 review-log, hardcode `open_findings:0`, record a false `exit_code:0`. No local

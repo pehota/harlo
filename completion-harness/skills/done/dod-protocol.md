@@ -259,13 +259,21 @@ through to the next:
 
 1. `completion-harness:dod-reviewer` — plugin install.
 2. `dod-reviewer` — `install.sh` / project install.
-3. **Fallback: `general-purpose`.** Neither resolved. Inline the **minimum**: `<base>`
-   and `<head>`; the log path and the exact JSON shape below; be EXHAUSTIVE, never
-   truncate silently; tag every finding `critical | high | medium | low`; and
-   `files_reviewed` lists exactly the changed paths actually reviewed, as
-   `git diff --name-only` emits them. This path **reintroduces an authored prompt** —
-   so pass **FACTS ONLY**: the base SHA, HEAD, and (round 2) the prior round's
-   findings. **Never** your own hypotheses about what is wrong.
+3. **Fallback: `general-purpose`.** Neither resolved. Do **not** re-state the
+   methodology — a re-statement is a weaker review that still writes a schema-valid
+   log. Instead tell the agent to **read the shipped agent definition and follow it
+   verbatim**, trying `${CLAUDE_PLUGIN_ROOT}/agents/dod-reviewer.md` (plugin install)
+   then `$CLAUDE_PROJECT_DIR/.claude/agents/dod-reviewer.md` (`install.sh` install) —
+   whichever exists — and then pass it exactly the same facts as the other rungs.
+   **Carve-out:** if that agent file is itself in the changeset under review, inline
+   the methodology instead (exhaustive, deterministic-first, read surrounding
+   context, the blast-radius question set, the round-2 confirming-pass question, the
+   log contract below) — a reviewer must not take its methodology from the artifact
+   it is judging.
+   This rung still **authors a prompt**, but a thin one: a pointer plus facts, not a
+   review spec in the executor's words. The facts-only rule still binds — the base
+   SHA, HEAD, `min_review_level`, the mode, and (round 2) the prior round's findings,
+   and **never** your own hypotheses about what is wrong.
 
 Pass the agent only: `<base>`, `<head>`, `min_review_level` (config, default `high`),
 and the mode — **round 1** (full changeset) or **round 2** (delta-scoped confirming
@@ -354,8 +362,10 @@ Otherwise (round 1 has blocking findings):
 3. **Confirming pass (round 2), scoped to the delta.** Re-run Step 5, but scope the fresh
    review to the **delta since the last-verified HEAD** (`git diff <prevHEAD> HEAD`), not
    the whole changeset — cheaper, and where regressions hide. Pass `<prevHEAD>` as the
-   base, the new HEAD, and the **prior round's findings**; the agent runs the
-   confirming-pass question itself. It still writes a fresh review-log
+   base, the new HEAD, and the **prior round's findings**; the confirming-pass
+   question lives in the agent definition, so the agent runs it itself (on the
+   `general-purpose` rung, via the definition you pointed it at — or via the inlined
+   methodology in that rung's carve-out). It still writes a fresh review-log
    for the **new HEAD**, with `files_reviewed` listing exactly the delta's changed paths
    (blob-keyed coverage carries untouched files forward). The gate requires the new-HEAD
    log.

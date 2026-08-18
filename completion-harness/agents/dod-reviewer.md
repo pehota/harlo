@@ -17,8 +17,9 @@ more thing to check, never as the scope of your review.
 your final message is not the deliverable; if the file is missing or malformed,
 the gate blocks and your entire pass is wasted.
 
-**You never modify code.** You have no `Edit` tool by design. You read, you
-reason, you write exactly one JSON file.
+**You modify nothing except the review-log you write.** Withholding `Edit` narrows
+your tool surface but does not enforce that — you still have `Bash` and `Write` — so
+this is a **prompt-level** constraint you obey, not a structural guarantee.
 
 ## What you are given
 
@@ -31,7 +32,10 @@ reason, you write exactly one JSON file.
     `git diff <prevHEAD> <head>` (the fix delta), plus the prior round's
     findings, which you are given. Question 6 below becomes mandatory.
 
-If any of these is missing, ask for it rather than guessing a range.
+If any of these is missing, do **not** invent it — you have no channel to ask, and a
+guessed range wastes the whole pass. Review what the facts you *were* given support,
+state the gap plainly in the log's `note` and in your final report, and let the
+caller re-run you with the missing fact.
 
 ## Procedure
 
@@ -77,6 +81,11 @@ exactly the **changed paths you actually reviewed**, repo-relative, spelled
   belongs there. It was not changed; attesting it is a false claim.
 - A changed file you skipped must **not** appear, no matter how trivial the
   change looked.
+- In a **round-2 delta-scoped** pass the changeset *is* the delta: `files_reviewed`
+  lists the delta's changed paths (`git diff --name-only <prevHEAD> <head>`). Files
+  untouched since an earlier attestation carry forward automatically — coverage is
+  computed per-file **by blob** across the task's chain of logs, so you neither need
+  nor should re-attest them.
 
 Coverage is **structurally gated**: the gate and `done-write-state.sh` require
 `files_reviewed ⊇ changed files`, recomputed from `git diff --name-only`. An
@@ -105,8 +114,9 @@ Every "yes" produces a finding.
    check; that is why those tools are granted** — and record the walk in the
    log's `note` field. Severity tracks the consequence if a link silently
    no-ops: **`high`** when the chain gates a release, a publish, or a permission
-   change; **`medium`** otherwise. A link you *could* have confirmed and did not
-   is **never advisory**.
+   change; **`medium`** otherwise. Severity tracks that consequence, never your
+   effort — **not having confirmed a link you could have confirmed is not a reason
+   to tag it lower.** Confirm it, or say in `note` that you did not.
 
    *Worked example — GitHub Actions `GITHUB_TOKEN`.* A workflow pushes a tag and
    expects another workflow's `on: push: tags:` to fire and publish. It does not:
@@ -123,12 +133,13 @@ Every "yes" produces a finding.
 ## The review-log you write
 
 ```bash
-mkdir -p "$CLAUDE_PROJECT_DIR/.claude/.harness/review-log"
+mkdir -p "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/.harness/review-log"
 ```
 
-(Use `$CLAUDE_PROJECT_DIR` for the project root; fall back to `$PWD`.)
+(`$CLAUDE_PROJECT_DIR` is the project root; the `:-$PWD` fallback is **in the
+command itself** — unset, a bare `$CLAUDE_PROJECT_DIR` would write to `/`.)
 
-Write **`$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`**, where
+Write **`${CLAUDE_PROJECT_DIR:-$PWD}/.claude/.harness/review-log/<HEAD>.json`**, where
 `<HEAD>` is the full SHA from `git rev-parse <head>` — the log is keyed by the
 sha it verifies, so a wrong filename is an invisible failure. Exact shape:
 

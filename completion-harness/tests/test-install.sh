@@ -167,6 +167,15 @@ if [ -f "$AGENT" ]; then
   else
     bad "agents/dod-reviewer.md frontmatter has description:" "not found"
   fi
+  # The reviewer's deliverable IS the review-log file it writes — drop Write from
+  # the frontmatter and every /done run breaks at Step 5 while every other suite
+  # still passes, so pin it here.
+  if grep -q '^tools:.*Write' "$AGENT"; then
+    ok "agents/dod-reviewer.md frontmatter tools: includes Write"
+  else
+    bad "agents/dod-reviewer.md frontmatter tools: includes Write" \
+      "without Write the agent cannot produce the review-log the gate requires"
+  fi
   # No plugin-root rewrite is applied to agents (they reference no plugin
   # paths) — assert the body stayed free of the token so a future edit that
   # introduces one is caught here rather than at runtime.

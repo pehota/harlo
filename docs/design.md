@@ -810,13 +810,19 @@ silently invalidated.
 
 Spawn the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`), trying
 `completion-harness:dod-reviewer` (plugin), then `dod-reviewer` (`install.sh` mirror),
-then `general-purpose` with an inlined minimum. **The executor does not author the review
-prompt** — it passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the mode
-(round-1 full changeset / round-2 delta pass). That is the point of shipping the agent: a
-prompt the executor writes carries the executor's own suspicions, and a reviewer told to
-"check X" finds X and stops. Agent availability **cannot be probed from the shell** (no CLI,
-no manifest), so the ladder is prompt-level and the `general-purpose` rung reintroduces an
-authored prompt — facts-only discipline is all that guards it there.
+then `general-purpose` told to **read `agents/dod-reviewer.md` and follow it verbatim**
+(trying the plugin path then the `.claude/agents/` path). **The executor does not author
+the review prompt** — it passes **facts only**: `<base>`, `<head>`, `min_review_level`,
+and the mode (round-1 full changeset / round-2 delta pass). That is the point of shipping
+the agent: a prompt the executor writes carries the executor's own suspicions, and a
+reviewer told to "check X" finds X and stops. The ladder itself is prompt-level — the
+agent files are on disk, but **presence on disk is not "loaded into the running
+session"** (agents register at session start), so no script can know what type this
+session resolved. Pointing the last rung at the shipped definition keeps its authored
+prompt down to a pointer plus facts, so the same methodology runs on all three rungs.
+The one exception is the carve-out: when `agents/dod-reviewer.md` is itself in the
+changeset under review, that rung inlines the methodology instead — a reviewer must not
+take its methodology from the artifact it is judging.
 
 The agent runs `git diff --name-only <base> <head>` **itself** for the authoritative
 changed-file list and reviews **every** file against the real diff, reading enough
@@ -837,8 +843,10 @@ style, unused vars, type errors) — that is advisory noise — and to spend its
 what those tools cannot catch (logic errors, blast-radius, missing test coverage, broken
 invariants, security). Because the deliverable is a
 *written* file, the reviewer needs a Write tool — `dod-reviewer` grants
-`Read, Grep, Glob, Bash, Write, WebFetch, WebSearch` and deliberately **no `Edit`** (it
-reviews, it never modifies code); a fallback type that lacks Write (e.g.
+`Read, Grep, Glob, Bash, Write, WebFetch, WebSearch` and deliberately **no `Edit`** —
+which narrows the tool surface but guarantees nothing structurally, since `Bash` and
+`Write` remain, so "modify nothing but the review-log" is a **prompt-level** constraint;
+a fallback type that lacks Write (e.g.
 `feature-dev:code-reviewer`) cannot produce the log and must not be used. The main agent
 does **not** transcribe a count from its own context (that would be
 self-review — the harness requires an independent reviewer; don't grade your own homework).
