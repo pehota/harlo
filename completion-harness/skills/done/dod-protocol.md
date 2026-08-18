@@ -258,27 +258,14 @@ Try these `subagent_type`s **in order**; an unknown type returns a hard error, s
 through to the next:
 
 1. `completion-harness:dod-reviewer` — plugin install.
-2. `dod-reviewer` — `install.sh` / project install.
-3. **Fallback: `general-purpose`.** Neither resolved. Do **not** re-state the
-   methodology — a re-statement is a weaker review that still writes a schema-valid
-   log. Instead tell the agent to **read the shipped agent definition and follow it
-   verbatim**, trying `${CLAUDE_PLUGIN_ROOT}/agents/dod-reviewer.md` (plugin install)
-   then `$CLAUDE_PROJECT_DIR/.claude/agents/dod-reviewer.md` (`install.sh` install) —
-   and then pass it exactly the same facts as the other rungs.
-   **Inline the methodology instead** — exhaustive, deterministic-first, read
-   surrounding context, the blast-radius question set, the round-2 confirming-pass
-   question, the log contract below — in **either** of two cases:
-   - **Carve-out — the definition is itself under review:** any path in
-     `git diff --name-only <base>..<head>` ending in `agents/dod-reviewer.md` (that
-     list is repo-relative, so match by suffix, not by the env-rooted paths above).
-     A reviewer must not take its methodology from the artifact it is judging.
-   - **Neither definition file is readable.** Never spawn this rung methodology-less.
+2. `dod-reviewer` — `install.sh` mirror.
 
-   This rung still **authors a prompt**, but a thin one: a pointer (or that inlined
-   list) plus facts, not a review spec in the executor's words. The facts-only rule
-   still binds — the base
-   SHA, HEAD, `min_review_level`, the mode, and (round 2) the prior round's findings,
-   and **never** your own hypotheses about what is wrong.
+**Neither resolved → raise a Category A escalation. Do NOT substitute another agent and
+do NOT write a review-log.** The reviewer ships in this bundle, so its definition is on
+disk beside the skill you are running; what is missing is the running **session's**
+registration of it — the session started before the install, or the plugin cache predates
+the agent. The fix is to **restart the session**, and to **reinstall** if a restart does
+not resolve it. The gate stays blocked, which is correct.
 
 Pass the agent only: `<base>`, `<head>`, `min_review_level` (config, default `high`),
 and the mode — **round 1** (full changeset) or **round 2** (delta-scoped confirming
@@ -368,9 +355,8 @@ Otherwise (round 1 has blocking findings):
    review to the **delta since the last-verified HEAD** (`git diff <prevHEAD> HEAD`), not
    the whole changeset — cheaper, and where regressions hide. Pass `<prevHEAD>` as the
    base, the new HEAD, and the **prior round's findings**; the confirming-pass
-   question lives in the agent definition, so the agent runs it itself (on the
-   `general-purpose` rung, via the definition you pointed it at — or via the inlined
-   methodology in that rung's carve-out). It still writes a fresh review-log
+   question lives in the agent definition, so the agent runs it itself. It still
+   writes a fresh review-log
    for the **new HEAD**, with `files_reviewed` listing exactly the delta's changed paths
    (blob-keyed coverage carries untouched files forward). The gate requires the new-HEAD
    log.

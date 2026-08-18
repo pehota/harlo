@@ -809,23 +809,16 @@ silently invalidated.
 ### Step 5 — Code review (independent subagent writes the review-log)
 
 Spawn the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`), trying
-`completion-harness:dod-reviewer` (plugin), then `dod-reviewer` (`install.sh` mirror),
-then `general-purpose` told to **read `agents/dod-reviewer.md` and follow it verbatim**
-(trying the plugin path then the `.claude/agents/` path). **The executor does not author
-the review prompt** — it passes **facts only**: `<base>`, `<head>`, `min_review_level`,
-and the mode (round-1 full changeset / round-2 delta pass). That is the point of shipping
-the agent: a prompt the executor writes carries the executor's own suspicions, and a
-reviewer told to "check X" finds X and stops. The ladder itself is prompt-level — the
-agent files are on disk, but **presence on disk is not "loaded into the running
-session"** — observed: a definition added to `.claude/agents/` mid-session was still
-rejected as an unknown `subagent_type` in that same session, so no script can determine
-what types the running session will resolve. Pointing the last rung at the shipped
-definition keeps its authored prompt down to a pointer plus facts, so the same
-methodology runs on all three rungs. Two cases make that rung inline the methodology
-instead: when the definition is itself under review (a changed path ending in
-`agents/dod-reviewer.md` — a reviewer must not take its methodology from the artifact it
-is judging), and when neither definition path is readable, so the rung is never spawned
-without one.
+`completion-harness:dod-reviewer` (plugin), then `dod-reviewer` (`install.sh` mirror).
+If neither resolves, Step 5 **stops and escalates (Category A)** rather than substituting
+another agent: the reviewer ships in this bundle, so its definition is on disk and only
+the running session's registration of it is missing — restart the session, reinstall if
+that doesn't help. A blocked gate beats a review by a substitute that writes a
+schema-valid log and passes. **The executor does not author the review prompt** — it
+passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the mode (round-1 full
+changeset / round-2 delta pass). That is the point of shipping the agent: a prompt the
+executor writes carries the executor's own suspicions, and a reviewer told to "check X"
+finds X and stops.
 
 The agent runs `git diff --name-only <base> <head>` **itself** for the authoritative
 changed-file list and reviews **every** file against the real diff, reading enough
@@ -848,9 +841,8 @@ invariants, security). Because the deliverable is a
 *written* file, the reviewer needs a Write tool — `dod-reviewer` grants
 `Read, Grep, Glob, Bash, Write, WebFetch, WebSearch` and deliberately **no `Edit`** —
 which narrows the tool surface but guarantees nothing structurally, since `Bash` and
-`Write` remain, so "modify nothing but the review-log" is a **prompt-level** constraint;
-a fallback type that lacks Write (e.g.
-`feature-dev:code-reviewer`) cannot produce the log and must not be used. The main agent
+`Write` remain, so "modify nothing but the review-log" is a **prompt-level** constraint.
+The main agent
 does **not** transcribe a count from its own context (that would be
 self-review — the harness requires an independent reviewer; don't grade your own homework).
 

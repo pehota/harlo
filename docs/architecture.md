@@ -732,14 +732,16 @@ section).
 
 Step 5 spawns the **shipped `dod-reviewer` agent** (`agents/dod-reviewer.md`) —
 `completion-harness:dod-reviewer` on the plugin path, bare `dod-reviewer` on the
-`install.sh` path, and — only if neither resolves — `general-purpose` instructed to
-**read that same agent file and follow it verbatim** (inlining the methodology only in
-the carve-out where the agent file is itself in the changeset under review).
+`install.sh` path. If neither resolves, Step 5 **stops and escalates (Category A)**
+instead of substituting another agent: the reviewer ships in the same bundle as the
+skill, so its definition is on disk and only the running session's registration of it is
+missing — restart the session, reinstall if that doesn't help. A blocked gate beats a
+review by a substitute that writes a schema-valid log and passes.
 The executor passes **facts only**: `<base>`, `<head>`, `min_review_level`, and the
 mode (round-1 full changeset / round-2 delta pass). It does **not** author the
 prompt — that is the point. A prompt the executor writes carries the
 executor's suspicions, and a reviewer told "check X" finds X and stops there; the
-methodology living in a shipped agent keeps that authorship out of all three rungs.
+methodology living in a shipped agent keeps that authorship out of the loop.
 
 The agent runs `git diff --name-only <base> <head>` itself for the authoritative
 file list, reviews the **real diff** of every file, is **exhaustive**, tags every
@@ -760,7 +762,7 @@ HEAD-keying to make re-review free, and gates only on findings **at/above
 
 ```mermaid
 flowchart TD
-  S4["Step 5: spawn SHIPPED dod-reviewer agent<br/>completion-harness:dod-reviewer → dod-reviewer → general-purpose<br/>(last rung: READ agents/dod-reviewer.md and follow it verbatim;<br/>inline it only if that file is in the changeset)<br/>pass FACTS ONLY: base, head, min_review_level, mode<br/>agent runs git diff itself; EXHAUSTIVE, tags severity,<br/>answers blast-radius Q-set; writes review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
+  S4["Step 5: spawn SHIPPED dod-reviewer agent<br/>completion-harness:dod-reviewer → dod-reviewer<br/>neither resolves → STOP, escalate (Cat A), no log<br/>pass FACTS ONLY: base, head, min_review_level, mode<br/>agent runs git diff itself; EXHAUSTIVE, tags severity,<br/>answers blast-radius Q-set; writes review-log/&lt;HEAD&gt;.json"] --> R1{"round 1: zero BLOCKING findings?<br/>(rank(severity) >= rank(min_review_level))"}
   R1 -->|yes| DONE1["DONE — ONE review.<br/>HEAD unmoved, log already satisfies gate<br/>(advisory findings may remain)"]
   R1 -->|no| BATCH["batch ALL blocking findings → fix in one pass<br/>(per-item up to max_fix_attempts=3)<br/>trivial advisory fixes only in the SAME commit"]
   BATCH --> COMMIT["commit ONCE → HEAD moves once<br/>old log (prev HEAD) now stale"]
@@ -940,17 +942,7 @@ blast-radius answers, `task_checks` semantics, `max_review_rounds`/`max_fix_atte
 caps, escalation honesty. These live in `dod-protocol.md` and `agents/dod-reviewer.md`
 prose and are obeyed by a cooperative agent; the transcript makes a lie *detectable*
 (an escalation with no user turn, a fabricated error string) but the shell cannot
-*prove* them. Shipping the review methodology as an **agent** rather than a prompt the
-executor writes hardens one of these: the executor can no longer narrow the review by
-authoring it. The `subagent_type` ladder that reaches the agent is itself prompt-level:
-the agent **files** are on disk and are findable, but **presence on disk is not
-"loaded into the running session"** — observed: a definition dropped into
-`.claude/agents/` mid-session was still rejected as an unknown `subagent_type` in that
-same session. So no script can determine what types the running session will resolve.
-The `general-purpose` rung therefore still authors a prompt; it is kept thin by pointing
-the agent at the shipped definition to follow verbatim rather than restating the
-methodology, so what remains prompt-level there is the facts-only discipline (and, when
-the agent file is under review or unreadable, an inlined methodology).
+*prove* them.
 
 **A malicious agent can always defeat a local shell gate** — fabricate the
 review-log, hardcode `open_findings:0`, record a false `exit_code:0`. No local
