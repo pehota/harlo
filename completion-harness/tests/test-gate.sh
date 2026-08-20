@@ -838,6 +838,62 @@ run_case "PE1 second Stop after consume -> block (re-gated)" block \
 ensure_clean
 
 # ============================================================================
+# Chunk F — a PROSE-ONLY changeset is gated like any other.
+#
+# The harness used to classify the changeset (noncode_globs) and silently stand
+# down when every changed file was prose/docs/images — gate Step 3a, hc_state
+# S_OOS. That is gone: the snapshot decides the changeset, and everything in it
+# is reviewed. These cases pin the FLIP, and they matter more than most: the
+# gate's fail-safe direction is ALLOW (a crashed or timed-out hook emits no
+# stdout, which the contract reads as allow), so a prose case asserting BLOCK is
+# also the suite's proof that the hook is alive and emitting decision JSON.
+#
+# Own throwaway repo (like Chunk D/E): committing here must not move the shared
+# fixture's HEAD_SHA, which the review-log helpers above are keyed to.
+# ----------------------------------------------------------------------------
+PR_REPO=$(mktemp_d)
+git -C "$PR_REPO" init -q
+git -C "$PR_REPO" config user.name t; git -C "$PR_REPO" config user.email t@t
+printf '.claude/\n' > "$PR_REPO/.gitignore"
+printf 'code\n' > "$PR_REPO/app.js"
+git -C "$PR_REPO" add -A; git -C "$PR_REPO" commit -qm init
+PR_BASE=$(git -C "$PR_REPO" rev-parse HEAD)
+PRHDIR="$PR_REPO/.claude/.harness"
+mkdir -p "$PRHDIR/baselines" "$PRHDIR/done-state" "$PRHDIR/review-log"
+
+# F1 — prose committed past the baseline, no done-state → BLOCK.
+# Every changed file is markdown; pre-refactor this exited 0 with empty stdout.
+printf '# docs\n' > "$PR_REPO/README.md"
+git -C "$PR_REPO" add -A; git -C "$PR_REPO" commit -qm docs
+PR_HEAD=$(git -C "$PR_REPO" rev-parse HEAD)
+printf '%s\n' "$PR_BASE" > "$PRHDIR/baselines/pr1.sha"
+run_case "F1 prose-only committed changeset, no done-state -> block" block \
+  '{"session_id":"pr1","stop_hook_active":false}' "$PR_REPO"
+
+# F2 — prose introduced as uncommitted tree dirt, no done-state → BLOCK.
+# Baseline pinned AT head so the commit range is empty and the ONLY changeset is
+# the introduced .md file: isolates the tree-dirt path from the commit path.
+printf '%s\n' "$PR_HEAD" > "$PRHDIR/baselines/pr2.sha"
+printf 'more prose\n' > "$PR_REPO/NOTES.md"
+run_case "F2 prose-only introduced tree dirt, no done-state -> block" block \
+  '{"session_id":"pr2","stop_hook_active":false}' "$PR_REPO"
+rm -f "$PR_REPO/NOTES.md"
+
+# F3 — same prose changeset, but VERIFIED → ALLOW. Without this, F1/F2 would
+# also pass on a gate that blocks unconditionally; this proves prose is gated
+# NORMALLY, and that Step 8's coverage check accepts a .md file in
+# files_reviewed exactly as it does a .js one.
+printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":["README.md"],"findings":[],"open_findings":0}\n' \
+  "$PR_HEAD" > "$PRHDIR/review-log/$PR_HEAD.json"
+printf '{"contract_version":1,"session_id":"pr3","verified_sha":"%s","tree_clean":true,"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}\n' \
+  "$PR_HEAD" > "$PRHDIR/done-state/session-pr3.json"
+printf '%s\n' "$PR_BASE" > "$PRHDIR/baselines/pr3.sha"
+run_case "F3 prose-only changeset WITH valid done-state + green review -> allow" allow \
+  '{"session_id":"pr3","stop_hook_active":false}' "$PR_REPO"
+
+rm -rf "$PR_REPO"
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
