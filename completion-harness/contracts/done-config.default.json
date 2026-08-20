@@ -12,13 +12,6 @@
   "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high",
-  "noncode_globs": ["*.md","*.markdown","*.txt","*.rst","*.adoc","*.org","LICENSE","LICENSE.*","NOTICE","*.png","*.jpg","*.jpeg","*.gif","*.svg","*.webp","*.ico","*.pdf"],
-  "metadata_json_allowlist": [
-    {"glob": "package.json", "keys": ["version"]},
-    {"glob": "*package.json", "keys": ["version"]},
-    {"glob": ".claude-plugin/plugin.json", "keys": ["version"]},
-    {"glob": "*.claude-plugin/plugin.json", "keys": ["version"]}
-  ],
   "headless_max_turns": 60,
   "headless_timeout_minutes": 45
 }

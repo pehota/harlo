@@ -35,13 +35,11 @@ do **NOT** skip anything: open `dod-protocol.md` and execute ALL steps 0.5 → 8
 in order (run ALL steps — exclude nothing). A wrongly-excluded step is the one
 unacceptable outcome; when in doubt, run everything.
 
-**Zero applicable steps is a legitimate result, not a fallback trigger.** When
-every changed file matches `noncode_globs` (a doc/prose-only changeset), triage
-exits 0 with a header explaining the Stop gate has **already** stood down for
-this changeset (S_OOS) and prints no step lines — that is success, not failure.
-Report that to the user and stop; do not fall back to running every step. The
-fallback above is only for triage *failing to produce a usable plan*, never for
-triage correctly producing an empty one.
+**Every changeset is in scope.** Triage never returns an empty plan: there is no
+file classification, so a doc/prose-only changeset gets exactly the same steps as
+any other. A step is excluded only when a config signal proves it vacuous (no
+lint command configured, no start command configured) — never because of what
+kind of file changed.
 
 ## The plan artifact (audit-only)
 

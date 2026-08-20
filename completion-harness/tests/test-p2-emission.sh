@@ -133,26 +133,20 @@ OUT=$(run_session_start "$DIR" "sess-s0")
 CTX=$(addl_ctx "$OUT")
 assert_empty "S0 additionalContext absent" "$CTX"
 
-# --- S_OOS: non-code changeset → SessionStart silent (no additionalContext). -
-# Design #5 §5: S_OOS has empty HC_NEXT and is not in the actionable set
-# {S1,S2,S4}, so the steering emission must stay silent. Enable noncode_globs on
-# the base (committed on main, then rebase feature/x) so a committed .md-only
-# changeset classifies as out-of-scope.
+# --- prose-only changeset → gated exactly like any other changeset. ---------
+# There is no scope classification: a committed .md-only changeset lands in S2
+# (committed-unverified), so SessionStart steers toward /done and the Stop gate
+# BLOCKS. Pins the removal of the old scope stand-down, which used to make both
+# of these silent.
 echo
-echo "--- SessionStart S_OOS: non-code changeset → silent (no additionalContext) ---"
+echo "--- SessionStart prose-only: committed .md → S2 steering + Stop-gate block ---"
 DIR=$(make_repo)
-git -C "$DIR" checkout -q main
-jq '.noncode_globs = ["*.md"]' "$DIR/.claude/done-config.json" \
-  > "$DIR/.claude/done-config.json.tmp" && mv "$DIR/.claude/done-config.json.tmp" "$DIR/.claude/done-config.json"
-git -C "$DIR" add -A; git -C "$DIR" commit -q -m "config: noncode_globs"
-git -C "$DIR" checkout -q feature/x; git -C "$DIR" rebase -q main >/dev/null 2>&1
 commit_change "$DIR" "notes.md" "# notes" >/dev/null
-OUT=$(run_session_start "$DIR" "sess-oos")
+OUT=$(run_session_start "$DIR" "sess-prose")
 CTX=$(addl_ctx "$OUT")
-assert_empty "S_OOS additionalContext absent (silent stand-down)" "$CTX"
-# And the Stop gate stands down too (empty stdout, no block).
-GOUT=$(run_stop_gate "$DIR" "sess-oos")
-assert_empty "S_OOS Stop gate silent (no block JSON)" "$GOUT"
+assert_contains "prose-only additionalContext steers to /done" "$CTX" "/done"
+GOUT=$(run_stop_gate "$DIR" "sess-prose")
+assert_contains "prose-only Stop gate blocks" "$GOUT" "block"
 
 # --- S1: introduced uncommitted file → additionalContext w/ remedy + D4. ----
 # Realistic flow: SessionStart pins a CLEAN baseline first, THEN the agent
@@ -397,8 +391,7 @@ echo "--- T: on-trunk session-config notice + override lifetime ---"
 
 SESSION_CFG_PHRASE="session-config.json"
 
-# A repo left ON TRUNK (the P2 make_repo checks out a feature branch), with the
-# production non-code globs so the S_OOS case below is reachable.
+# A repo left ON TRUNK (the P2 make_repo checks out a feature branch).
 make_trunk_repo() {
   local dir
   dir=$(hc__test_mktemp_d)
@@ -408,7 +401,7 @@ make_trunk_repo() {
   git -C "$dir" config user.name "t"
   mkdir -p "$dir/.claude/.harness/done-state" "$dir/.claude/.harness/review-log" \
            "$dir/.claude/.harness/baselines" "$dir/.claude/.harness/tree-base"
-  jq '.baseline_snapshot = false | .noncode_globs = ["*.md"]' "$FIX/done-config.json" \
+  jq '.baseline_snapshot = false' "$FIX/done-config.json" \
     > "$dir/.claude/done-config.json"
   echo ".claude/.harness/" > "$dir/.gitignore"
   echo "root" > "$dir/root.txt"
@@ -436,17 +429,14 @@ case "$CTX" in
   *) CASES=$((CASES+1)); printf 'PASS  T2 no notice when auto_branch is already off\n' ;;
 esac
 
-# T3 — S_OOS on trunk: the harness stands down on an all-prose changeset, so it
-#      must not add branch advice about work it declines to govern.
+# T3 — prose changeset on trunk: the notice still fires. Every edit is in
+#      scope, so a prose-only changeset gets the same branch advice as any
+#      other — there is no state in which the harness stands down.
 DIR=$(make_trunk_repo); set_cfg "$DIR" '.auto_branch = true'
 run_session_start "$DIR" "t3" >/dev/null          # clean baseline pinned here
-echo "# prose" > "$DIR/notes.md"                  # introduced, non-code
+echo "# prose" > "$DIR/notes.md"                  # introduced after the pin
 CTX=$(addl_ctx "$(run_session_start "$DIR" "t3" "compact")")   # compact preserves it
-case "$CTX" in
-  *"$SESSION_CFG_PHRASE"*) FAILS=$((FAILS+1)); CASES=$((CASES+1))
-    printf 'FAIL  T3 notice emitted in S_OOS (stand-down broken): [%s]\n' "$CTX" ;;
-  *) CASES=$((CASES+1)); printf 'PASS  T3 silent in S_OOS (prose-only changeset)\n' ;;
-esac
+assert_contains "T3 notice still emitted on a prose-only changeset" "$CTX" "$SESSION_CFG_PHRASE"
 
 # T4 — override LIFETIME. One task: a continuation (compact/resume) keeps it, a
 #      fresh context drops it, so "stay on trunk, this once" cannot silently

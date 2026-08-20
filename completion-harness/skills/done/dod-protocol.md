@@ -69,24 +69,12 @@ only when the source changed — preserving `overrides`, `max_fix_attempts`,
 `max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`. No LLM guessing of command
 names.
 
-**Non-code changeset stand-down.** Triage also checks whether the WHOLE changeset
-(committed range + any introduced tree dirt) matches `noncode_globs` — the same
-predicate (`hc_changeset_is_code`) the Stop hook itself uses to silently stand down
-(exit 0, no done-state required) for doc/prose-only changesets. When it does, triage
-prints **zero applicable steps** with a header explaining the stand-down instead of a
-step list: the gate was never going to check this changeset, so running tests, app
-startup, or (the expensive part) two independent-review rounds against it is pure
-waste. Report the stand-down to the user and stop — see SKILL.md's "zero applicable
-steps" note. Any uncertainty (no git base resolved, predicate unavailable) leaves this
-check inert and every step keeps its normal applicability — fail toward gating, never
-toward skipping.
-
-**This is not a byte-for-byte mirror of the gate.** `done-gate.sh` calls
-`hc_changeset_is_code` unconditionally and that predicate tolerates an empty base
-(classifying from introduced tree-dirt alone); triage requires a resolved base first
-and stays inert without one. So a no-anchor session with an all-doc working tree can
-have the gate stand down while triage still runs the full checklist — deliberate
-(triage won't guess from history it can't anchor), not a bug.
+**Every changed file is in scope.** Triage asks no "is this a code file?"
+question: the harness snapshots git state at SessionStart, and at Stop everything
+that changed gets reviewed — prose, config, images, code alike. The only steps
+triage can exclude are the ones a config signal proves vacuous (Step 2-lint with
+no lint command, Step 3 with no start/start_check/deploy_check command). Any
+uncertainty includes the step — fail toward gating, never toward skipping.
 
 <a id="step-0-5"></a>
 ## Step 0.5 — Assemble the effective DoD

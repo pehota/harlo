@@ -755,12 +755,10 @@ esac
 rm -rf "$R"
 
 # --- D2d: NEGATIVE — a real user file elsewhere under .claude/ STILL blocks ---
-# Deliberately a .json, and deliberately NOT settings.local.json:
-#   - *.md is in the default noncode_globs, so a markdown-only changeset makes
-#     the gate stand down for a reason that has nothing to do with this rule;
-#   - `**/.claude/settings.local.json` is a common entry in a developer's GLOBAL
-#     core.excludesfile (and install.sh adds it to the repo .gitignore), so it
-#     may never reach porcelain at all — the case would pass vacuously.
+# Deliberately NOT settings.local.json:
+#   `**/.claude/settings.local.json` is a common entry in a developer's GLOBAL
+#   core.excludesfile (and install.sh adds it to the repo .gitignore), so it
+#   may never reach porcelain at all — the case would pass vacuously.
 R=$(make_selfown_repo sidD2d)
 printf '{"user":true}\n' > "$R/.claude/user-notes.json"
 git -C "$R" status --porcelain | grep -Fq '?? .claude/user-notes.json' \

@@ -287,13 +287,11 @@ checkout and an explanation. An existing config keeps whatever it already declar
 `done-detect.sh` auto-upgrade only seeds the key when it is ABSENT, so a repo that was seeded
 `true` by an older install stays `true` until a human changes it.
 
-**Scope: coding edits only.** Before branching, the hook applies the *same* non-code rule the
-Stop gate uses (`hc_path_is_noncode`, the per-path half of `hc_changeset_is_code`) to
-`tool_input.file_path`: a path matching `noncode_globs` is skipped. Without this the harness
-dragged a docs-only task onto a `task/` branch and then declined to gate it at Stop (Step 3a) —
-visibly "kicking in" for work it does not govern. The test is per **edit**, not per changeset,
-so a mixed task branches on its first *code* edit (carrying the prose WIP with it). An absent
-path, or an unavailable predicate, is treated as code → branch, as before.
+**Every edit branches.** The hook does not look at `tool_input.file_path` at all: there is no
+"is this a code file?" question anywhere in the harness, so a prose edit moves the session onto
+a `task/` branch exactly like a code edit — and the Stop gate then reviews it exactly like a
+code edit. An earlier version skipped prose edits here to match a Stop-gate stand-down; both
+were removed together, because every classify-and-skip feature ended up disarming the gate.
 
 After creating the branch it **pins the task tree-base from THIS session's clean pre-edit
 SessionStart snapshot** (`baselines/<session_id>.dirty`) — this hook fires *before* the
@@ -487,7 +485,6 @@ script):
    **When neither recovery yields an anchor the gate still BLOCKS** — without one, git cannot distinguish "nothing to verify" from a whole session of unverified commits. Only the *claim* and the *remedy* change (same discipline as `a3b600e`): at **Step 4 only** — no anchor *and* no done-state, where the anchor is the whole story — the reason names the missing `baselines/<sid>.sha`, the ways it goes missing, and the one repair that restores it — restart the session so SessionStart records a baseline. It no longer renders `changeset ..<head> — 0 files` nor instructs a `/done` that cannot fix the anchor. Re-snapshotting the baseline from the gate is **not** the repair: at gate time HEAD already carries the session's commits, so a fresh baseline would whitelist exactly the work under gate. Steps 4b/5/8 keep the **generic** reason: an anchorless done-state is the normal shape of a *legacy* state (pre-`2b740c9`), and blaming a schema-invalid or stale-HEAD state on a missing baseline would be the same misdiagnosis in a new place.
 2b. **Pending-escalation one-shot pass (#6).** If `pending-escalation/<task_key>.json` exists, **`rm` it and exit 0 exactly once**. `/done` writes this marker *before* an AskUserQuestion escalation; without the one-shot the question turn's Stop would block (no green done-state yet) and trap the very question meant for the user. One file → one allow; the next Stop finds no file and re-gates. Placed after the git checks and **before** the tree/done-state checks.
 3. `HEAD == HC_BASE` **AND working tree clean** → **exit 0** (nothing happened this session). A dirty tree here does NOT exit — it falls through to the checks below (an uncommitted "done" must still be gated).
-3a. **Out-of-scope non-code changeset → exit 0 silently (#5).** Runs `hc_tree_status`, then `hc_changeset_is_code(HC_BASE, HEAD)`. If the **whole** changeset is non-code the gate exits 0 with **empty stdout** (no block JSON), mirroring `hc_state` `S_OOS`. The changed-file set = `git diff --name-only HC_BASE..HEAD` ∪ the introduced tree paths (`HC_TREE_BLOCKERS`); a file is non-code iff it matches ≥1 `noncode_globs` pattern (config; conservative prose/docs/images default). **Fail toward gating:** any unknown-extension/code file, or ANY error, classifies the changeset as CODE → normal gate; an absent/empty `noncode_globs` recognises **no** file as non-code. Placed after Step 3 and **before** Step 3b, so introduced **code** dirt still blocks while introduced non-code dirt stands down.
 3b. **Working tree has INTRODUCED changes → BLOCK** ("finish the slice"). Moved **ahead of the done-state checks** (P4) so an introduced-dirty tree blocks with the S1 reason, aligned with `hc_state`. Not "any non-empty `git status --porcelain`" — the gate calls the shared `hc_tree_status` classifier and blocks **iff `HC_TREE_BLOCKERS` is non-empty**, i.e. work introduced since the pinned tree baseline. Pre-existing entries are **ignored, not blocked** — this breaks the pre-existing-untracked deadlock **without weakening the gate: the changeset's OWN uncommitted work still blocks**. The block message names only the introduced blockers (`hc_tree_remediation`). `untracked_policy` (default `"baseline"`) tunes untracked handling; `"strict"` blocks every untracked line regardless of baseline. If the classifier can't be sourced, the gate falls back to the **strict** live check — never toward allow.
 3c. **Empty committed changeset → exit 0 (#6).** No introduced tree blockers **and** `git diff --quiet HC_BASE HEAD` (the committed range is genuinely empty — e.g. after the authorship base-advance left HEAD atop an identical tree) → nothing to verify → allow. `git diff --quiet` exits 0 only on a truly empty diff; any git failure falls through to the gate.
 3d. **SHA-keyed escalation-accept sidecar → exit 0 (cross-session, #6).** If `escalation-accept/<HEAD>.json` exists (written by `done-write-state.sh` on a non-null escalation, keyed to the exact committed HEAD), exit 0. Honored HERE — after the tree/empty checks but **before** the done-state checks — so an accepted escalation survives across sessions on an unchanged trunk HEAD, where a fresh `session-<id>` key has no done-state and Step 4 would otherwise block first. Keyed to the exact sha: any new/amended commit → different sha → no sidecar → re-block. Before the remaining steps the gate builds the block reason by prepending a one-shot `hc_changeset_summary(HC_BASE_ORIG, HEAD)` — file/commit counts and how many commits were authored **this session** (from the unadvanced base, so it reads "0 authored this session" honestly when every commit is foreign).
@@ -1151,7 +1148,7 @@ outlives the task.
 It probes with `has()` at each layer (never a bare `//`, which would treat a literal `false`
 as empty and flip `auto_branch:false` back to `true`); a JSON `null` means "unset here" and
 falls through; arrays are returned space-joined. Keys read through it — the ones a per-task
-instruction can plausibly flip — are `auto_branch`, `branch_prefix`, `noncode_globs` and
+instruction can plausibly flip — are `auto_branch`, `branch_prefix` and
 `untracked_policy`. **`trunk` is deliberately excluded:** it selects task-vs-session mode,
 computes the task key, drives auto-branch *and* feeds SessionStart's terminal reap, which
 **deletes** the state of branches it judges merged — a wrong value there destroys state rather

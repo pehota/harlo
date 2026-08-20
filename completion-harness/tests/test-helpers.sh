@@ -5,11 +5,11 @@
 # Consolidates what every suite in this directory used to reimplement:
 #   - PASS/FAIL counters + ok()/bad()/eq() (the majority style: ~20 suites).
 #   - CASES/FAILS counters + assert_eq()/assert_contains()/assert_empty()/
-#     assert_nonempty() (the minority style: test-hc-state.sh, test-p2-emission.sh,
-#     test-scope.sh — kept as its own family rather than forced onto PASS/FAIL,
-#     since those three files also do their own inline CASES/FAILS bookkeeping
-#     outside the assert_* calls; unifying the counter name too would mean
-#     rewriting every such inline site for no behavioral gain).
+#     assert_nonempty() (the minority style: test-hc-state.sh, test-p2-emission.sh
+#     — kept as its own family rather than forced onto PASS/FAIL, since those
+#     files also do their own inline CASES/FAILS bookkeeping outside the
+#     assert_* calls; unifying the counter name too would mean rewriting every
+#     such inline site for no behavioral gain).
 #   - the mktemp-dir + trap cleanup fixture-repo builder (hc__test_make_repo),
 #     which had ALREADY DRIFTED between test-tree-status.sh (no cleanup trap at
 #     all — a leak, fixed here) and test-p2-emission.sh (CLEANUP_DIRS + trap).
@@ -38,7 +38,7 @@ eq()  { if [ "$2" = "$3" ]; then ok "$1 = $2"; else bad "$1 expected '$2'" "$3";
 
 # ---------------------------------------------------------------------------
 # CASES/FAILS family (assert_eq/assert_contains/assert_empty/assert_nonempty)
-# — test-hc-state.sh, test-p2-emission.sh, test-scope.sh.
+# — test-hc-state.sh, test-p2-emission.sh.
 # ---------------------------------------------------------------------------
 CASES=0
 FAILS=0

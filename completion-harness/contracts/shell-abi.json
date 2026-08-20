@@ -150,49 +150,6 @@
       "args": "<key> [default] [proj]"
     },
     {
-      "name": "hc_noncode_globs",
-      "globals": [],
-      "stdout": "the effective noncode_globs list, space-separated",
-      "return_codes": "always 0",
-      "sentinels": [],
-      "args": "[proj]"
-    },
-    {
-      "name": "hc_path_is_noncode",
-      "globals": [],
-      "stdout": "nothing",
-      "return_codes": "0 the path matches a noncode_globs pattern, 1 code (or empty path); optional 2nd arg is the pre-read glob list",
-      "sentinels": [],
-      "args": "<repo_relative_path> [globs]"
-    },
-    {
-      "name": "hc_metadata_json_allowlist",
-      "globals": [],
-      "stdout": "the effective metadata_json_allowlist, as a compact JSON array",
-      "return_codes": "always 0",
-      "sentinels": [],
-      "args": "[proj]"
-    },
-    {
-      "name": "hc_path_is_metadata_json_safe",
-      "globals": [],
-      "stdout": "nothing",
-      "return_codes": "0 the file's changed top-level keys are all within an allowlist entry matching the path, 1 unsafe/no match/error; optional 5th arg is the pre-read allowlist JSON",
-      "sentinels": [],
-      "args": "<repo_relative_path> <base> <head> [proj] [allowlist_json]"
-    },
-    {
-      "name": "hc_changeset_is_code",
-      "globals": [],
-      "stdout": "code | noncode | empty",
-      "return_codes": "0 code (or any error), 1 noncode, 2 empty",
-      "sentinels": [
-        "code",
-        "noncode",
-        "empty"
-      ]
-    },
-    {
       "name": "hc_review_blocking",
       "globals": [],
       "stdout": "integer count of blocking findings, or ERR",

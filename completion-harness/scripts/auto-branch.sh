@@ -23,17 +23,16 @@ if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
 fi
 
 # Read hook JSON from stdin. We need session_id to pin the task tree baseline
-# from THIS session's clean pre-edit snapshot (see below), and the edited path
-# from tool_input to apply the SCOPE rule (below).
+# from THIS session's clean pre-edit snapshot (see below). The edited path is
+# deliberately NOT consulted: every edit is in scope, so nothing about WHICH
+# file is being written changes whether the session branches.
 if hc_has_fn hc_read_hook_input; then
   hc_read_hook_input
   SESSION_ID="$HC_HOOK_SESSION_ID"
-  EDIT_PATH="$HC_HOOK_TOOL_FILE_PATH"
 else
   # harness-common.sh failed to source: degrade exactly as hc_read_hook_input
   # would, minus consuming stdin (nothing downstream needs the raw payload).
   SESSION_ID=""
-  EDIT_PATH=""
 fi
 
 # --- fast no-op guards (allow, exit 0) --------------------------------------
@@ -77,30 +76,6 @@ fi
 # too but NOT on trunk — must not spuriously branch there.
 if [ -z "$HC_BRANCH" ] || [ -z "$HC_TRUNK" ] || [ "$HC_BRANCH" != "$HC_TRUNK" ]; then
   exit 0
-fi
-
-# --- scope: never branch for a NON-CODE edit --------------------------------
-# The harness governs CODING changesets only, and the Stop gate already stands
-# down on an all-prose changeset (done-gate.sh Step 3a). This hook had no scope
-# test at all, so a docs-only task still got dragged onto a task/ branch — the
-# harness visibly "kicking in" for work it then declines to gate. Same rule,
-# same implementation (hc_path_is_noncode), applied per edited path.
-#
-# Per-EDIT, not per-changeset, and that is the point: prose edits are skipped
-# one by one, and the first CODE edit of a mixed task still branches (carrying
-# the prose WIP with it, as `checkout -b` always did).
-#
-# Fail direction: an unavailable predicate or an unknown path → treated as code
-# → branch, exactly as before.
-if [ -n "$EDIT_PATH" ] && { hc_has_fn hc_path_is_noncode; }; then
-  # tool_input.file_path is absolute; the globs are repo-relative.
-  REL_PATH="$EDIT_PATH"
-  case "$REL_PATH" in
-    "$PROJECT_DIR"/*) REL_PATH="${REL_PATH#"$PROJECT_DIR"/}" ;;
-  esac
-  if hc_path_is_noncode "$REL_PATH"; then
-    exit 0
-  fi
 fi
 
 # --- config: auto_branch (default FALSE; honor a literal true) --------------

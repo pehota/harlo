@@ -137,60 +137,59 @@ eq "case5 still on main (sentinel blocked auto-branch)" "main" "$(cur_branch)"
 rm -f "$REPO/.git/MERGE_HEAD" 2>/dev/null
 
 # ---------------------------------------------------------------------------
-# Scope rule: the hook governs CODING edits only, matching the Stop gate's
-# non-code stand-down (done-gate.sh Step 3a). Drives the hook WITH a
-# tool_input.file_path, which the no-path run_hook above deliberately omits.
+# Every edit is in scope: the harness reviews whatever changed, so nothing about
+# WHICH file is written can keep a session on trunk. Drives the hook WITH a
+# tool_input.file_path, which the no-path run_hook above deliberately omits —
+# the hook must reach the same verdict either way.
 run_hook_for() {
   HOOK_OUT=$(printf '{"session_id":"S","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$1" \
     | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" 2>/dev/null)
   HOOK_RC=$?
 }
 
-printf '== Case 6: prose edit (.md) on trunk → NO branch ==\n'
+printf '== Case 6: prose edit (.md) on trunk → branch like any other edit ==\n'
 new_repo
 commit_file base.txt
 seed_config '{"trunk":"main","auto_branch":true}'
 run_hook_for "$REPO/docs/design.md"
 eq "case6 exit 0" "0" "$HOOK_RC"
-eq "case6 still on main (non-code edit out of scope)" "main" "$(cur_branch)"
+case "$(cur_branch)" in
+  task/*) ok "case6 branched on a prose edit ('$(cur_branch)')" ;;
+  *)      bad "case6 branched on a prose edit" "$(cur_branch)" ;;
+esac
 
-printf '== Case 7: code edit after a prose edit → branch ==\n'
+printf '== Case 7: code edit on trunk → branch ==\n'
+new_repo
+commit_file base.txt
+seed_config '{"trunk":"main","auto_branch":true}'
 run_hook_for "$REPO/src/index.ts"
 eq "case7 exit 0" "0" "$HOOK_RC"
 case "$(cur_branch)" in
-  task/*) ok "case7 branched on the first CODE edit ('$(cur_branch)')" ;;
-  *)      bad "case7 branched on the first code edit" "$(cur_branch)" ;;
+  task/*) ok "case7 branched on a code edit ('$(cur_branch)')" ;;
+  *)      bad "case7 branched on a code edit" "$(cur_branch)" ;;
 esac
 
-printf '== Case 8: noncode_globs override makes .ts non-code → NO branch ==\n'
-new_repo
-commit_file base.txt
-seed_config '{"trunk":"main","auto_branch":true,"noncode_globs":["*.ts"]}'
-run_hook_for "$REPO/src/index.ts"
-eq "case8 exit 0" "0" "$HOOK_RC"
-eq "case8 still on main (config-declared non-code)" "main" "$(cur_branch)"
-
-printf '== Case 9: session-config auto_branch:false beats done-config true ==\n'
+printf '== Case 8: session-config auto_branch:false beats done-config true ==\n'
 new_repo
 commit_file base.txt
 seed_config '{"trunk":"main","auto_branch":true}'
 mkdir -p "$REPO/.claude/.harness" 2>/dev/null
 printf '{"auto_branch":false}\n' > "$REPO/.claude/.harness/session-config.json"
 run_hook_for "$REPO/src/index.ts"
-eq "case9 exit 0" "0" "$HOOK_RC"
-eq "case9 still on main (session override wins)" "main" "$(cur_branch)"
+eq "case8 exit 0" "0" "$HOOK_RC"
+eq "case8 still on main (session override wins)" "main" "$(cur_branch)"
 
-printf '== Case 10: session-config auto_branch:true beats done-config false ==\n'
+printf '== Case 9: session-config auto_branch:true beats done-config false ==\n'
 new_repo
 commit_file base.txt
 seed_config '{"trunk":"main","auto_branch":false}'
 mkdir -p "$REPO/.claude/.harness" 2>/dev/null
 printf '{"auto_branch":true}\n' > "$REPO/.claude/.harness/session-config.json"
 run_hook_for "$REPO/src/index.ts"
-eq "case10 exit 0" "0" "$HOOK_RC"
+eq "case9 exit 0" "0" "$HOOK_RC"
 case "$(cur_branch)" in
-  task/*) ok "case10 session override re-enabled branching ('$(cur_branch)')" ;;
-  *)      bad "case10 session override re-enabled branching" "$(cur_branch)" ;;
+  task/*) ok "case9 session override re-enabled branching ('$(cur_branch)')" ;;
+  *)      bad "case9 session override re-enabled branching" "$(cur_branch)" ;;
 esac
 
 # NOTE: the former Case 6 (fallback-pin-is-empty, WIP-blocks-gate) was dropped in

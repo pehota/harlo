@@ -142,17 +142,13 @@ if [ "$MISSING_ANCHOR" -eq 0 ]; then
 else bad "at least one triage ref anchor is missing from dod-protocol.md"; fi
 cleanup_triage
 
-# --- 9. non-code changeset (noncode_globs) -> 0 applicable, all excluded ----
-# Mirrors test-scope.sh's make_repo: amend noncode_globs into the root commit
-# (shared fork point) BEFORE branching, so trunk main and feature/x agree on
-# config. Then commit a doc-only change on the branch and confirm triage
-# mirrors done-gate.sh's own Step-3a stand-down: zero applicable steps, every
-# step excluded with the noncode reason, stdout explains why instead of
-# listing steps.
+# --- 9. prose-only changeset -> the SAME plan as any other changeset --------
+# There is no file classification: what changed gets reviewed, whatever it is.
+# A doc-only commit on a feature branch must therefore produce the ordinary
+# plan — 9 applicable steps, with 2-lint/3 excluded on their own per-config
+# grounds (no lint/start configured in the fixture, same as case 2) and no step
+# excluded for being "out of scope".
 T9=$(hc__test_make_repo)
-jq '.noncode_globs = ["*.md"]' "$T9/.claude/done-config.json" > "$T9/.claude/done-config.json.tmp" \
-  && mv "$T9/.claude/done-config.json.tmp" "$T9/.claude/done-config.json"
-git -C "$T9" commit -q -a --amend -m root
 git -C "$T9" checkout -q -b feature/x
 echo "hello" > "$T9/docs.md"
 git -C "$T9" add -A
@@ -161,67 +157,17 @@ EFF9=$(jq -c '.detected // {}' "$T9/.claude/done-config.json")
 OUT9=$(CLAUDE_PROJECT_DIR="$T9" printf '%s' "$EFF9" | CLAUDE_PROJECT_DIR="$T9" bash "$SCRIPT" 2>/dev/null)
 RC9=$?
 PLAN9=$(ls "$T9"/.claude/.harness/done-plan/*.json 2>/dev/null | head -1)
-if [ "$RC9" -eq 0 ]; then ok "noncode changeset: exit 0"; else bad "noncode changeset exit ($RC9)"; fi
-if echo "$OUT9" | grep -q "Stop gate already stands down"; then
-  ok "noncode changeset: stdout explains the stand-down"
-else bad "noncode changeset: stdout missing stand-down explanation" "$OUT9"; fi
-if ! echo "$OUT9" | grep -qE '^\['; then
-  ok "noncode changeset: zero step lines in stdout"
-else bad "noncode changeset: step lines leaked to stdout" "$OUT9"; fi
-if jq -e '[.steps[]|select(.status=="applicable")]|length == 0' "$PLAN9" >/dev/null 2>&1; then
-  ok "noncode changeset: all 11 steps excluded in plan"
-else bad "noncode changeset: plan has applicable steps" "$(jq -c '[.steps[]|select(.status=="applicable")|.id]' "$PLAN9" 2>/dev/null)"; fi
-if jq -e '[.steps[]|.reason|test("noncode_globs")]|all' "$PLAN9" >/dev/null 2>&1; then
-  ok "noncode changeset: every step carries the noncode reason"
-else bad "noncode changeset: reason missing/wrong on some step" "$(jq -c '.steps' "$PLAN9" 2>/dev/null)"; fi
+if [ "$RC9" -eq 0 ]; then ok "prose changeset: exit 0"; else bad "prose changeset exit ($RC9)"; fi
+if echo "$OUT9" | grep -qE '^\['; then
+  ok "prose changeset: step lines listed on stdout (no stand-down)"
+else bad "prose changeset: no step lines on stdout" "$OUT9"; fi
+if jq -e '[.steps[]|select(.status=="applicable")]|length == 9' "$PLAN9" >/dev/null 2>&1; then
+  ok "prose changeset: 9 steps applicable (same plan as a code changeset)"
+else bad "prose changeset: applicable-step count wrong" "$(jq -c '.steps' "$PLAN9" 2>/dev/null)"; fi
+if jq -e '[.steps[]|select(.status=="excluded")|.id]|sort == ["2-lint","3"]' "$PLAN9" >/dev/null 2>&1; then
+  ok "prose changeset: only 2-lint/3 excluded, and only on config grounds"
+else bad "prose changeset: something other than 2-lint/3 was excluded" "$(jq -c '[.steps[]|select(.status=="excluded")|{id,reason}]' "$PLAN9" 2>/dev/null)"; fi
 rm -rf "$T9"
-
-# --- 10. code changeset on same repo shape -> unaffected (fail-safe direction)
-T10=$(hc__test_make_repo)
-jq '.noncode_globs = ["*.md"]' "$T10/.claude/done-config.json" > "$T10/.claude/done-config.json.tmp" \
-  && mv "$T10/.claude/done-config.json.tmp" "$T10/.claude/done-config.json"
-git -C "$T10" commit -q -a --amend -m root
-git -C "$T10" checkout -q -b feature/x
-echo "console.log(1)" > "$T10/app.js"
-git -C "$T10" add -A
-git -C "$T10" commit -q -m "add app.js"
-EFF10=$(jq -c '.detected // {}' "$T10/.claude/done-config.json")
-OUT10=$(CLAUDE_PROJECT_DIR="$T10" printf '%s' "$EFF10" | CLAUDE_PROJECT_DIR="$T10" bash "$SCRIPT" 2>/dev/null)
-PLAN10=$(ls "$T10"/.claude/.harness/done-plan/*.json 2>/dev/null | head -1)
-# 2-lint/3 are legitimately excluded here too (no lint/start configured in the
-# fixture, same as case 2) — the assertion is that the noncode reason did NOT
-# ALSO fire and exclude the other 9 steps.
-if jq -e '[.steps[]|select(.status=="applicable")]|length == 9' "$PLAN10" >/dev/null 2>&1; then
-  ok "code changeset: 9 steps applicable (noncode short-circuit does not over-fire)"
-else bad "code changeset: applicable-step count wrong" "$(jq -c '.steps' "$PLAN10" 2>/dev/null)"; fi
-if ! jq -e '[.steps[]|.reason? // ""|test("noncode_globs")]|any' "$PLAN10" >/dev/null 2>&1; then
-  ok "code changeset: no step carries the noncode reason"
-else bad "code changeset: noncode reason leaked onto a real-code changeset" "$(jq -c '.steps' "$PLAN10" 2>/dev/null)"; fi
-rm -rf "$T10"
-
-# --- 11. no resolvable HC_BASE -> short-circuit stays INERT (pins the ---
-# --- deliberate conservative divergence from done-gate.sh, not a gap) -------
-# Session mode, no baselines/<sid>.sha ever written for this session id (no
-# SessionStart in this throwaway repo) -> hc__resolve_session_base leaves
-# HC_BASE empty. The tree is 100% non-code (an untracked .md file), which
-# WOULD trip hc_changeset_is_code's "noncode" verdict if triage called it with
-# an empty base the way done-gate.sh tolerates — but triage's guard requires a
-# non-empty HC_BASE first, so it must NOT call the predicate at all here, and
-# every step must keep its normal (non-noncode) status.
-T11=$(hc__test_make_repo)
-jq '.noncode_globs = ["*.md"]' "$T11/.claude/done-config.json" > "$T11/.claude/done-config.json.tmp" \
-  && mv "$T11/.claude/done-config.json.tmp" "$T11/.claude/done-config.json"
-echo "hello" > "$T11/docs.md"
-EFF11=$(jq -c '.detected // {}' "$T11/.claude/done-config.json")
-OUT11=$(CLAUDE_PROJECT_DIR="$T11" printf '%s' "$EFF11" | CLAUDE_PROJECT_DIR="$T11" bash "$SCRIPT" 2>/dev/null)
-PLAN11=$(ls "$T11"/.claude/.harness/done-plan/*.json 2>/dev/null | head -1)
-if echo "$OUT11" | grep -q "Stop gate already stands down"; then
-  bad "no-anchor changeset: wrongly fired the noncode stand-down" "$OUT11"
-else ok "no-anchor changeset: noncode stand-down does NOT fire without a resolvable base"; fi
-if jq -e '[.steps[]|select(.status=="applicable")]|length == 9' "$PLAN11" >/dev/null 2>&1; then
-  ok "no-anchor changeset: 9 steps applicable (unaffected, same as a normal code changeset)"
-else bad "no-anchor changeset: applicable-step count wrong" "$(jq -c '.steps' "$PLAN11" 2>/dev/null)"; fi
-rm -rf "$T11"
 
 # --- 8. self-sufficiency: dod-protocol.md has all old SKILL step headings ----
 MISSING_HEAD=0

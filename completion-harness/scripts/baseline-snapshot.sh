@@ -310,7 +310,7 @@ fi
 # first line is the D4 review-ownership directive; the second injects the FSM
 # next-action. Silent (empty) in S0/S5 — with ONE deliberate addition appended
 # below: the on-trunk auto-branch notice, which must reach the agent BEFORE its
-# first edit and is therefore emitted in S0 too (suppressed only in S_OOS).
+# first edit and is therefore emitted in S0 too.
 ADDL_CTX=""
 case "$HC_STATE" in
   S1|S2|S4)
@@ -346,16 +346,11 @@ if [ -n "$HC_WARN" ]; then
     # systemMessage above is user-facing only, which is why the branch used to
     # appear anyway despite a standing "stay on trunk" instruction.
     #
-    # SUPPRESSED IN S_OOS. A changeset the harness has already classified as
-    # all-prose is one it stands down on completely; adding branch advice there
-    # would be the harness talking about work it declines to govern. Every other
-    # state — including S0, the fresh pre-edit session where this is most
-    # useful — gets it.
-    case "$HC_STATE" in S_OOS) ;; *)
+    # Emitted in EVERY state — including S0, the fresh pre-edit session where it
+    # is most useful. There is no state in which the harness stands down, so
+    # there is nothing to suppress it for.
     ADDL_CTX="${ADDL_CTX:+$ADDL_CTX
 }[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to $(hc__harness_dir)/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
-    ;;
-    esac
   fi
 fi
 

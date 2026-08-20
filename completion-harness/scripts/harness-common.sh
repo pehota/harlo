@@ -145,8 +145,8 @@ hc__harness_dir() {
 #   2. $HC_CONFIG_REL — the repo's persisted config.
 #   3. <default> — the built-in.
 #
-# Keys read through this: auto_branch, branch_prefix, noncode_globs,
-# untracked_policy. `trunk` is deliberately NOT among them — see hc__detect_trunk.
+# Keys read through this: auto_branch, branch_prefix, untracked_policy. `trunk`
+# is deliberately NOT among them — see hc__detect_trunk.
 #
 # A `has()` probe, never a bare `//` default: jq's `//` treats a literal `false`
 # as empty and would flip an explicit auto_branch:false back to the default. A
@@ -158,7 +158,7 @@ hc__harness_dir() {
 hc_cfg() {
   local key="$1" def="${2:-}"
   # <proj> (3rd, optional) so a caller working on a checkout OTHER than the
-  # ambient PROJECT_DIR reads THAT checkout's config — hc_changeset_is_code takes
+  # ambient PROJECT_DIR reads THAT checkout's config — the worktree callers pass
   # such a proj, and silently ignoring it would answer from the wrong repo.
   local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
 
@@ -999,297 +999,6 @@ $current
 EOF
 
   return 0
-}
-
-# ---------------------------------------------------------------------------
-# hc_changeset_is_code <base> <head> [proj]
-#
-# Scope predicate for the harness (#5): decides whether the current changeset is
-# a CODING changeset (the DoD applies) or entirely NON-CODE (the harness must
-# fully stand down — silent Stop gate, no SessionStart steering).
-#
-# Changed-file set = the UNION of:
-#   (1) `git diff --name-only <base> <head>` — the COMMITTED range, and
-#   (2) the INTRODUCED tree paths — the paths of HC_TREE_BLOCKERS as classified
-#       by hc_tree_status (baseline-relative introduced set, NOT raw git status).
-#       The caller must have run hc_tree_status first; if HC_TREE_BLOCKERS is
-#       unset/empty this contributes nothing. Each blocker line is a porcelain
-#       "XY <path>" line; we take everything after the 3-char prefix (space-safe,
-#       whole-path — same discipline hc_tree_status uses).
-#
-# A file is NON-CODE iff its path matches >=1 glob in `noncode_globs` (read from
-# done-config.json; falls back to the conservative built-in default set when the
-# key is absent/empty/unreadable). Matching uses bash `[[ "$path" == $glob ]]`
-# (unquoted RHS = glob match); `*` spans `/`, so `*.md` matches `docs/a.md`.
-# An ABSENT/EMPTY noncode_globs → NO file is recognised non-code → every file is
-# code → the changeset is always CODE (safe direction).
-#
-# Contract (FAIL TOWARD GATING — a misclassification must never silently skip
-# gating real code):
-#   prints "code"    / returns 0  — the changed set is NON-EMPTY and >=1 file is
-#                                   NOT recognised non-code (a coding changeset),
-#                                   OR on ANY error (git failure, etc.). CODE.
-#   prints "noncode" / returns 1  — the changed set is NON-EMPTY and EVERY file
-#                                   matches a noncode glob. NON-CODE.
-#   prints "empty"   / returns 2  — the changed set is EMPTY (no committed range,
-#                                   no introduced dirt). Caller treats as "no
-#                                   changeset" (S0 territory), NOT as non-code.
-# Any error/ambiguity resolves to CODE ("code"/0). Sets no globals.
-# ---------------------------------------------------------------------------
-# hc_noncode_globs
-#
-# The effective `noncode_globs` list, space-separated. Split out from the path
-# predicate so a caller looping over N paths reads the config ONCE. This is not
-# a micro-optimisation: hc_changeset_is_code runs inside the Stop hook, which the
-# runtime kills at `"timeout": 10`, and a killed hook emits no stdout — which the
-# gate's own contract reads as ALLOW. A per-path jq spawn (~6ms) would therefore
-# turn a large changeset into a silently disarmed gate.
-hc_noncode_globs() {
-  # <proj> (1st, optional) — forwarded to hc_cfg; see there.
-  # Built-in default set; overridden only when the key is PRESENT at some config
-  # layer (hc_cfg's has() probe). A present-but-empty array yields "" → no match
-  # → code, which is the strict direction.
-  hc_cfg noncode_globs '*.md *.markdown *.txt *.rst *.adoc *.org LICENSE LICENSE.* NOTICE *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.pdf' "${1:-}"
-}
-
-# ---------------------------------------------------------------------------
-# hc_path_is_noncode <repo_relative_path> [globs]
-#
-# THE per-path half of the scope rule (#5): does this ONE path match >=1 glob in
-# the effective `noncode_globs`? Extracted from hc_changeset_is_code so the
-# PreToolUse branch hook and the Stop gate decide "is this prose?" with the same
-# implementation — the branch hook used to have no scope test at all, which is
-# how a docs-only task ended up on a task/ branch.
-#
-# <globs> is the optional pre-read list (hc_noncode_globs); pass it when calling
-# in a loop. Omitted → read here from the ambient project, for the one-path
-# callers. There is deliberately no proj parameter: a caller that needs another
-# checkout's globs reads them itself with `hc_noncode_globs <proj>` and passes
-# the list — which is exactly what a loop caller already does.
-#
-# An ABSENT/EMPTY noncode_globs → nothing is recognised non-code → every path is
-# code (safe direction: gate more, branch more, never less).
-#
-# Returns 0 (non-code) / 1 (code, or empty path). Prints nothing.
-hc_path_is_noncode() {
-  local path="${1:-}"
-  [ -n "$path" ] || return 1
-
-  # Presence of the ARG decides, not its emptiness: a config with
-  # `noncode_globs: []` legitimately passes an empty list, and re-reading on
-  # empty would restore the per-path jq spawn this parameter exists to avoid.
-  local globs
-  if [ "$#" -ge 2 ]; then globs="$2"; else globs=$(hc_noncode_globs); fi
-
-  # Disable pathname expansion for the duration: `for g in $globs` word-splits
-  # the space-separated list, and with globbing ON bash would EXPAND each glob
-  # (e.g. `*.md`) against the CWD before the loop body ever sees it — silently
-  # turning the pattern list into a list of matching filenames. `set -f` keeps
-  # the patterns literal so `[[ "$path" == $g ]]` performs the intended glob
-  # match. `*` spans `/`, so `*.md` matches `docs/a.md`.
-  local restore_glob=0
-  case "$-" in *f*) ;; *) restore_glob=1 ;; esac
-  set -f
-
-  local g rc=1
-  for g in $globs; do
-    if [[ "$path" == $g ]]; then
-      rc=0
-      break
-    fi
-  done
-
-  [ "$restore_glob" -eq 1 ] && set +f
-  return "$rc"
-}
-
-# ---------------------------------------------------------------------------
-# hc_metadata_json_allowlist [proj]
-#
-# The effective `metadata_json_allowlist` — the structured sibling to
-# `noncode_globs` for JSON manifests that mix pure metadata with real config
-# (package.json, plugin manifests, ...). Unlike noncode_globs this is NOT a
-# flat string list (hc_cfg's `join(" ")` can't represent an array of objects),
-# so it is read directly here rather than through hc_cfg, but at the SAME two
-# layers and in the SAME precedence order (session config, then repo config)
-# so it never disagrees with how every other sticky key resolves.
-#
-# Prints the effective list as a compact JSON array (never empty-but-invalid;
-# always valid JSON). Falls back to the built-in generic defaults — npm
-# `package.json` and the Claude Code plugin manifest `plugin.json` — when the
-# key is absent at every layer, mirroring hc_noncode_globs's built-in default.
-# A layer that sets the key to `[]` explicitly opts OUT (same "present wins,
-# even empty" rule as hc_cfg): every file falls through to the ordinary code
-# classification, the strict/safe direction.
-hc_metadata_json_allowlist() {
-  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
-  local default='[{"glob":"package.json","keys":["version"]},{"glob":"*package.json","keys":["version"]},{"glob":".claude-plugin/plugin.json","keys":["version"]},{"glob":"*.claude-plugin/plugin.json","keys":["version"]}]'
-
-  hc_has_jq || { printf '%s' "$default"; return 0; }
-
-  local f v
-  for f in "$proj/$HC_SESSION_CONFIG_REL" "$proj/$HC_CONFIG_REL"; do
-    [ -f "$f" ] || continue
-    jq -e 'has("metadata_json_allowlist")' "$f" >/dev/null 2>&1 || continue
-    v=$(jq -c '.metadata_json_allowlist' "$f" 2>/dev/null) || continue
-    [ "$v" = "null" ] && continue
-    printf '%s' "$v"
-    return 0
-  done
-
-  printf '%s' "$default"
-}
-
-# ---------------------------------------------------------------------------
-# hc_path_is_metadata_json_safe <repo_relative_path> <base> <head> [proj] [allowlist_json]
-#
-# Structural per-file check: is this ONE JSON file's change across
-# <base>..<head> confined to keys an `metadata_json_allowlist` entry marks as
-# pure metadata (e.g. "version")? A whole-file noncode_globs entry would be
-# UNSAFE for a manifest like package.json/plugin.json — those files also carry
-# dependencies, scripts, permissions — so this diffs the file's TOP-LEVEL keys
-# structurally instead of trusting a glob on the path alone. The glob only says
-# "this file MAY be a version-only bump"; the key diff is what actually proves
-# it.
-#
-# Safe (return 0) iff: the path matches >=1 allowlist entry's glob (same
-# `[[ == $glob ]]` matching as hc_path_is_noncode), the file parses as a JSON
-# object at BOTH <base>:<path> and <head>:<path>, at least one top-level key
-# differs (added/removed/changed value), and EVERY differing key is in the
-# union of `keys` from the matching entries.
-#
-# Fails toward CODE (return 1, unsafe) on: no matching entry, the path missing
-# at base or head (added/deleted, not a pure edit), either side not a JSON
-# object, a git/jq error, or ANY differing key outside the allowed set — same
-# fail-safe direction as every other predicate in this file. Prints nothing.
-hc_path_is_metadata_json_safe() {
-  local path="${1:-}" base="${2:-}" head="${3:-}"
-  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
-  local allowlist="${5:-}"
-  [ -n "$path" ] && [ -n "$base" ] && [ -n "$head" ] || return 1
-  hc_has_jq || return 1
-  [ -n "$allowlist" ] || allowlist=$(hc_metadata_json_allowlist "$proj")
-  printf '%s' "$allowlist" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
-
-  # Union the `keys` of every allowlist entry whose glob matches this path.
-  # Glob matching is bash's `[[ == $glob ]]` (same rule as hc_path_is_noncode:
-  # `*` spans `/`), so it has to happen here, not in jq.
-  local restore_glob=0
-  case "$-" in *f*) ;; *) restore_glob=1 ;; esac
-  set -f
-  local entry entry_glob matched_entries="[]"
-  while IFS= read -r entry; do
-    [ -z "$entry" ] && continue
-    entry_glob=$(printf '%s' "$entry" | jq -r '.glob // empty' 2>/dev/null)
-    [ -n "$entry_glob" ] || continue
-    if [[ "$path" == $entry_glob ]]; then
-      matched_entries=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$matched_entries" 2>/dev/null)
-      [ -n "$matched_entries" ] || matched_entries="[]"
-    fi
-  done < <(printf '%s' "$allowlist" | jq -c '.[]' 2>/dev/null)
-  [ "$restore_glob" -eq 1 ] && set +f
-  [ "$matched_entries" != "[]" ] || return 1
-
-  local allowed_keys
-  allowed_keys=$(printf '%s' "$matched_entries" | jq -c '[.[].keys[]?] | unique' 2>/dev/null)
-  [ -n "$allowed_keys" ] || return 1
-
-  # Both sides must resolve as committed objects — a file present only at one
-  # end (added/deleted) is not a pure edit, so git show failing on either side
-  # is itself the unsafe verdict, not just a missing-content edge case.
-  local old_json new_json
-  old_json=$(git -C "$proj" show "${base}:${path}" 2>/dev/null) || return 1
-  new_json=$(git -C "$proj" show "${head}:${path}" 2>/dev/null) || return 1
-  [ -n "$old_json" ] && [ -n "$new_json" ] || return 1
-
-  local verdict
-  verdict=$(jq -n --argjson a "$old_json" --argjson b "$new_json" --argjson allowed "$allowed_keys" '
-    if ($a | type) != "object" or ($b | type) != "object" then false
-    else
-      (($a | keys) + ($b | keys) | unique) as $allkeys
-      | [ $allkeys[] | select($a[.] != $b[.]) ] as $changed
-      | ($changed | length) > 0 and (($changed - $allowed) | length) == 0
-    end
-  ' 2>/dev/null)
-  [ "$verdict" = "true" ]
-}
-
-hc_changeset_is_code() {
-  local base="$1" head="$2"
-  local proj="${3:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
-
-  # --- assemble the changed-file set (union, newline-separated) ---------------
-  # diff_out declared here (not inside the `if` below) and pre-emptied: the
-  # classify loop further down reads it with `[ -n "$diff_out" ]` unconditionally,
-  # and a caller running under `set -u` (this file has none, but sourcers may)
-  # must not see an unbound variable when base/head is empty.
-  local files="" line path diff_out=""
-
-  # (1) committed range base..head. Only when we have a real base AND head; a
-  # git failure here is an ERROR → fail toward CODE (return 0 below).
-  if [ -n "$base" ] && [ -n "$head" ]; then
-    local diff_rc
-    diff_out=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null)
-    diff_rc=$?
-    if [ "$diff_rc" -ne 0 ]; then
-      printf 'code\n'
-      return 0
-    fi
-    files="$diff_out"
-  fi
-
-  # (2) introduced tree paths — strip the 3-char porcelain prefix from each
-  # HC_TREE_BLOCKERS line (whole path after "XY ", space-safe).
-  if [ -n "${HC_TREE_BLOCKERS:-}" ]; then
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      path="${line:3}"
-      [ -z "$path" ] && continue
-      files="${files:+$files
-}$path"
-    done <<EOF
-$HC_TREE_BLOCKERS
-EOF
-  fi
-
-  # Empty changed set → not our territory (S0). Distinct return code so callers
-  # never confuse "nothing changed" with "everything is non-code".
-  if [ -z "$files" ]; then
-    printf 'empty\n'
-    return 2
-  fi
-
-  # --- classify: NON-CODE only if EVERY file is noncode OR a proven ----------
-  # metadata-only manifest edit (version bump, etc.). Config read ONCE, outside
-  # the loop — see hc_noncode_globs on why a per-path read is a gate-disarming
-  # timeout risk, not a micro-optimisation.
-  local globs allowlist f verdict="noncode" rc=1
-  globs=$(hc_noncode_globs "$proj")
-  allowlist=$(hc_metadata_json_allowlist "$proj")
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    if hc_path_is_noncode "$f" "$globs"; then
-      continue
-    fi
-    # The metadata-JSON check only applies to a file from the COMMITTED range:
-    # it diffs <base>:<path> against <head>:<path> via `git show`, which reads
-    # committed objects — an introduced (uncommitted) tree-dirt file's actual
-    # working-copy content is not what that comparison would see, so falling
-    # through to CODE for tree dirt here is the fail-safe choice, not a gap.
-    if [ -n "$diff_out" ] && printf '%s\n' "$diff_out" | grep -qxF "$f" \
-       && hc_path_is_metadata_json_safe "$f" "$base" "$head" "$proj" "$allowlist"; then
-      continue
-    fi
-    # A single unrecognised (code / unknown-ext) file → whole changeset CODE.
-    verdict="code"
-    rc=0
-    break
-  done <<EOF
-$files
-EOF
-
-  printf '%s\n' "$verdict"
-  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -2274,20 +1983,12 @@ hc_done_state_blocked() {
 # operator-facing state can never drift from what the Stop gate actually enforces.
 #
 # Sets shell globals:
-#   HC_STATE — one of: S0 S_OOS S1 S2 S4 S5.
+#   HC_STATE — one of: S0 S1 S2 S4 S5.
 #   HC_NEXT  — the canonical next-action string (empty "" for silent states).
 #
 # The states and their gate correspondence:
 #   S0 idle      — tree clean, no committed work past base. Nothing to gate.
 #                  (gate Step 3 quiet-exit.) Silent: HC_NEXT="".
-#   S_OOS out-of-scope — there IS a changeset (introduced tree blockers OR
-#                  HEAD past base) but hc_changeset_is_code reports the WHOLE
-#                  changeset is NON-CODE (#5). The harness stands down entirely:
-#                  the Stop gate exits 0 silently (its own scope short-circuit)
-#                  and SessionStart emits nothing. Terminal, silent: HC_NEXT="".
-#                  Evaluated AFTER the S0-idle/empty check (an empty changeset
-#                  stays S0) and BEFORE S1/S2/S4/S5. Fail-safe: is-code error →
-#                  CODE → this branch is not taken → normal gating.
 #   S1 working   — introduced tree blockers exist. "Introduced-dirty dominates":
 #                  checked FIRST, before any commit/done reasoning, exactly as the
 #                  gate would ultimately block on Step 6. HC_NEXT points at finishing
@@ -2307,12 +2008,11 @@ hc_done_state_blocked() {
 # and do NOT even call hc_done_state_blocked.
 #
 # Reachability / disjointness: every tree maps to exactly one state. The empty
-# changeset (no introduced dirt AND no committed work past base) maps to S0.
-# Given a NON-empty changeset, the scope gate (S_OOS) splits first: a wholly
-# non-code changeset is out of scope. A CODING changeset then flows through the
-# normal ladder — S1 is the introduced-dirty guard (dominates). Given a clean
-# tree, S0 vs {S2,S4,S5} splits on "committed work past base?". Given committed
-# work, S2 vs {S4,S5} splits on
+# changeset (no introduced dirt AND no committed work past base) maps to S0. Any
+# NON-empty changeset flows through the ladder unconditionally — there is no file
+# classification, every changed file is in scope. S1 is the introduced-dirty
+# guard (dominates). Given a clean tree, S0 vs {S2,S4,S5} splits on "committed
+# work past base?". Given committed work, S2 vs {S4,S5} splits on
 # "valid done-state at HEAD?". Given a valid done-state at HEAD, S5-via-escalation
 # vs {S4,S5-green} splits on "escalation present?", and finally S4 vs S5-green
 # splits on hc_done_state_blocked's verdict. No overlap.
@@ -2374,28 +2074,11 @@ hc_state() {
   # --- S0 idle: empty changeset. ----------------------------------------------
   # No introduced tree blockers AND no committed work past base → nothing we can
   # attribute to this changeset → idle (gate Step 3 quiet-exit). Checked FIRST so
-  # a genuinely empty changeset never reaches the scope gate below. Silent state.
+  # a genuinely empty changeset never enters the ladder below. Silent state.
   if [ -z "$HC_TREE_BLOCKERS" ] && [ "$committed_work" -eq 0 ]; then
     HC_STATE="S0"
     HC_NEXT=""
     return 0
-  fi
-
-  # --- S_OOS out-of-scope: the WHOLE changeset is non-code (#5). ---------------
-  # A changeset exists (introduced dirt OR committed work). Ask the scope
-  # predicate whether every changed file is non-code. NON-CODE (rc 1) → the
-  # harness stands down entirely (terminal, silent). CODE (rc 0) or the "empty"
-  # sentinel (rc 2, cannot occur here — we established a non-empty changeset) →
-  # fall through to normal gating. Fail-safe: any predicate error resolves to
-  # CODE inside hc_changeset_is_code, so an error never lands us in S_OOS.
-  if hc_has_fn hc_changeset_is_code; then
-    local scope
-    scope=$(hc_changeset_is_code "$HC_BASE" "$head_sha" "$proj" 2>/dev/null)
-    if [ "$scope" = "noncode" ]; then
-      HC_STATE="S_OOS"
-      HC_NEXT=""
-      return 0
-    fi
   fi
 
   # --- S1 working: introduced-dirty dominates. --------------------------------
