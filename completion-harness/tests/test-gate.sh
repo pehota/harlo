@@ -139,9 +139,15 @@ clear_config() { rm -f "$PROJECT_DIR/.claude/done-config.json"; }
 ensure_clean() { git -C "$PROJECT_DIR" checkout -q -- . 2>/dev/null; git -C "$PROJECT_DIR" clean -fdq -e .claude 2>/dev/null; }
 
 # ============================================================================
-# Case 1 — stop_hook_active=true → exit 0 (loop guard)
+# Case 1 — stop_hook_active=true is NO LONGER a blanket allow.
+# The loop guard is now reason-scoped (lives in block()): it brakes only when
+# the category it is about to emit matches the last-block marker for this task.
+# With no marker written yet, a stop_hook_active=true turn evaluates the gate
+# fully. Session s1 has no baseline → no anchor → Step 4 blocks (no-anchor).
+# The dedicated brake/transition behaviour is exercised in Chunk H below.
 # ============================================================================
-run_case "1 stop_hook_active=true -> allow" allow \
+rm -rf "$HDIR/last-block"
+run_case "1 stop_hook_active=true, no marker -> still evaluates (blocks)" block \
   '{"session_id":"s1","stop_hook_active":true}'
 
 # ============================================================================
@@ -904,6 +910,114 @@ run_case "F3 prose-only changeset WITH valid done-state + green review -> allow"
   '{"session_id":"pr3","stop_hook_active":false}' "$PR_REPO"
 
 rm -rf "$PR_REPO"
+
+# ============================================================================
+# Chunk H — reason-scoped loop guard (block category SSOT + brake/transition).
+#
+# Regression pin for the jobhunt incident: a blanket `stop_hook_active => exit 0`
+# swallowed the tree-dirty -> changeset-unverified transition. The agent
+# committed in the block-response cycle, stopped again with the flag still true,
+# and the gate exited before Step 4 — leaving the changeset unverified and
+# unannounced. The guard now compares the PENDING block category against the
+# previous turn's persisted one: same => runaway brake, different => let it fire.
+# ----------------------------------------------------------------------------
+LB_DIR="$HDIR/last-block"
+LIBH="$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh"
+
+# --- H0: SSOT sync — every block() call site in done-gate.sh passes a
+#     $HC_BLOCK_* constant (never a bare literal / missing arg), and every
+#     constant it references exists in hc_block_categories. This is the
+#     "keep the reasons in sync" guard, mechanised.
+GATE_SRC=$(cat "$GATE")
+# 0a. no `block "..."` line may end without a $HC_BLOCK_* 2nd arg. Match the
+#     helper calls (2-space indented, as in the script), excluding the block()
+#     definition itself and validate_or_block's internal call which forwards
+#     $category.
+BAD_BLOCK=$(printf '%s\n' "$GATE_SRC" \
+  | grep -nE '^  block "' \
+  | grep -vE '\$HC_BLOCK_[A-Z_]+"?[[:space:]]*$' || true)
+if [ -z "$BAD_BLOCK" ]; then
+  printf 'PASS  %s\n' "H0a every block() call passes a \$HC_BLOCK_* category"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [call(s) without a category constant:\n%s\n]\n' "H0a block() category args" "$BAD_BLOCK"; FAIL=$((FAIL+1))
+fi
+# 0b. every $HC_BLOCK_* referenced in done-gate.sh is a real constant listed by
+#     hc_block_categories (catches a typo'd constant name).
+REFERENCED=$(printf '%s\n' "$GATE_SRC" | grep -oE '\$HC_BLOCK_[A-Z_]+' | sort -u | sed 's/^\$//')
+KNOWN=$( ( . "$LIBH"; for v in $REFERENCED; do eval "printf '%s\n' \"\$$v\""; done ) 2>/dev/null | sort -u)
+VALID_SET=$( ( . "$LIBH"; hc_block_categories ) 2>/dev/null | sort -u)
+H0B_OK=1
+while IFS= read -r cat; do
+  [ -z "$cat" ] && continue
+  printf '%s\n' "$VALID_SET" | grep -qxF "$cat" || { H0B_OK=0; break; }
+done <<EOF
+$KNOWN
+EOF
+if [ "$H0B_OK" -eq 1 ] && [ -n "$KNOWN" ]; then
+  printf 'PASS  %s\n' "H0b every referenced \$HC_BLOCK_* is in hc_block_categories"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [referenced=%s known-valid=%s]\n' "H0b category constants valid" "$(printf '%s' "$KNOWN" | tr '\n' ' ')" "$(printf '%s' "$VALID_SET" | tr '\n' ' ')"; FAIL=$((FAIL+1))
+fi
+
+# --- H1: same category under stop_hook_active → brake (silent allow).
+# Dirty tree + no done-state → the pending block is tree-dirty. Pre-seed the
+# marker with tree-dirty → the gate must brake (this is the genuine runaway:
+# the agent cannot clear the dirty tree and keeps stopping).
+SID=h1; clear_state "$SID"; set_baseline "$SID" "$HEAD_SHA"; ensure_clean
+printf 'introduced\n' > "$PROJECT_DIR/a.js"
+mkdir -p "$LB_DIR"; printf 'tree-dirty\n' > "$LB_DIR/session-$SID"
+run_case "H1 same category (tree-dirty) + stop_hook_active -> brake (allow)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H2: THE JOBHUNT CASE. Different category under stop_hook_active → the new
+# block fires. Committed-clean + no done-state → pending block is
+# changeset-unverified. Marker holds the PREVIOUS turn's tree-dirty. The
+# categories differ → the agent complied (committed) and reached a new
+# condition → the gate MUST block for changeset-unverified, not brake.
+SID=h2; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'tree-dirty\n' > "$LB_DIR/session-$SID"
+run_case "H2 tree-dirty -> changeset-unverified transition + stop_hook_active -> BLOCK (jobhunt regression)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
+# and the marker is now updated to the new category
+if [ "$(cat "$LB_DIR/session-$SID" 2>/dev/null)" = "changeset-unverified" ]; then
+  printf 'PASS  %s\n' "H2 marker advanced to changeset-unverified"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [marker=%s]\n' "H2 marker advance" "$(cat "$LB_DIR/session-$SID" 2>/dev/null)"; FAIL=$((FAIL+1))
+fi
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H3: same changeset-unverified category repeated under stop_hook_active →
+# brake. (Agent ran /done improperly / not at all and keeps stopping — real
+# runaway on THIS category now.)
+SID=h3; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'changeset-unverified\n' > "$LB_DIR/session-$SID"
+run_case "H3 repeated changeset-unverified + stop_hook_active -> brake (allow)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H4: a green done-state ALLOWs AND clears the marker (so a later different
+# block is never mistaken for a runaway of a stale cycle).
+SID=h4; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'tree-dirty\n' > "$LB_DIR/session-$SID"
+write_review_log 0
+GREEN_DONE "$SID"
+run_case "H4 green done-state -> allow (even with a stale marker present)" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+if [ ! -f "$LB_DIR/session-$SID" ]; then
+  printf 'PASS  %s\n' "H4 allow path cleared the last-block marker"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [marker still present: %s]\n' "H4 marker cleared" "$(cat "$LB_DIR/session-$SID")"; FAIL=$((FAIL+1))
+fi
+rm -rf "$LB_DIR"; ensure_clean; clear_review_log
+
+# --- H5: WITHOUT stop_hook_active, the marker is irrelevant — a fresh Stop
+# always evaluates fully and blocks. (Marker only gates the brake.)
+SID=h5; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'changeset-unverified\n' > "$LB_DIR/session-$SID"
+run_case "H5 marker present but stop_hook_active=false -> still blocks" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -rf "$LB_DIR"; ensure_clean
 
 # ============================================================================
 echo "----------------------------------------"

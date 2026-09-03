@@ -65,7 +65,16 @@ mkdir -p "$BASELINE_DIR" "$HARNESS_DIR/done-state" "$HARNESS_DIR/pending-escalat
 # missing file is a no-op.
 case "$SOURCE" in
   resume|compact|fork) : ;;
-  *) rm -f "$PROJECT_DIR/.claude/.harness/session-config.json" 2>/dev/null ;;
+  *)
+    rm -f "$PROJECT_DIR/.claude/.harness/session-config.json" 2>/dev/null
+    # last-block/ is the Stop gate's reason-scoped loop-guard memory (the
+    # category of the previous turn's block). It is meaningful only WITHIN a
+    # task's block/comply cycle; a fresh context starts a new task with no
+    # prior block, so a stale category here must not brake the first genuine
+    # block of the new task. Dropped on the same startup|clear boundary as the
+    # session config, kept on resume|compact|fork (same task continues).
+    rm -rf "$PROJECT_DIR/.claude/.harness/last-block" 2>/dev/null
+    ;;
 esac
 
 # --- reap stale harness state -----------------------------------------------
@@ -84,6 +93,8 @@ esac
 # ancestry keep-set (hc_live_review_shas + the review-log hygiene prune below),
 # never by age. Session-mode baselines/<sid>.dirty MAY still be reaped — session
 # state is ephemeral (the changeset is the session).
+# last-block/ is NOT excluded: it is transient loop-guard memory, already
+# dropped on a fresh context above, and a 14-day-old marker is certainly stale.
 if [ -d "$HARNESS_DIR" ]; then
   find "$HARNESS_DIR" -type f \
     -not -path '*/task-base/*' -not -path '*/tree-base/*' -not -path '*/review-log/*' \

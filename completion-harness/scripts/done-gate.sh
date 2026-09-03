@@ -69,9 +69,61 @@ if hc_has_fn hc_resolve; then
 fi
 [ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
 
-# --- helper: emit block + exit 0 --------------------------------------------
+# --- helper: path to this task's last-block marker ------------------------
+# One line, a block category (see hc_block_categories). Keyed by HC_TASK_KEY —
+# the same task-continuity key the done-state uses — so it survives the
+# resuming-session id churn the gate already works around. Written by block(),
+# cleared by clear_last_block() on every non-block exit. Both callers guard on
+# HARNESS_DIR being set; every block()/clear_last_block() call sits after the
+# HARNESS_DIR assignment (Step 2), so the path is always resolvable when used.
+last_block_file() {
+  printf '%s/last-block/%s\n' "$HARNESS_DIR" "$HC_TASK_KEY"
+}
+
+# --- helper: clear the last-block marker (call before a non-block exit 0) ---
+# A stale category left over from a prior block cycle must not brake a future
+# DIFFERENT block. Every clean allow path (Steps 3, 3c, 3d, 7, 9, and the
+# pending-escalation one-shot) calls this before its exit 0.
+clear_last_block() {
+  [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ] || return 0
+  rm -f "$(last_block_file)" 2>/dev/null
+  return 0
+}
+
+# --- helper: emit block + exit 0 (with a reason-scoped loop guard) ----------
+# 2nd arg is a block CATEGORY constant from harness-common.sh (HC_BLOCK_*).
+# Under stop_hook_active, if that category equals the one we blocked with last
+# time for this task, this is a genuine runaway (the agent cannot satisfy the
+# condition) — brake with a silent exit 0. A DIFFERENT category means the agent
+# complied with the previous block and reached a new condition — emit it, and
+# record it as the new last-block so a real loop on THAT still brakes next turn.
+#
+# An unknown/empty category is a call-site bug: fail toward BLOCKING (never
+# brake on it) and leave a loud stderr line so chunk G0 of test-gate.sh catches
+# the drift.
 block() {
-  local reason="$1"
+  local reason="$1" category="${2:-}"
+  if ! hc_has_fn hc_is_block_category || ! hc_is_block_category "$category"; then
+    printf 'Completion harness: BUG unknown block category %s\n' "${category:-<empty>}" >&2
+    category="__invalid__"
+  fi
+
+  if [ "$STOP_HOOK_ACTIVE" = "true" ] && [ "$category" != "__invalid__" ] \
+     && [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ]; then
+    local last
+    last=$(cat "$(last_block_file)" 2>/dev/null | tr -d '\r\n')
+    if [ "$category" = "$last" ]; then
+      # same condition as last turn, agent still cannot clear it -> runaway brake
+      exit 0
+    fi
+  fi
+
+  # Record the category BEFORE emitting so the next turn can compare against it.
+  if [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ] && [ "$category" != "__invalid__" ]; then
+    mkdir -p "$HARNESS_DIR/last-block" 2>/dev/null
+    printf '%s\n' "$category" > "$(last_block_file)" 2>/dev/null
+  fi
+
   # stdout: the machine-readable decision the runtime consumes on exit 0.
   jq -n --arg r "$reason" '{"decision":"block","reason":$r}' 2>/dev/null \
     || printf '{"decision":"block","reason":"%s"}\n' "$reason"
@@ -81,12 +133,13 @@ block() {
 }
 
 # --- helper: validate a file against a schema or block ---------------------
+# 4th arg is the block category constant, forwarded to block().
 validate_or_block() {
-  local schema="$1" file="$2" reason="$3"
+  local schema="$1" file="$2" reason="$3" category="$4"
   if hc_has_fn hc_validate; then
-    hc_validate "$schema" "$file" >/dev/null 2>&1 || block "$reason"
+    hc_validate "$schema" "$file" >/dev/null 2>&1 || block "$reason" "$category"
   else
-    block "$reason"
+    block "$reason" "$category"
   fi
 }
 
@@ -104,10 +157,14 @@ read_marker_id() {
 }
 
 # --- Step 1: loop guard -----------------------------------------------------
-# A block must never trap the agent forever.
-if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
-  exit 0
-fi
+# A block must never trap the agent forever — BUT the guard is reason-scoped,
+# not blanket. It lives inside block() (see there): under stop_hook_active a
+# block brakes only when its CATEGORY matches the previous turn's. A blanket
+# `stop_hook_active => exit 0` here would swallow the tree-dirty ->
+# changeset-unverified transition (agent commits in the block-response cycle,
+# stops again with the flag still true, gate exits before Step 4). So there is
+# deliberately no early exit at this point; the gate runs its steps and block()
+# decides.
 
 # --- Step 2: not a git repo -> no changeset baseline possible ---------------
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
@@ -278,6 +335,7 @@ COVER_BASE="${HC_BASE:-$HC_BASE_RECOVERED}"
 PENDING="$HARNESS_DIR/pending-escalation/$HC_TASK_KEY.json"
 if [ -f "$PENDING" ]; then
   rm -f "$PENDING" 2>/dev/null
+  clear_last_block
   exit 0
 fi
 
@@ -299,6 +357,7 @@ if [ -n "$HC_BASE" ] && [ "$HC_BASE" = "$HEAD_SHA" ]; then
     STEP3_TREE_STATUS=$(printf '%s\n' "$STEP3_TREE_STATUS" | hc_filter_harness_own "$PROJECT_DIR")
   fi
   if [ -z "$STEP3_TREE_STATUS" ]; then
+    clear_last_block
     exit 0
   fi
 fi
@@ -323,14 +382,14 @@ if hc_has_fn hc_tree_status; then
 fi
 if [ "$TREE_STATUS_DONE" -eq 1 ]; then
   if [ -n "$HC_TREE_BLOCKERS" ]; then
-    block "finish the slice ($(hc_tree_remediation)), then commit"
+    block "finish the slice ($(hc_tree_remediation)), then commit" "$HC_BLOCK_TREE_DIRTY"
   fi
 else
   # Classifier unavailable (source failed): fall back to the strict live check
   # so the gate never weakens toward allow.
   TREE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
   if [ -n "$TREE_STATUS" ]; then
-    block "finish the slice (commit or stash your uncommitted changes), then commit"
+    block "finish the slice (commit or stash your uncommitted changes), then commit" "$HC_BLOCK_TREE_DIRTY"
   fi
 fi
 
@@ -348,6 +407,7 @@ fi
 # Introduced dirt has already blocked above (Step 3b precedes this), so an empty
 # range with pre-existing-only dirt correctly reaches here and is allowed.
 if [ -n "$HC_BASE" ] && git -C "$PROJECT_DIR" diff --quiet "$HC_BASE" "$HEAD_SHA" 2>/dev/null; then
+  clear_last_block
   exit 0
 fi
 
@@ -365,6 +425,7 @@ fi
 # HEAD, not new uncommitted work. Invariant: keyed to the exact HEAD sha, so any
 # new/amended commit → different sha → no sidecar → re-block.
 if [ -f "$HARNESS_DIR/escalation-accept/$HEAD_SHA.json" ]; then
+  clear_last_block
   exit 0
 fi
 
@@ -416,7 +477,11 @@ fi
 # anchor is the whole story. With a state present the later steps have a more
 # specific truth to tell (see the S2_NO_ANCHOR comment).
 if [ ! -f "$DONE_STATE_FILE" ]; then
-  block "${S2_NO_ANCHOR:-$S2_REASON}"
+  if [ -n "$S2_NO_ANCHOR" ]; then
+    block "$S2_NO_ANCHOR" "$HC_BLOCK_NO_ANCHOR"
+  else
+    block "$S2_REASON" "$HC_BLOCK_CHANGESET_UNVERIFIED"
+  fi
 fi
 
 # --- Step 4b: done-state must satisfy the hard contract (schema) -> BLOCK ----
@@ -425,7 +490,7 @@ fi
 # file itself → hc_validate nonzero → BLOCK (broken install, safe direction). The
 # jq-missing degrade at the top of the gate already exited before this point, so
 # this never fires on a jq-less host.
-validate_or_block "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" "$S2_REASON"
+validate_or_block "$HC_CONTRACTS_DIR/done-state.schema.json" "$DONE_STATE_FILE" "$S2_REASON" "$HC_BLOCK_CHANGESET_UNVERIFIED"
 
 # --- Step 5: verified_sha != HEAD -> BLOCK unless the TREE is identical ------
 # Re-check live, do not trust any stored convenience flag. This is enforced
@@ -467,7 +532,7 @@ else
   VSTATE="stale"
 fi
 if [ "$VSTATE" = "stale" ]; then
-  block "$S2_REASON"
+  block "$S2_REASON" "$HC_BLOCK_CHANGESET_UNVERIFIED"
 fi
 # Audit signal only: records WHY Step 5 did not block. Step 8 deliberately
 # does NOT gate the anchor admission on it (see there).
@@ -482,6 +547,7 @@ CARRY=0
 # be re-run — a stale escalation can no longer disarm the gate for the session.
 ESCALATION=$(jq -r '.escalation // "null"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ -n "$ESCALATION" ] && [ "$ESCALATION" != "null" ]; then
+  clear_last_block
   exit 0
 fi
 # NOTE: the SHA-keyed escalation sidecar (escalation-accept/<HEAD>.json) is
@@ -511,16 +577,16 @@ fi
 # output_tail (un-forgeable green); a missing field -> "MISSING"/"" -> block.
 TESTS_STATUS=$(jq -r '.tests.status // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TESTS_STATUS" = "not_run" ]; then
-  block "tests were not run and there is no escalation — run tests, re-commit, re-run /done"
+  block "tests were not run and there is no escalation — run tests, re-commit, re-run /done" "$HC_BLOCK_CHECKLIST_RED"
 fi
 TESTS_EXIT=$(jq -r '.tests.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TESTS_EXIT" != "0" ]; then
-  block "fix failing tests, re-commit, re-run /done"
+  block "fix failing tests, re-commit, re-run /done" "$HC_BLOCK_CHECKLIST_RED"
 fi
 TESTS_CMD=$(jq -r '.tests.command // ""' "$DONE_STATE_FILE" 2>/dev/null)
 TESTS_TAIL=$(jq -r '.tests.output_tail // ""' "$DONE_STATE_FILE" 2>/dev/null)
 if [ -z "$TESTS_CMD" ] || [ -z "$TESTS_TAIL" ]; then
-  block "green tests must carry evidence (command + output_tail); re-run /done recording them"
+  block "green tests must carry evidence (command + output_tail); re-run /done recording them" "$HC_BLOCK_CHECKLIST_RED"
 fi
 
 # lint (conditional). Only projects with a lint command record a .lint object.
@@ -530,7 +596,7 @@ fi
 # yielding "") fails toward BLOCK via the string compare.
 LINT_EXIT=$(jq -r '.lint.exit_code // "MISSING"' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$LINT_EXIT" != "MISSING" ] && [ "$LINT_EXIT" != "0" ]; then
-  block "fix lint, re-commit, re-run /done"
+  block "fix lint, re-commit, re-run /done" "$HC_BLOCK_CHECKLIST_RED"
 fi
 
 # review: an INDEPENDENT review-log must exist for the current HEAD, written by
@@ -592,12 +658,12 @@ if [ -n "$ANCHOR_SHA" ] && { hc_has_fn hc__is_object_id; }; then
   fi
 fi
 if [ ! -f "$REVIEW_LOG" ]; then
-  block "run an independent code review, then re-run /done"
+  block "run an independent code review, then re-run /done" "$HC_BLOCK_REVIEW_MISSING"
 fi
 # Hard contract: the review-log must be structurally valid before its
 # findings[]/files_reviewed are trusted by the severity + coverage checks below.
 # A missing schema file → hc_validate nonzero → BLOCK (broken install, safe).
-validate_or_block "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" "$S2_REASON"
+validate_or_block "$HC_CONTRACTS_DIR/review-log.schema.json" "$REVIEW_LOG" "$S2_REASON" "$HC_BLOCK_REVIEW_MISSING"
 MIN_LEVEL=$(jq -r '.min_review_level // "high"' "$PROJECT_DIR/.claude/done-config.json" 2>/dev/null)
 [ -z "$MIN_LEVEL" ] && MIN_LEVEL="high"
 # Explicit availability guard (parity with the hc_tree_status fallback): if the
@@ -608,7 +674,7 @@ else
   OPEN="ERR"
 fi
 if [ "$OPEN" != "0" ]; then
-  block "address the blocking review findings (${OPEN}), then re-run /done"
+  block "address the blocking review findings (${OPEN}), then re-run /done" "$HC_BLOCK_REVIEW_MISSING"
 fi
 
 # review COVERAGE: the review-log must attest (in .files_reviewed) EVERY file the
@@ -625,7 +691,7 @@ fi
 GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$COVER_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
-  block "review the uncovered files (${GAP_LIST}), then re-run /done"
+  block "review the uncovered files (${GAP_LIST}), then re-run /done" "$HC_BLOCK_REVIEW_COVERAGE"
 fi
 
 # task_checks: every entry must be status "passed". Count the non-passed ones;
@@ -633,11 +699,15 @@ fi
 # yields "" which is != "0" -> block.
 TASK_FAILED=$(jq -r '[.task_checks[]? | select(.status != "passed")] | length' "$DONE_STATE_FILE" 2>/dev/null)
 if [ "$TASK_FAILED" != "0" ]; then
-  block "fix ${TASK_FAILED} task check(s) not passed, then re-run /done"
+  block "fix ${TASK_FAILED} task check(s) not passed, then re-run /done" "$HC_BLOCK_CHECKLIST_RED"
 fi
 
 # --- Step 9: all checks pass -> allow the stop ------------------------------
 #
+# The changeset is verified: drop any last-block marker so a future block for a
+# different reason is never mistaken for a runaway of this cycle.
+clear_last_block
+
 # WORKTREE TEARDOWN SUGGESTION. When the gate allows and the project dir is a
 # LINKED worktree on a non-trunk branch, the work is verified and ready to
 # integrate — so name the script that does it.

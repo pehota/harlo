@@ -22,7 +22,7 @@
     {
       "name": "hc_has_fn",
       "globals": [],
-      "args": "<name> — a function or command name to probe for",
+      "args": "<name> \u2014 a function or command name to probe for",
       "stdout": "none",
       "return_codes": "0 if <name> is a defined function or command, 1 otherwise",
       "sentinels": []
@@ -38,7 +38,7 @@
     {
       "name": "hc_require_jq",
       "globals": [],
-      "args": "[message] — default \"jq is required\"",
+      "args": "[message] \u2014 default \"jq is required\"",
       "stdout": "none (writes message to stderr on missing jq)",
       "return_codes": "0 if jq present; exits 1 (never returns) if missing",
       "sentinels": []
@@ -46,7 +46,7 @@
     {
       "name": "hc_die",
       "globals": [],
-      "args": "<message> — reads prefix from HC_DIE_PREFIX (default \"harness\")",
+      "args": "<message> \u2014 reads prefix from HC_DIE_PREFIX (default \"harness\")",
       "stdout": "none (writes to stderr)",
       "return_codes": "never returns; exits 1",
       "sentinels": []
@@ -211,6 +211,29 @@
       ],
       "stdout": "none (sets globals)",
       "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_block_categories",
+      "globals": [],
+      "args": "(none)",
+      "stdout": "newline-separated list of every valid Stop-gate block category (the SSOT the reason-scoped loop guard compares against)",
+      "return_codes": "always 0",
+      "sentinels": [
+        "tree-dirty",
+        "changeset-unverified",
+        "no-anchor",
+        "checklist-red",
+        "review-missing",
+        "review-coverage"
+      ]
+    },
+    {
+      "name": "hc_is_block_category",
+      "globals": [],
+      "args": "<value> \u2014 a candidate block category string",
+      "stdout": "none",
+      "return_codes": "0 if <value> is one of the known block categories, 1 otherwise",
       "sentinels": []
     }
   ]

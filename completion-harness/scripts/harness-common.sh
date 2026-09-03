@@ -132,6 +132,60 @@ hc__harness_dir() {
 }
 
 # ---------------------------------------------------------------------------
+# Block categories — the SSOT for the Stop gate's reason taxonomy.
+#
+# done-gate.sh's block() runs a REASON-SCOPED loop guard: under
+# stop_hook_active it brakes (silent exit 0) ONLY when the category it is about
+# to emit equals the one persisted for this task key. Same category => the
+# agent cannot satisfy the condition => genuine runaway => brake. A DIFFERENT
+# category => the agent complied with the prior block and progressed into a new
+# gate condition => let it through once (it becomes the new last-block, so an
+# actual loop on THAT still brakes on the next turn).
+#
+# This replaced a blanket `stop_hook_active => exit 0` guard that also swallowed
+# the tree-dirty -> changeset-unverified transition: the agent would commit in
+# response to "finish the slice", stop again in the same block-response cycle
+# with stop_hook_active still true, and the gate would exit 0 without ever
+# reaching the "no done-state" block — leaving the changeset unverified and
+# unnannounced.
+#
+# Every block() call site MUST pass one of these constants as its 2nd arg.
+# Adding a gate condition = add a constant here AND to hc_block_categories
+# first; tests/test-gate.sh chunk G0 greps done-gate.sh to enforce that no
+# block() call passes a bare literal or omits the arg.
+HC_BLOCK_TREE_DIRTY="tree-dirty"                      # Step 3b: uncommitted introduced changes
+HC_BLOCK_CHANGESET_UNVERIFIED="changeset-unverified"  # Steps 4/4b/5: no valid done-state at HEAD
+HC_BLOCK_NO_ANCHOR="no-anchor"                        # Step 4: no SessionStart baseline recorded
+HC_BLOCK_CHECKLIST_RED="checklist-red"                # Step 8: red tests / lint / task_check
+HC_BLOCK_REVIEW_MISSING="review-missing"              # Step 8: no independent review-log / open findings
+HC_BLOCK_REVIEW_COVERAGE="review-coverage"            # Step 8: changed files not attested by the review
+
+# hc_block_categories — newline-separated list of every valid category. The
+# other half of the G0 sync check: a $HC_BLOCK_* referenced in done-gate.sh
+# that is not in this list fails the test.
+hc_block_categories() {
+  printf '%s\n' \
+    "$HC_BLOCK_TREE_DIRTY" \
+    "$HC_BLOCK_CHANGESET_UNVERIFIED" \
+    "$HC_BLOCK_NO_ANCHOR" \
+    "$HC_BLOCK_CHECKLIST_RED" \
+    "$HC_BLOCK_REVIEW_MISSING" \
+    "$HC_BLOCK_REVIEW_COVERAGE"
+}
+
+# hc_is_block_category <value> — true iff <value> is a known category. block()
+# uses this to reject a typo'd/empty arg: an unknown category fails toward
+# BLOCKING (emit it, never brake on it) with a loud stderr line.
+hc_is_block_category() {
+  case "$1" in
+    "$HC_BLOCK_TREE_DIRTY"|"$HC_BLOCK_CHANGESET_UNVERIFIED"|"$HC_BLOCK_NO_ANCHOR"|\
+    "$HC_BLOCK_CHECKLIST_RED"|"$HC_BLOCK_REVIEW_MISSING"|"$HC_BLOCK_REVIEW_COVERAGE")
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # hc_cfg <key> [default]
 #
 # THE single config read. Prints the effective value of a flat top-level key,
