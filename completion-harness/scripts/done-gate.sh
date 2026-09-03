@@ -82,8 +82,12 @@ last_block_file() {
 
 # --- helper: clear the last-block marker (call before a non-block exit 0) ---
 # A stale category left over from a prior block cycle must not brake a future
-# DIFFERENT block. Every clean allow path (Steps 3, 3c, 3d, 7, 9, and the
-# pending-escalation one-shot) calls this before its exit 0.
+# DIFFERENT block. Every allow path that has RESOLVED the state dir (Steps 3,
+# 3c, 3d, 7, 9, and the pending-escalation one-shot) calls this before its
+# exit 0. The two pre-resolution fail-safe exits — no-jq and not-a-git-repo,
+# both above the HARNESS_DIR assignment — cannot call it (no path to clear) and
+# do not need to: they are not "the changeset is fine" allows, and a fresh
+# SessionStart wipes .harness/last-block anyway (baseline-snapshot.sh).
 clear_last_block() {
   [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ] || return 0
   rm -f "$(last_block_file)" 2>/dev/null
@@ -101,6 +105,19 @@ clear_last_block() {
 # An unknown/empty category is a call-site bug: fail toward BLOCKING (never
 # brake on it) and leave a loud stderr line so chunk G0 of test-gate.sh catches
 # the drift.
+#
+# TWO brakes, both needed:
+#   (a) SAME-CATEGORY: the category we are about to emit equals last turn's ->
+#       the agent cannot clear this one condition and keeps stopping -> brake.
+#   (b) DEPTH CAP: a consecutive-block COUNT (any categories) past
+#       HC_BLOCK_DEPTH_CAP -> brake regardless of category. This restores the
+#       "a Stop retrigger loops at most a bounded number of times" property that
+#       reason-scoping (a) alone would lose: an agent oscillating between two
+#       categories (dirty tree <-> committed-unverified) never trips (a), but
+#       every such bounce increments the count and (b) catches it. The marker
+#       file is "<category> <count>"; a clean allow path clears it, so the count
+#       only climbs across an unbroken run of blocks.
+HC_BLOCK_DEPTH_CAP=6
 block() {
   local reason="$1" category="${2:-}"
   if ! hc_has_fn hc_is_block_category || ! hc_is_block_category "$category"; then
@@ -108,20 +125,34 @@ block() {
     category="__invalid__"
   fi
 
+  local prev_cat="" prev_count=0
+  if [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ]; then
+    local raw
+    raw=$(cat "$(last_block_file)" 2>/dev/null | tr -d '\r\n')
+    prev_cat="${raw%% *}"
+    case "$raw" in *" "*) prev_count="${raw##* }" ;; esac
+    case "$prev_count" in ''|*[!0-9]*) prev_count=0 ;; esac
+  fi
+
   if [ "$STOP_HOOK_ACTIVE" = "true" ] && [ "$category" != "__invalid__" ] \
      && [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ]; then
-    local last
-    last=$(cat "$(last_block_file)" 2>/dev/null | tr -d '\r\n')
-    if [ "$category" = "$last" ]; then
-      # same condition as last turn, agent still cannot clear it -> runaway brake
+    # (a) same condition as last turn, agent still cannot clear it -> brake
+    if [ "$category" = "$prev_cat" ]; then
+      exit 0
+    fi
+    # (b) too many consecutive blocks of ANY kind -> oscillation brake
+    if [ "$prev_count" -ge "$HC_BLOCK_DEPTH_CAP" ]; then
+      printf 'Completion harness: loop-guard depth cap (%s) reached — releasing the Stop\n' \
+        "$HC_BLOCK_DEPTH_CAP" >&2
       exit 0
     fi
   fi
 
-  # Record the category BEFORE emitting so the next turn can compare against it.
+  # Record "<category> <count>" BEFORE emitting so the next turn can compare.
+  # count = prev_count + 1 (this block continues the run).
   if [ -n "$HARNESS_DIR" ] && [ -n "$HC_TASK_KEY" ] && [ "$category" != "__invalid__" ]; then
     mkdir -p "$HARNESS_DIR/last-block" 2>/dev/null
-    printf '%s\n' "$category" > "$(last_block_file)" 2>/dev/null
+    printf '%s %s\n' "$category" "$((prev_count + 1))" > "$(last_block_file)" 2>/dev/null
   fi
 
   # stdout: the machine-readable decision the runtime consumes on exit 0.

@@ -805,22 +805,27 @@ hc__commit_session_authored() {
 # a review demand.
 #
 # "Not this session's own work" is decided two ways, LEDGER first:
-#   LEDGER-ENGAGED ($HARNESS_DIR/baselines/<session_id>.own-commits EXISTS —
-#     the PostToolUse(Bash) commit-ledger.sh hook has run at least once this
-#     session): a commit is confidently-foreign iff it is NOT a line in that
-#     ledger (hc__commit_in_ledger). This is the PRIMARY signal — membership is
-#     directly observed, not guessed, so it is immune to the case that broke
-#     the old email-only predicate: a human committing via terminal/`!` under
-#     the SAME git identity Claude Code commits under (the common case — no
-#     separate "Claude" identity here). Email can never tell those apart;
-#     ledger membership always can, because we watched the commit happen (or
-#     not) via a tool call.
-#   LEDGER ABSENT (hook never fired this session, e.g. a session that made
-#     zero Bash calls before this Stop check, or an older/unwired install):
-#     graceful degrade to the ORIGINAL email-only predicate
+#   LEDGER-ENGAGED ($HARNESS_DIR/baselines/<session_id>.own-commits exists AND
+#     is NON-EMPTY — the PostToolUse(Bash) commit-ledger.sh hook has swept at
+#     least one commit this session): a commit is confidently-foreign iff it is
+#     NOT a line in that ledger (hc__commit_in_ledger). This is the PRIMARY
+#     signal — membership is directly observed, not guessed, so it is immune to
+#     the case that broke the old email-only predicate: a human committing via
+#     terminal/`!` under the SAME git identity Claude Code commits under (the
+#     common case — no separate "Claude" identity here). Email can never tell
+#     those apart; ledger membership always can, because we watched the commit
+#     happen (or not) via a tool call.
+#   LEDGER ABSENT OR EMPTY (hook never fired this session — zero Bash calls
+#     before this Stop check, or an older/unwired install — OR fired but swept
+#     nothing: its first-Bash-call touch created the file, no commit-shaped call
+#     ever appended, or its writer resolved a DIFFERENT session id than this
+#     reader): graceful degrade to the ORIGINAL email-only predicate
 #     (hc__commit_confidently_foreign), UNCHANGED — a commit whose committer
-#     email PROVABLY differs from the session's (both emails non-empty). This
-#     is what keeps every ledger-unaware fixture (test-gate.sh,
+#     email PROVABLY differs from the session's (both emails non-empty). An
+#     empty ledger records no positive ownership, so reading it as
+#     "owns nothing" and advancing HC_BASE to HEAD silently passed unverified
+#     committed work (0.1.15 regression); it now degrades exactly like absent.
+#     This is also what keeps every ledger-unaware fixture (test-gate.sh,
 #     test-anchor-recovery.sh — neither ever creates a ledger) passing as-is.
 #
 # Advance rule (same shape under either source): walk orig_base..HEAD

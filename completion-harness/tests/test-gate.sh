@@ -979,9 +979,10 @@ SID=h2; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 mkdir -p "$LB_DIR"; printf 'tree-dirty\n' > "$LB_DIR/session-$SID"
 run_case "H2 tree-dirty -> changeset-unverified transition + stop_hook_active -> BLOCK (jobhunt regression)" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
-# and the marker is now updated to the new category
-if [ "$(cat "$LB_DIR/session-$SID" 2>/dev/null)" = "changeset-unverified" ]; then
-  printf 'PASS  %s\n' "H2 marker advanced to changeset-unverified"; PASS=$((PASS+1))
+# and the marker is now "<new-category> <count>" — the seed had no count (0),
+# this block continues the run so count becomes 1.
+if [ "$(cat "$LB_DIR/session-$SID" 2>/dev/null)" = "changeset-unverified 1" ]; then
+  printf 'PASS  %s\n' "H2 marker advanced to 'changeset-unverified 1'"; PASS=$((PASS+1))
 else
   printf 'FAIL  %s  [marker=%s]\n' "H2 marker advance" "$(cat "$LB_DIR/session-$SID" 2>/dev/null)"; FAIL=$((FAIL+1))
 fi
@@ -1016,6 +1017,40 @@ rm -rf "$LB_DIR"; ensure_clean; clear_review_log
 SID=h5; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 mkdir -p "$LB_DIR"; printf 'changeset-unverified\n' > "$LB_DIR/session-$SID"
 run_case "H5 marker present but stop_hook_active=false -> still blocks" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H6: OSCILLATION DEPTH CAP (advisory finding #1). Two categories that keep
+# alternating never trip the same-category brake (H1/H3). The consecutive-block
+# COUNT does: once the marker's count reaches HC_BLOCK_DEPTH_CAP (6), the next
+# block of ANY category under stop_hook_active is released. Seed a marker whose
+# category DIFFERS from the pending one (so brake (a) can't fire) and whose
+# count is already at the cap → the gate must ALLOW.
+SID=h6; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'tree-dirty 6\n' > "$LB_DIR/session-$SID"
+run_case "H6 depth cap reached (count=6, differing category) + stop_hook_active -> release" allow \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H6b: one BELOW the cap still blocks (the pending category differs, count=5
+# → neither brake fires → the transition block is emitted, count -> 6).
+SID=h6b; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'tree-dirty 5\n' > "$LB_DIR/session-$SID"
+run_case "H6b count=5 (below cap), differing category -> still blocks" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":true}"
+if [ "$(cat "$LB_DIR/session-$SID" 2>/dev/null)" = "changeset-unverified 6" ]; then
+  printf 'PASS  %s\n' "H6b count incremented to 6"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [marker=%s]\n' "H6b count increment" "$(cat "$LB_DIR/session-$SID" 2>/dev/null)"; FAIL=$((FAIL+1))
+fi
+rm -rf "$LB_DIR"; ensure_clean
+
+# --- H6c: the depth cap is a stop_hook_active brake ONLY. A fresh Stop
+# (stop_hook_active=false) with a maxed-out stale marker still evaluates and
+# blocks — the count must never suppress a genuine first-of-turn block.
+SID=h6c; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+mkdir -p "$LB_DIR"; printf 'changeset-unverified 9\n' > "$LB_DIR/session-$SID"
+run_case "H6c count=9 but stop_hook_active=false -> still blocks" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 rm -rf "$LB_DIR"; ensure_clean
 
