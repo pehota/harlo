@@ -203,7 +203,16 @@ eq "case4 base advances past the un-ledgered same-identity commit (C1)" "$C1" "$
 eq "case4 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
 
 # ---------------------------------------------------------------------------
-printf '== Case 5: empty-but-present ledger → base advances past ALL commits (nothing owned) ==\n'
+printf '== Case 5: empty-but-present ledger → DEGRADE to email-only (0.1.15 regression fix) ==\n'
+# An empty ledger means the PostToolUse hook ran (its first-Bash-call touch
+# created the file) but never swept a commit in — or its writer resolved a
+# DIFFERENT session id than this reader. "Recorded nothing" is NOT "owns
+# nothing": the pre-fix code advanced HC_BASE past the WHOLE range, so the Stop
+# gate saw an empty changeset and SILENTLY PASSED unverified committed work.
+# The fix: an empty ledger does not engage; hc__resolve_session_base falls back
+# to the email-only predicate, identical to ledger-absent (Case 6). Here every
+# commit shares the session identity → NOT confidently-foreign → base STOPS at
+# C0, the full changeset stays, the gate engages.
 new_repo; SID="L5"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
@@ -213,11 +222,28 @@ C2=$(git -C "$REPO" rev-parse HEAD)
 seed_baseline "$SID" "$C0"
 LEDGER=$(ledger_path "$SID")
 mkdir -p "$(dirname "$LEDGER")" 2>/dev/null
-: > "$LEDGER"                       # present, but EMPTY — hook ran, owns zero commits
+: > "$LEDGER"                       # present, but EMPTY — hook ran, swept nothing
 resolve_inproc "$SID"
 eq "case5 mode session" "session" "$HC_MODE"
-eq "case5 base advances past the whole range (empty ledger = nothing owned)" "$C2" "$HC_BASE"
+eq "case5 empty ledger degrades to email: base STAYS at C0 (changeset preserved)" "$C0" "$HC_BASE"
 eq "case5 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
+
+# 5b — empty ledger + a genuinely FOREIGN leading commit → email predicate still
+# advances past THAT one (the degrade is to email-only, not to "never advance").
+new_repo; SID="L5b"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
+  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
+  bash -c "cd '$REPO' && echo x > f.txt && git add f.txt && git commit -qm foreign"
+CF=$(git -C "$REPO" rev-parse HEAD)
+commit_file mine.txt               # session identity
+seed_baseline "$SID" "$C0"
+LEDGER=$(ledger_path "$SID")
+mkdir -p "$(dirname "$LEDGER")" 2>/dev/null
+: > "$LEDGER"
+resolve_inproc "$SID"
+eq "case5b empty ledger + foreign lead: base advances to the foreign commit only" "$CF" "$HC_BASE"
 
 # ---------------------------------------------------------------------------
 printf '== Case 6: no ledger file at all → falls back to the pre-existing email behavior ==\n'

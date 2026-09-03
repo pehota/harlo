@@ -157,6 +157,18 @@ SID=s3; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 run_case "3 missing done-state (HEAD>baseline) -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
+# Case 3-ledger — REGRESSION PIN (0.1.15). An empty-but-present commit ledger
+# (the PostToolUse hook touched baselines/<sid>.own-commits but never swept a
+# commit in — a first non-commit Bash call, a stale cursor, or a writer/reader
+# session-id disagreement) must NOT let hc__resolve_session_base advance the
+# base to HEAD and silently pass unverified committed work. Same fixture as
+# Case 3 plus an empty ledger → still BLOCK.
+SID=s3l; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+: > "$HDIR/baselines/$SID.own-commits"
+run_case "3l missing done-state + EMPTY ledger -> block (0.1.15 silent-pass regression)" block \
+  "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
+rm -f "$HDIR/baselines/$SID.own-commits"
+
 # ============================================================================
 # Case 4 — valid done-state, verified_sha==HEAD, clean tree → exit 0
 # ============================================================================

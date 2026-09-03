@@ -717,10 +717,13 @@ EOF
 # commits EXISTS, membership in it (hc__commit_in_ledger) is the answer — a
 # human commit sharing the session's git identity must not be counted as
 # "authored this session" just because the email matches. Falls back to the
-# EMAIL-ONLY check (unchanged) when the ledger file does not exist, so a
-# session that made zero Bash calls (or predates the ledger hook) degrades
-# exactly as before: committer_email NON-EMPTY AND == session_email (git
-# config user.email, itself non-empty). This is the summary/preflight
+# EMAIL-ONLY check (unchanged) when the ledger file does not exist OR IS EMPTY,
+# so a session that made zero Bash calls, predates the ledger hook, or whose
+# writer resolved a different session id degrades exactly as before:
+# committer_email NON-EMPTY AND == session_email (git config user.email, itself
+# non-empty). An empty ledger carries no positive record and must not be read as
+# "authored nothing" (mirrors the hc__resolve_session_base fix). This is the
+# summary/preflight
 # counterpart to hc__commit_confidently_foreign — a commit can be neither
 # (either email empty, ledger says no) so the two are NOT strict negations;
 # this one answers "is THIS commit positively the session's?"
@@ -728,7 +731,7 @@ hc__commit_session_authored() {
   local sha="$1" session_id="$2"
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
-  if [ -n "$session_id" ] && [ -f "$HARNESS_DIR/baselines/${session_id}.own-commits" ]; then
+  if [ -n "$session_id" ] && [ -s "$HARNESS_DIR/baselines/${session_id}.own-commits" ]; then
     hc__commit_in_ledger "$sha" "$session_id"
     return $?
   fi
@@ -773,10 +776,18 @@ hc__commit_session_authored() {
 # HC_BASE_ORIG stays the original unadvanced baseline.
 #
 # FAIL-SAFE, both branches: any uncertainty → STOP → keep the commit (and
-# everything after) in the changeset → gate engages. Ledger branch: sha simply
-# absent from the ledger IS the foreign signal (not uncertainty) — an
-# empty-but-present ledger legitimately advances past the WHOLE range (nothing
-# owned). Email branch: session_email empty → nothing is confidently-foreign →
+# everything after) in the changeset → gate engages. Ledger branch: sha absent
+# from a NON-EMPTY ledger IS the foreign signal (not uncertainty) — that ledger
+# has positively recorded this session's own commits, so a sha it does not list
+# was made some other way. An EMPTY ledger is the exception: it means the
+# PostToolUse hook ran but recorded nothing (its first-Bash-call touch created
+# the file; no commit-shaped call ever swept a sha in; or the writer resolved a
+# DIFFERENT session id than this reader — the same id-disagreement the gate
+# works around elsewhere). "Recorded nothing" is NOT "owns nothing": treating it
+# as foreign-everything advanced HC_BASE to HEAD and silently PASSED unverified
+# committed work (the 0.1.15 regression). So an empty ledger degrades to the
+# email-only predicate, exactly like ledger-absent.
+# Email branch: session_email empty → nothing is confidently-foreign →
 # NO advance (full changeset); we do NOT consult the baseline .sha mtime at
 # all — it is MUTABLE and was the M1 false-PASS risk (see
 # hc__commit_confidently_foreign); ancestry (orig_base..HEAD) already bounds
@@ -803,11 +814,16 @@ hc__resolve_session_base() {
   revs=$(git -C "$proj" rev-list --reverse "$HC_BASE_ORIG..$head" 2>/dev/null) || return 0
   [ -z "$revs" ] && return 0
 
-  # Ledger engaged iff the file exists — checked ONCE per call, not per-commit,
-  # since the hook only ever creates it (never deletes it mid-Stop-check).
+  # Ledger engaged iff the file exists AND is NON-EMPTY — checked ONCE per call,
+  # not per-commit, since the hook only ever creates/appends (never deletes
+  # mid-Stop-check). An empty ledger (`-f` but not `-s`) does NOT engage: it
+  # carries no positive ownership record, and treating "recorded nothing" as
+  # "owns nothing" advanced the base to HEAD and silently passed unverified work
+  # (0.1.15 regression). Empty → ledger_engaged=0 → email-only path below,
+  # identical to ledger-absent.
   local ledger_file="$HARNESS_DIR/baselines/${session_id}.own-commits"
   local ledger_engaged=0
-  [ -f "$ledger_file" ] && ledger_engaged=1
+  [ -s "$ledger_file" ] && ledger_engaged=1
 
   while IFS= read -r c; do
     [ -z "$c" ] && continue
