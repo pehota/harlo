@@ -763,6 +763,67 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# hc_session_changeset_commits <orig_base> <head> <session_id> [proj]
+#
+# Emits, one SHA per line oldest→newest, the commits in <orig_base>..<head> that
+# hc__commit_session_authored deems positively this session's own work (ledger
+# membership when the ledger is engaged; committer-email otherwise). This is the
+# SET the DoD review must cover in session mode — as opposed to the contiguous
+# <base>..<head> range, which wrongly includes interior foreign commits (peer
+# sessions sharing the git identity).
+#
+# Prints nothing (rc 0) when: empty orig_base, git failure, empty range, or no
+# commit passes the predicate. Callers treat empty output as "not engaged -> use
+# the point-base path". Mirrors hc__session_authored_count's structure exactly,
+# emitting SHAs instead of a count.
+hc_session_changeset_commits() {
+  local orig_base="$1" head="$2" session_id="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  [ -z "$orig_base" ] && return 0
+  local revs c
+  revs=$(git -C "$proj" rev-list --reverse "$orig_base..$head" 2>/dev/null) || return 0
+  [ -z "$revs" ] && return 0
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    hc__commit_session_authored "$c" "$session_id" && printf '%s\n' "$c"
+  done <<EOF
+$revs
+EOF
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# hc_session_changeset_files <orig_base> <head> <session_id> [proj]
+#
+# Union (sorted -u) of the per-commit changed paths over every SHA from
+# hc_session_changeset_commits. The paths the DoD review must cover when the
+# ledger path is taken. Empty output -> not engaged (caller uses point-base).
+hc_session_changeset_files() {
+  local orig_base="$1" head="$2" session_id="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local commits c out=""
+  commits=$(hc_session_changeset_commits "$orig_base" "$head" "$session_id" "$proj")
+  [ -z "$commits" ] && return 0
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    # Parentless (root) commit: `<c>^` errors. Use diff-tree against the empty
+    # tree via --root so the initial commit's full file set is still emitted.
+    local paths
+    if git -C "$proj" rev-parse -q --verify "${c}^" >/dev/null 2>&1; then
+      paths=$(git -C "$proj" diff --name-only "${c}^" "$c" 2>/dev/null)
+    else
+      paths=$(git -C "$proj" diff-tree --no-commit-id --name-only -r --root "$c" 2>/dev/null)
+    fi
+    out="${out:+$out
+}${paths}"
+  done <<EOF
+$commits
+EOF
+  printf '%s\n' "$out" | grep -v '^$' | sort -u
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # hc__commit_session_authored <commit_sha> <session_id>
 #
 # Positive session-authorship predicate for the human-readable "N authored
@@ -1148,7 +1209,7 @@ hc_review_blocking() {
 
 # ---------------------------------------------------------------------------
 # hc_review_coverage_gap <review_log_file> <base> <head> [proj] [extra_admit]
-#                        [chain_admit]
+#                        [chain_admit] [orig_base]
 #
 # TWO admission overrides, both bypassing the ancestry test that an ORPHANED
 # anchor's rewritten sha can no longer satisfy. They differ ONLY in the rev their
@@ -1251,17 +1312,43 @@ hc_review_coverage_gap() {
   # an amend/rebase rewrote its sha) but resolved at ITS OWN sha, so every
   # coverage decision it makes is a real blob comparison. See the header.
   local chain="${6:-}"
+  # orig_base: the UNADVANCED session baseline. When the ledger is engaged, the
+  # changed-set and the chain-walk filter both key off this (not the advanced
+  # <base>), so an interior own-commit below <base> is still scoped in and its
+  # own review-log is not filtered out of the chain. Empty (task mode / the
+  # hc_done_state_blocked call site) → the range-diff path, i.e. today's
+  # behaviour, unchanged.
+  local orig_base="${7:-}"
 
   # No changeset base → coverage is not computable. SKIP (no-block degrade).
   [ -z "$base" ] && { printf 'SKIP'; return 0; }
 
-  # Changed set from the two-dot range. A git failure here means we cannot
-  # compute a changeset at all → SKIP (parity with the missing-base case: no
-  # changeset base we can trust).
-  local changed
-  if ! changed=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null); then
-    printf 'SKIP'
-    return 0
+  # Changed set: the ledger SET first (session-authored SHAs in
+  # orig_base..head, per-commit diffs unioned), falling back to the two-dot
+  # range. The ledger path drops interior foreign commits (peer sessions on the
+  # shared git identity); it is taken only when the helper is present, a session
+  # id is live, and orig_base is non-empty. Empty output there means "not
+  # engaged / empty union" → fall to the range diff ONLY when nothing came from
+  # the ledger at all (an empty ledger union is handled below, after the range
+  # fallback, by the empty-changed-set PASS — it must NOT re-introduce interior
+  # foreign files, so we distinguish the two).
+  local changed=""
+  local ledger_engaged=0
+  if hc_has_fn hc_session_changeset_files && [ -n "${HC_SESSION_ID:-}" ] && [ -n "$orig_base" ]; then
+    local _ledger_commits
+    _ledger_commits=$(hc_session_changeset_commits "$orig_base" "$head" "$HC_SESSION_ID" "$proj")
+    if [ -n "$_ledger_commits" ]; then
+      ledger_engaged=1
+      changed=$(hc_session_changeset_files "$orig_base" "$head" "$HC_SESSION_ID" "$proj")
+    fi
+  fi
+  if [ "$ledger_engaged" -eq 0 ]; then
+    # unchanged from today: a git failure here means we cannot compute a
+    # changeset at all → SKIP (parity with the missing-base case).
+    if ! changed=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null); then
+      printf 'SKIP'
+      return 0
+    fi
   fi
 
   # Empty changed set → nothing to cover → full coverage trivially (PASS).
@@ -1287,6 +1374,14 @@ hc_review_coverage_gap() {
   local US=$'\x1f'
   local attested=""
 
+  # Chain-walk lower bound. When the ledger path widened the changed-set down to
+  # orig_base, the "NOT an ancestor of <base>" filter below must use orig_base
+  # too — otherwise an interior own-commit's own review-log (an ancestor of the
+  # advanced <base>) is filtered OUT of the chain while its files are now
+  # DEMANDED by the widened set → spurious gap. Task mode / empty orig_base →
+  # falls back to <base>, unchanged.
+  local chain_base="${orig_base:-$base}"
+
   local f fname fsha rsha paths p
   for f in "$dir"/*.json; do
     [ -e "$f" ] || continue
@@ -1307,9 +1402,9 @@ hc_review_coverage_gap() {
       # attestations are blob-checked against head rather than self-validating.
       rsha="$fname"
     else
-      # Filename sha must be an ancestor of head and NOT of base (task-side).
+      # Filename sha must be an ancestor of head and NOT of chain_base (task-side).
       git -C "$proj" merge-base --is-ancestor "$fname" "$head" 2>/dev/null || continue
-      git -C "$proj" merge-base --is-ancestor "$fname" "$base" 2>/dev/null && continue
+      git -C "$proj" merge-base --is-ancestor "$fname" "$chain_base" 2>/dev/null && continue
       # reviewed_sha to blob against; fall back to the filename sha if absent.
       rsha=$(jq -r 'if (has("reviewed_sha") and (.reviewed_sha|type=="string") and (.reviewed_sha|length>0)) then .reviewed_sha else empty end' "$f" 2>/dev/null)
       [ -z "$rsha" ] && rsha="$fname"

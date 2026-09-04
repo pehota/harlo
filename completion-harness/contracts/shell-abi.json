@@ -161,13 +161,29 @@
     {
       "name": "hc_review_coverage_gap",
       "globals": [],
-      "args": "<review_log_file> <base> <head> [proj] [extra_admit] [chain_admit]",
+      "args": "<review_log_file> <base> <head> [proj] [extra_admit] [chain_admit] [orig_base]",
       "stdout": "newline-separated uncovered files, empty=full coverage, or SKIP",
       "return_codes": "always 0",
-      "notes": "extra_admit (5th, optional) is a carried review-anchor sha admitted to the chain by name and resolved at <head>; callers must pass it only after proving the anchor's tree equals HEAD's tree. chain_admit (6th, optional) is an ORPHANED review-anchor sha admitted by name but resolved at ITS OWN sha, so its attestations are blob-checked against <head> instead of self-validating; it needs no tree-equality proof, and an unresolvable sha contributes nothing (fail toward block).",
+      "notes": "extra_admit (5th, optional) is a carried review-anchor sha admitted to the chain by name and resolved at <head>; callers must pass it only after proving the anchor's tree equals HEAD's tree. chain_admit (6th, optional) is an ORPHANED review-anchor sha admitted by name but resolved at ITS OWN sha, so its attestations are blob-checked against <head> instead of self-validating; it needs no tree-equality proof, and an unresolvable sha contributes nothing (fail toward block). orig_base (7th, optional) is the UNADVANCED session baseline: when it is set, HC_SESSION_ID is live, and at least one commit in orig_base..head is session-authored, the changed-set is the ledger union (hc_session_changeset_files) instead of the base..head range diff, and the chain-walk filters prior review-logs against orig_base rather than <base>. Empty (task mode / hc_done_state_blocked) preserves today's range-diff behaviour.",
       "sentinels": [
         "SKIP"
       ]
+    },
+    {
+      "name": "hc_session_changeset_commits",
+      "globals": [],
+      "args": "<orig_base> <head> <session_id> [proj]",
+      "stdout": "one SHA per line oldest->newest for the commits in orig_base..head that hc__commit_session_authored deems this session's own work; empty when orig_base empty, git failure, empty range, or no commit passes",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
+      "name": "hc_session_changeset_files",
+      "globals": [],
+      "args": "<orig_base> <head> <session_id> [proj]",
+      "stdout": "sorted -u union of the per-commit changed paths over hc_session_changeset_commits; empty=not engaged/empty union (caller uses the point-base path)",
+      "return_codes": "always 0",
+      "sentinels": []
     },
     {
       "name": "hc_live_task_keys",

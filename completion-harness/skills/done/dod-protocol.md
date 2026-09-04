@@ -16,7 +16,11 @@ judgment: run, read, decide, fix, escalate.
 
 **Parallel work must use separate git worktrees.** Same-directory parallelism is made
 *safe* (each session verifies its own changeset) but not *correct* (agents still race
-on the git tree).
+on the git tree). Two same-identity sessions committing unrelated work to shared
+`main` are now scoped apart by **per-commit session-authorship**
+(`hc_session_changeset_commits`), not just by a single base point — an interior
+commit produced by the peer session is excluded from this session's DoD scope
+even when the resolved base sits below it.
 
 The Stop hook blocks until a valid done-state exists for this **task** at
 `$CLAUDE_PROJECT_DIR/.claude/.harness/done-state/<task_key>.json`. Use
@@ -102,7 +106,11 @@ instructions or the task is picked up automatically.
 ## Step 1 — Changeset scope
 
 **ACTION:** Resolve the session id **once** and reuse it downstream (so it can't drift
-from the gate's), then resolve the changeset base via the shared resolver and scope
+from the gate's), then resolve the changeset base **and** `HC_BASE_ORIG` via the
+shared resolver. When any commit in `HC_BASE_ORIG..HEAD` is session-authored
+(`hc_session_changeset_commits` non-empty), scope the review to that commit set
+(`git diff <c>^ <c>` per commit, union) — interior commits made by other
+sessions sharing the git identity fall out automatically. Otherwise scope
 everything to `git diff <base> HEAD`.
 
 Resolve the session id in this **precedence** (first hit wins):
@@ -257,11 +265,17 @@ not resolve it. The gate stays blocked, which is correct.
 
 Pass the agent only: `<base>`, `<head>`, `min_review_level` (config, default `high`),
 and the mode — **round 1** (full changeset) or **round 2** (delta-scoped confirming
-pass, plus the prior round's findings; see Step 6).
+pass, plus the prior round's findings; see Step 6). **In round 1, when
+`hc_session_changeset_commits "$HC_BASE_ORIG" HEAD "$SESSION_ID"` is non-empty,
+also pass its output as the `<commits>` list** (newline-separated SHAs,
+oldest→newest) — the reviewer then scopes round 1 to the union of those commits'
+own diffs instead of `git diff <base> HEAD`, dropping interior foreign commits.
 
 **Coverage is STRUCTURALLY gated:** the gate and `done-write-state.sh` require
-`files_reviewed ⊇ changed files` (recomputed from `git diff --name-only <base>..HEAD`);
-a changed file not attested **blocks** with "review did not cover changed files: …".
+`files_reviewed ⊇ changed files` (recomputed from the ledger set — the union of
+`git diff --name-only <c>^ <c>` over the session-authored commits — when it is
+engaged, else `git diff --name-only <base>..HEAD`); a changed file not attested
+**blocks** with "review did not cover changed files: …".
 
 The reviewer's deliverable is the file it writes itself —
 `$CLAUDE_PROJECT_DIR/.claude/.harness/review-log/<HEAD>.json`:

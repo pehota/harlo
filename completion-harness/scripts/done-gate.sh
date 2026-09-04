@@ -719,7 +719,7 @@ fi
 # so a missing function here cannot silently allow. A coverage-computation error
 # with a real changeset returns the full changed set (non-empty → block), never
 # SKIP — so it fails toward block, not toward an accidental allow.
-GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$COVER_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
+GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$COVER_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT" "$HC_BASE_ORIG")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
   block "review the uncovered files (${GAP_LIST}), then re-run /done" "$HC_BLOCK_REVIEW_COVERAGE"

@@ -76,6 +76,11 @@ fi
 if hc_has_fn hc_resolve; then
   hc_resolve "$SESSION_ID" 2>/dev/null
 fi
+# Mirror done-gate.sh:478 — hc_resolve deliberately does NOT set the HC_SESSION_ID
+# global (that would poison it for run-task.sh / finish-worktree.sh callers). Set
+# it explicitly here so hc_review_coverage_gap's ledger-set path can scope the
+# changeset to this session's own commits.
+HC_SESSION_ID="$SESSION_ID"
 [ -z "$HC_TASK_KEY" ] && HC_TASK_KEY="session-${SESSION_ID}"
 
 # --- structural backstop: reject a DEAD session id in session mode ----------
@@ -312,7 +317,7 @@ if [ "$HAS_ESCALATION" != "yes" ]; then
   # fail-toward-block discipline: a computation error with a real changeset returns
   # the full changed set (non-empty → refuse), never SKIP.
   if hc_has_fn hc_review_coverage_gap; then
-    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT")
+    P_GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE" "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT" "$HC_BASE_ORIG")
   else
     # Library failed to source — the review-log refusal above already exited via
     # the ERR path, so we never reach here without the function; but guard anyway

@@ -1055,6 +1055,254 @@ run_case "H6c count=9 but stop_hook_active=false -> still blocks" block \
 rm -rf "$LB_DIR"; ensure_clean
 
 # ============================================================================
+# Chunk L — interior foreign commit excluded from session-mode DoD scope.
+#
+# Sources the REAL library and drives the ledger-set helpers + the coverage-gap
+# consumer directly (like Chunk D). A peer session's commit that lands BETWEEN
+# two of this session's own commits on shared main must NOT be pulled into this
+# session's DoD scope by the resolved base point. The ledger SET
+# (hc_session_changeset_commits / _files) is the fix; hc_review_coverage_gap
+# prefers it when HC_SESSION_ID is live and orig_base is passed (7th arg).
+# ============================================================================
+LIBL="$(cd "$(dirname "$0")/../scripts" && pwd)/harness-common.sh"
+
+# cl_ok <name> <cond-desc> <actual> <expected>
+cl_eq() {
+  local name="$1" actual="$2" expected="$3"
+  if [ "$actual" = "$expected" ]; then
+    printf 'PASS  %s\n' "$name"; PASS=$((PASS+1))
+  else
+    printf 'FAIL  %s  [got %q want %q]\n' "$name" "$actual" "$expected"; FAIL=$((FAIL+1))
+  fi
+}
+
+# cl_repo — throwaway git repo on `main`, harness dirs seeded. Echoes its path.
+cl_repo() {
+  local d; d=$(mktemp_d)
+  git -C "$d" init -q -b main 2>/dev/null || git -C "$d" init -q
+  git -C "$d" config user.name t; git -C "$d" config user.email t@t
+  printf '.claude/\n' > "$d/.gitignore"
+  mkdir -p "$d/.claude/.harness/baselines" "$d/.claude/.harness/review-log"
+  printf '%s' "$d"
+}
+# cl_commit <dir> <file> [--allow-empty]
+cl_commit() {
+  local d="$1" f="$2" empty="${3:-}"
+  if [ "$empty" = "--allow-empty" ]; then
+    git -C "$d" commit -q --allow-empty -m "$f"
+  else
+    printf 'x-%s\n' "$f" > "$d/$f"
+    git -C "$d" add -A; git -C "$d" commit -q -m "$f"
+  fi
+  git -C "$d" rev-parse HEAD
+}
+# cl_ledger <dir> <sid> <sha>...  — append SHAs to baselines/<sid>.own-commits
+cl_ledger() {
+  local d="$1" sid="$2"; shift 2
+  local p="$d/.claude/.harness/baselines/${sid}.own-commits"
+  local s; for s in "$@"; do printf '%s\n' "$s" >> "$p"; done
+}
+# cl_changeset_commits <dir> <orig_base> <head> <sid>  — in-process helper call.
+# HARNESS_DIR is only set by hc_resolve; the ledger-membership check in
+# hc__commit_session_authored keys off it, so set it explicitly here (same as
+# test-commit-ledger.sh calling resolve_inproc first).
+cl_changeset_commits() {
+  ( export CLAUDE_PROJECT_DIR="$1"; unset PROJECT_DIR; . "$LIBL"
+    HARNESS_DIR="$1/.claude/.harness"
+    hc_session_changeset_commits "$2" "$3" "$4" "$1" )
+}
+cl_changeset_files() {
+  ( export CLAUDE_PROJECT_DIR="$1"; unset PROJECT_DIR; . "$LIBL"
+    HARNESS_DIR="$1/.claude/.harness"
+    hc_session_changeset_files "$2" "$3" "$4" "$1" )
+}
+# cl_gap <dir> <log> <base> <head> <sid|""> <orig_base>  — in-process gap call,
+# with HC_SESSION_ID set iff <sid> non-empty (mirrors done-write-state.sh).
+cl_gap() {
+  ( export CLAUDE_PROJECT_DIR="$1"; unset PROJECT_DIR; . "$LIBL"
+    HARNESS_DIR="$1/.claude/.harness"
+    [ -n "$5" ] && HC_SESSION_ID="$5"
+    hc_review_coverage_gap "$2" "$3" "$4" "$1" "" "" "$6" )
+}
+# cl_write_log <dir> <head_sha> <path>...  — minimal review-log attesting paths.
+cl_write_log() {
+  local d="$1" head="$2"; shift 2
+  local arr; arr=$(printf '%s\n' "$@" | jq -R . | jq -s .)
+  jq -n --arg s "$head" --argjson fr "$arr" \
+    '{contract_version:1,reviewed_sha:$s,min_review_level:"high",files_reviewed:$fr,findings:[],open_findings:0,advisory_findings:0,note:""}' \
+    > "$d/.claude/.harness/review-log/${head}.json"
+}
+
+# --- L1: base setup C0 -> A(own,a.txt) -> X(peer,x.txt) -> B(own,b.txt) -------
+CLD=$(cl_repo); SID=csL1
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+X=$(cl_commit "$CLD" x.txt)
+B=$(cl_commit "$CLD" b.txt)
+cl_ledger "$CLD" "$SID" "$A" "$B"     # X deliberately NOT ledgered
+
+GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
+cl_eq "L1 changeset_commits emits exactly A,B (not X)" "$GOT" "$(printf '%s\n%s' "$A" "$B")"
+
+GOT=$(cl_changeset_files "$CLD" "$C0" HEAD "$SID")
+cl_eq "L1 changeset_files = a.txt,b.txt (not x.txt)" "$GOT" "$(printf 'a.txt\nb.txt')"
+
+# coverage gap on the ledger path: log attests a.txt + b.txt -> PASS (empty).
+cl_write_log "$CLD" "$B" a.txt b.txt
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$C0" "$B" "$SID" "$C0")
+cl_eq "L1 coverage_gap ledger path: a.txt+b.txt attested -> empty (PASS), x.txt not demanded" "$GOT" ""
+rm -rf "$CLD"
+
+# --- L2: interior-own-BELOW-advanced-base variant C0 -> X -> A -> Y -> B ------
+# hc__resolve_session_base advances HC_BASE to X (leading foreign run of 1);
+# HC_BASE_ORIG stays C0. The changeset set must still be {A,B}, and the
+# chain-walk (fed HC_BASE_ORIG as the 7th arg) must NOT drop A's own review-log
+# even though A is an ancestor of the advanced base X.
+CLD=$(cl_repo); SID=csL2
+C0=$(cl_commit "$CLD" c0.txt)
+X=$(cl_commit "$CLD" x.txt)
+A=$(cl_commit "$CLD" a.txt)
+Y=$(cl_commit "$CLD" y.txt)     # second peer commit
+B=$(cl_commit "$CLD" b.txt)
+cl_ledger "$CLD" "$SID" "$A" "$B"
+
+# pin the SessionStart baseline .sha at C0 and confirm the resolver advances.
+printf '%s\n' "$C0" > "$CLD/.claude/.harness/baselines/${SID}.sha"
+RES=$( export CLAUDE_PROJECT_DIR="$CLD"; unset PROJECT_DIR; . "$LIBL"
+       hc_resolve "$SID" 2>/dev/null; printf '%s|%s' "$HC_BASE" "$HC_BASE_ORIG" )
+cl_eq "L2 hc_resolve advances HC_BASE to X, HC_BASE_ORIG stays C0" "$RES" "$X|$C0"
+
+GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
+cl_eq "L2 changeset_commits still emits A,B (A is below advanced base)" "$GOT" "$(printf '%s\n%s' "$A" "$B")"
+
+# A's own review-log attests a.txt; B's HEAD log attests b.txt only. With the
+# chain-walk fed HC_BASE_ORIG (=C0), A's log is admitted -> a.txt covered ->
+# no spurious gap. (If the chain-walk used the advanced base X, A's log — an
+# ancestor of X — would be filtered out and a.txt would show as a gap.)
+cl_write_log "$CLD" "$A" a.txt
+cl_write_log "$CLD" "$B" b.txt
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$X" "$B" "$SID" "$C0")
+cl_eq "L2 coverage_gap: chain-walk fed HC_BASE_ORIG keeps A's log -> no gap for a.txt" "$GOT" ""
+
+# Control: same call WITHOUT the 7th arg (orig_base) -> point-base path against
+# X; x.txt/y.txt in range, unattested -> non-empty gap (proves the arg matters).
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$X" "$B" "$SID" "")
+case "$GOT" in *y.txt*) printf 'PASS  %s\n' "L2 control: no orig_base -> point-base range still demands y.txt"; PASS=$((PASS+1)) ;;
+  *) printf 'FAIL  %s  [got %q]\n' "L2 control no-orig_base" "$GOT"; FAIL=$((FAIL+1)) ;; esac
+rm -rf "$CLD"
+
+# --- L3: empty-union — both own commits are empty ----------------------------
+CLD=$(cl_repo); SID=csL3
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt --allow-empty)
+X=$(cl_commit "$CLD" x.txt)          # peer, touches x.txt
+B=$(cl_commit "$CLD" b.txt --allow-empty)
+cl_ledger "$CLD" "$SID" "$A" "$B"
+
+GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
+cl_eq "L3 changeset_commits still emits A,B (empty commits are own)" "$GOT" "$(printf '%s\n%s' "$A" "$B")"
+GOT=$(cl_changeset_files "$CLD" "$C0" HEAD "$SID")
+cl_eq "L3 changeset_files empty (both own commits are no-ops)" "$GOT" ""
+
+# empty union -> coverage PASSes and does NOT fall through to the range diff
+# (x.txt from the interior peer commit must NOT be demanded).
+cl_write_log "$CLD" "$B"
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$C0" "$B" "$SID" "$C0")
+cl_eq "L3 empty-union coverage_gap: PASS, no fall-through to range diff (x.txt not demanded)" "$GOT" ""
+rm -rf "$CLD"
+
+# --- L4: root commit — WHITE-BOX. hc_session_changeset_files carries a `--root`
+# branch for a parentless SHA (`<c>^` would error). That branch is defensive:
+# the public signature bounds the walk to `orig_base..HEAD` (exclusive), and
+# HC_BASE_ORIG is always a recorded baseline SHA, so a root commit can never
+# actually land in `commits` in production. We still pin the branch's git
+# invocation directly so a future refactor of the helper body can't silently
+# break root-commit handling. Iterates the SAME loop body the helper uses.
+CLD=$(cl_repo); SID=csL4
+C0=$(cl_commit "$CLD" c0.txt)        # root; also stages .gitignore
+A=$(cl_commit "$CLD" a.txt)
+GOT=$( export CLAUDE_PROJECT_DIR="$CLD"; unset PROJECT_DIR; . "$LIBL"
+       out=""
+       for c in "$C0" "$A"; do
+         if git -C "$CLD" rev-parse -q --verify "${c}^" >/dev/null 2>&1; then
+           p=$(git -C "$CLD" diff --name-only "${c}^" "$c" 2>/dev/null)
+         else
+           p=$(git -C "$CLD" diff-tree --no-commit-id --name-only -r --root "$c" 2>/dev/null)
+         fi
+         out="${out:+$out
+}${p}"
+       done
+       printf '%s\n' "$out" | grep -v '^$' | sort -u )
+if printf '%s' "$GOT" | grep -qx 'c0.txt' && printf '%s' "$GOT" | grep -qx 'a.txt'; then
+  printf 'PASS  %s\n' "L4 root commit: --root fallback emits C0 full file set, no <c>^ error"; PASS=$((PASS+1))
+else
+  printf 'FAIL  %s  [got %q]\n' "L4 root commit" "$GOT"; FAIL=$((FAIL+1))
+fi
+rm -rf "$CLD"
+
+# --- L5: control — ledger ABSENT: point-base behaviour preserved -------------
+CLD=$(cl_repo); SID=csL5
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+X=$(cl_commit "$CLD" x.txt)
+B=$(cl_commit "$CLD" b.txt)
+# no own-commits file at all
+GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
+# email-only fallback: t@t authored all -> all four emitted (A,X,B; C0 is the
+# lower bound, excluded).
+cl_eq "L5 ledger absent: changeset_commits falls back to email (A,X,B all emitted)" \
+  "$GOT" "$(printf '%s\n%s\n%s' "$A" "$X" "$B")"
+# coverage gap: log attests only a.txt+b.txt -> x.txt STILL demanded (point-base
+# range path OR email-union both include x.txt; either way it is not dropped).
+cl_write_log "$CLD" "$B" a.txt b.txt
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$C0" "$B" "$SID" "$C0")
+case "$GOT" in *x.txt*) printf 'PASS  %s\n' "L5 ledger absent: coverage_gap still demands x.txt"; PASS=$((PASS+1)) ;;
+  *) printf 'FAIL  %s  [got %q]\n' "L5 ledger absent x.txt" "$GOT"; FAIL=$((FAIL+1)) ;; esac
+rm -rf "$CLD"
+
+# --- L6: control — ledger EMPTY (0 bytes): same as absent -------------------
+CLD=$(cl_repo); SID=csL6
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+X=$(cl_commit "$CLD" x.txt)
+B=$(cl_commit "$CLD" b.txt)
+: > "$CLD/.claude/.harness/baselines/${SID}.own-commits"   # exists, 0 bytes
+GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
+cl_eq "L6 empty ledger degrades to email-only (A,X,B emitted, same as absent)" \
+  "$GOT" "$(printf '%s\n%s\n%s' "$A" "$X" "$B")"
+cl_write_log "$CLD" "$B" a.txt b.txt
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$C0" "$B" "$SID" "$C0")
+case "$GOT" in *x.txt*) printf 'PASS  %s\n' "L6 empty ledger: coverage_gap still demands x.txt"; PASS=$((PASS+1)) ;;
+  *) printf 'FAIL  %s  [got %q]\n' "L6 empty ledger x.txt" "$GOT"; FAIL=$((FAIL+1)) ;; esac
+rm -rf "$CLD"
+
+# --- L7: git-failure SKIP preserved on the range path ----------------------
+CLD=$(cl_repo); SID=csL7
+C0=$(cl_commit "$CLD" c0.txt)
+B=$(cl_commit "$CLD" b.txt)
+# bogus <base> on the range path (no ledger -> ledger path not taken) -> SKIP.
+cl_write_log "$CLD" "$B" b.txt
+GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" "$B" "$SID" "")
+cl_eq "L7 bogus base on range path -> SKIP (not a block)" "$GOT" "SKIP"
+rm -rf "$CLD"
+
+# --- L8: pin unchanged behaviour — hc__resolve_session_base still BREAKs at
+# the first ledgered commit (this spec adds a set path, it does not alter the
+# advance loop). History C0 -> A(own) -> X(peer) -> B(own), .sha at C0:
+# the leading run of foreign commits before A is empty, so HC_BASE stays C0.
+CLD=$(cl_repo); SID=csL8
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+X=$(cl_commit "$CLD" x.txt)
+B=$(cl_commit "$CLD" b.txt)
+cl_ledger "$CLD" "$SID" "$A" "$B"
+printf '%s\n' "$C0" > "$CLD/.claude/.harness/baselines/${SID}.sha"
+RES=$( export CLAUDE_PROJECT_DIR="$CLD"; unset PROJECT_DIR; . "$LIBL"
+       hc_resolve "$SID" 2>/dev/null; printf '%s' "$HC_BASE" )
+cl_eq "L8 hc__resolve_session_base breaks at first ledgered commit (A) -> HC_BASE stays C0" "$RES" "$C0"
+rm -rf "$CLD"
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

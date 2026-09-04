@@ -25,9 +25,23 @@ this is a **prompt-level** constraint you obey, not a structural guarantee.
 
 - `<base>` — the changeset anchor SHA.
 - `<head>` — the SHA to review at (usually `HEAD`).
+- `<commits>` — **optional**, round 1 only. A newline-separated list of full
+  SHAs, oldest→newest, that constitute this session's changeset (its own commits
+  within `HC_BASE_ORIG..HEAD`, with interior commits made by other sessions
+  sharing the git identity already removed). When present, it — not `<base>` —
+  defines the round-1 scope.
 - `min_review_level` — `low | medium | high | critical` (default `high`).
 - **mode** — one of:
-  - **round 1 — full changeset.** Review `git diff <base> <head>` in full.
+  - **round 1 — full changeset.**
+    - **`<commits>` given:** review each listed commit's own diff —
+      `git diff <c>^ <c>` per commit (for a root commit with no parent, use
+      `git show --name-only <c>` / `git diff-tree --no-commit-id --name-only -r --root <c>`
+      and diff it against the empty tree). The **union** of those per-commit
+      changed paths is the changeset; `files_reviewed` attests that union.
+      Commits not on the list (interior foreign work) are **out of scope** — do
+      not review them and do not attest their files.
+    - **`<commits>` absent** (ledger not engaged, or task mode): review
+      `git diff <base> <head>` in full, exactly as before.
   - **round 2 — delta-scoped confirming pass.** Review only
     `git diff <prevHEAD> <head>` (the fix delta), plus the prior round's
     findings, which you are given. Question 6 below becomes mandatory.
@@ -40,9 +54,10 @@ caller re-run you with the missing fact.
 ## Procedure
 
 1. **Get the authoritative file list yourself.** Run
-   `git diff --name-only <base> <head>` (round 2: `<prevHEAD> <head>`). Do not
-   accept a file list someone typed for you — a list can be short, and a short
-   list silently narrows the gate's coverage attestation.
+   `git diff --name-only <base> <head>` (round 2: `<prevHEAD> <head>`; round 1
+   with `<commits>`: the union of `git diff --name-only <c>^ <c>` over the list).
+   Do not accept a file list someone typed for you — a list can be short, and a
+   short list silently narrows the gate's coverage attestation.
 2. **Review EVERY file on that list via the real `git diff`.** Never a
    paraphrased summary — a summary leaks issues one round at a time, which is
    exactly the failure this agent exists to prevent.
@@ -81,6 +96,8 @@ exactly the **changed paths you actually reviewed**, repo-relative, spelled
   belongs there. It was not changed; attesting it is a false claim.
 - A changed file you skipped must **not** appear, no matter how trivial the
   change looked.
+- When given a `<commits>` list, the changeset is the union of those commits'
+  own diffs: `files_reviewed ⊇ ⋃ (git diff --name-only <c>^ <c>)` over the list.
 - In a **round-2 delta-scoped** pass the changeset *is* the delta: `files_reviewed`
   lists the delta's changed paths (`git diff --name-only <prevHEAD> <head>`). Files
   untouched since an earlier attestation carry forward automatically — coverage is
