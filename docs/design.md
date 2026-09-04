@@ -205,7 +205,7 @@ is out of scope by choice — the limit is stated rather than assumed away.
   (the block-message enricher) can honestly report "N authored this session" — itself now
   ledger-preferring via `hc__commit_session_authored`, with the same email fallback.
 
-  **DoD scope is a set, not a point, when the ledger is engaged.** Base-advance only
+  **DoD scope is a set, not a point.** Base-advance only
   skips a *contiguous leading* run of foreign commits; an interior peer commit
   (`base → A → X → B`) stays in `HC_BASE_ORIG..HEAD` and any consumer scoping off
   `git diff <base>..HEAD` would DoD-review it. So the Step-5 review and
@@ -217,9 +217,13 @@ is out of scope by choice — the limit is stated rather than assumed away.
   helpers take `HC_BASE_ORIG` explicitly (not the advanced `HC_BASE`) so an interior
   own-commit that sits *below* the advanced base is still included, and
   `hc_review_coverage_gap`'s attested-log chain-walk uses the same `orig_base` lower
-  bound so a legitimately-reviewed interior file is not spuriously flagged. Empty
-  helper output → ledger not engaged → the point-base path is used unchanged. Session
-  mode only.
+  bound so a legitimately-reviewed interior file is not spuriously flagged.
+  Membership is `hc__commit_session_authored` — ledger when `own-commits` exists and
+  is non-empty, **committer-email match otherwise** — so with no ledger file but a
+  shared git identity the set path still engages (email-scoped), it is not a
+  point-base fallback. The range-diff path is used only when the helpers emit
+  nothing: no commit in range passes `hc__commit_session_authored`, no session
+  id, or empty `HC_BASE_ORIG`. Session mode only.
 - Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
   mid-session, so SessionStart isn't the only place it must pin).
 
