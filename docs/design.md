@@ -204,6 +204,22 @@ is out of scope by choice — the limit is stated rather than assumed away.
   `HC_BASE_ORIG` retains the **unadvanced** baseline either way, so `hc_changeset_summary`
   (the block-message enricher) can honestly report "N authored this session" — itself now
   ledger-preferring via `hc__commit_session_authored`, with the same email fallback.
+
+  **DoD scope is a set, not a point, when the ledger is engaged.** Base-advance only
+  skips a *contiguous leading* run of foreign commits; an interior peer commit
+  (`base → A → X → B`) stays in `HC_BASE_ORIG..HEAD` and any consumer scoping off
+  `git diff <base>..HEAD` would DoD-review it. So the Step-5 review and
+  `hc_review_coverage_gap` scope instead to the **session-authored SHAs within
+  `HC_BASE_ORIG..HEAD`** — `hc_session_changeset_commits` emits them (reusing
+  `hc__commit_session_authored`, no parallel ledger call), `hc_session_changeset_files`
+  unions their per-commit diffs. Non-contiguous foreign commits fall out; two
+  same-identity sessions on shared `main` scope apart with zero coordination. Both
+  helpers take `HC_BASE_ORIG` explicitly (not the advanced `HC_BASE`) so an interior
+  own-commit that sits *below* the advanced base is still included, and
+  `hc_review_coverage_gap`'s attested-log chain-walk uses the same `orig_base` lower
+  bound so a legitimately-reviewed interior file is not spuriously flagged. Empty
+  helper output → ledger not engaged → the point-base path is used unchanged. Session
+  mode only.
 - Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
   mid-session, so SessionStart isn't the only place it must pin).
 
