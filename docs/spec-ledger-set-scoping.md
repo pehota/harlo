@@ -203,9 +203,22 @@ Signature today: `hc_review_coverage_gap <log> <base> <head> [proj] [extra] [cha
 
 Change:
 
-1. **New leading param** `<orig_base>` OR reuse the `[proj]` position — cleaner
-   to add `<orig_base>` as param 4 and shift the rest, updating both call sites.
-   (Bikeshed at implementation; the point is the function needs `HC_BASE_ORIG`.)
+1. **Add `<orig_base>` as a 7th TRAILING optional param** —
+   `hc_review_coverage_gap <log> <base> <head> [proj] [extra] [chain] [orig_base]`.
+   Trailing, not positional-insert, so **no existing call site needs
+   arg-shifting**. There are **three** production call sites; only the two below
+   pass the new arg:
+   - `done-write-state.sh:315` → pass `$HC_BASE_ORIG` (7th).
+   - `done-gate.sh:722` → pass `$HC_BASE_ORIG` (7th).
+   - `harness-common.sh:2023` inside `hc_done_state_blocked` (reached from
+     `finish-worktree.sh:172`, `run-task.sh:321`, and the Stop-hook path at
+     `harness-common.sh:2209`) → **left untouched**. `orig_base` defaults empty
+     → the range-diff path, i.e. exactly today's behaviour. This is correct:
+     task-mode callers have `HC_BASE_ORIG == HC_BASE` (nothing to gain), and the
+     Stop-hook path reads a review-log that `/done` already wrote with the
+     correctly-scoped `files_reviewed` — the gap check there only re-validates
+     coverage against the current tree, which the ledger-scoped log already
+     satisfies.
 2. Compute `changed` via the ledger set first, falling back to the range —
    **preserving the existing git-failure SKIP on both paths**:
 
@@ -287,10 +300,13 @@ list, `files_reviewed ⊇ ⋃ (git diff --name-only <c>^ <c>)` over the list."
 ### 5. `done-gate.sh` / `done-write-state.sh` call sites
 
 - `done-write-state.sh:315` — `hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE"
-  "$VERIFIED_SHA" …`: add `$HC_BASE_ORIG` in the new param position, and add the
-  `HC_SESSION_ID="$SESSION_ID"` line (consumer change 2).
-- `done-gate.sh` — its `hc_review_coverage_gap` call gets `$HC_BASE_ORIG` in the
-  new param position. `HC_SESSION_ID` already set at `:478`.
+  "$VERIFIED_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT"`: append
+  `"$HC_BASE_ORIG"` as the 7th arg, and add the `HC_SESSION_ID="$SESSION_ID"`
+  line (consumer change 2).
+- `done-gate.sh:722` — append `"$HC_BASE_ORIG"` as the 7th arg. `HC_SESSION_ID`
+  already set at `:478`.
+- `harness-common.sh:2023` (`hc_done_state_blocked`) — **not touched**; see
+  consumer change 1, item 1.
 - `base_sha` written into review-log/done-state (`done-write-state.sh:366`) stays
   `HC_BASE` (the advanced point base) — still a valid lower bound for the gate's
   HEAD-keyed evidence check and anchor-recovery. The ledger set is a *scoping*
@@ -352,9 +368,9 @@ first ledgered commit — this spec adds a set path, it does not alter the loop.
 
 | File | Change |
 |---|---|
-| `scripts/harness-common.sh` | + `hc_session_changeset_commits`, + `hc_session_changeset_files` (both reuse `hc__commit_session_authored`); `hc_review_coverage_gap` gains an `<orig_base>` param, prefers the ledger set, keeps git-failure SKIP on both paths, and uses `orig_base` for the chain-walk filter |
-| `scripts/done-write-state.sh` | set `HC_SESSION_ID="$SESSION_ID"` after `hc_resolve` (mirror `done-gate.sh:478`); pass `$HC_BASE_ORIG` to `hc_review_coverage_gap` |
-| `scripts/done-gate.sh` | pass `$HC_BASE_ORIG` to `hc_review_coverage_gap` |
+| `scripts/harness-common.sh` | + `hc_session_changeset_commits`, + `hc_session_changeset_files` (both reuse `hc__commit_session_authored`); `hc_review_coverage_gap` gains a **7th trailing** `[orig_base]` param, prefers the ledger set, keeps git-failure SKIP on both paths, and uses `orig_base` for the chain-walk filter. `hc_done_state_blocked`'s call at `:2023` is left as-is (defaults empty → today's behaviour) |
+| `scripts/done-write-state.sh` | set `HC_SESSION_ID="$SESSION_ID"` after `hc_resolve` (mirror `done-gate.sh:478`); append `$HC_BASE_ORIG` (7th arg) to `hc_review_coverage_gap` |
+| `scripts/done-gate.sh` | append `$HC_BASE_ORIG` (7th arg) to `hc_review_coverage_gap` at `:722` |
 | `agents/dod-reviewer.md` | round-1 accepts optional `<commits>` list; `files_reviewed` attestation bullet; root-commit diff note |
 | `skills/done/dod-protocol.md` | scope wording (~line 107), Step 5 dispatch (~lines 238-263) passes `<commits>`, race caveat (~line 18) |
 | `tests/test-gate.sh` | + interior-foreign-commit chunk: base-order variant, empty-union, root-commit, absent/empty-ledger controls, git-failure SKIP |
