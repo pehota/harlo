@@ -33,21 +33,36 @@ downstream consumer that scopes off `git diff <base>..HEAD` pulls it in:
 
 - `agents/dod-reviewer.md` — "Review `git diff <base> <head>` in full" (line 30).
 - `hc_review_coverage_gap` (`harness-common.sh:1238`) — `git diff --name-only
-  <base> <head>` is the changed set the review must cover.
-- `done-write-state.sh:315` — coverage-gap check, same range.
-- `skills/done/dod-protocol.md:106` — "scope everything to `git diff <base> HEAD`".
+  <base> <head>` is the changed set the review must cover (range diff at
+  `:1262`).
+- `done-write-state.sh:315` — coverage-gap check, `<HC_BASE> <VERIFIED_SHA>`.
+- `skills/done/dod-protocol.md` ~line 107 — "scope everything to `git diff
+  <base> HEAD`".
 
 The commit ledger is already the exact set we need ("commits this session's tool
 calls produced" — `scripts/commit-ledger.sh`). It is consulted only to locate a
 **base point**, never used as the scope set itself. A point can say "start after
 commit N"; it cannot say "review {A, B}, skip X between them." That needs a set.
 
+### Prior art in the codebase
+
+The per-commit "is this positively the session's own work?" predicate **already
+exists**: `hc__commit_session_authored` (`harness-common.sh:784`). It is
+**ledger-preferring** — when `baselines/<sid>.own-commits` exists and is
+non-empty it delegates to `hc__commit_in_ledger`; otherwise it falls back to the
+committer-email check. `hc__session_authored_count` (`:746`) already walks
+`orig_base..head` applying it, for the "N authored this session" summary line.
+
+**This spec reuses `hc__commit_session_authored`** as the membership test — it
+must not introduce a parallel ledger call. The only new code is a helper that
+*emits the SHAs* (rather than counting them) plus its changed-file sibling.
+
 ### Out of scope (already handled)
 
 - Uncommitted parallel edits — `hc_tree_status` is per-session via the `.dirty`
   baseline (`harness-common.sh:913+`).
-- Ledger-absent / empty-ledger sessions — email-only fallback stays as-is
-  (0.1.15 regression guard).
+- Ledger-absent / empty-ledger sessions — email-only fallback in
+  `hc__commit_session_authored` stays as-is (0.1.15 regression guard).
 - Task mode — `hc__resolve_task_base` deliberately never advances past foreign
   commits; the pinned fork point is the anchor. This spec is **session mode
   only**.
@@ -57,83 +72,124 @@ commit N"; it cannot say "review {A, B}, skip X between them." That needs a set.
 ## Fix — set-membership scope when the ledger is engaged
 
 Stop deriving a scope from a single base point when the ledger is engaged.
-Scope the review to the **ledgered SHAs within `HC_BASE_ORIG..HEAD`**, review
-each commit's own diff, union the file set. Non-contiguous foreign commits fall
-out automatically. Peer's `/done` does the same against *its* ledger — disjoint
-sets, zero overlap, no cross-session coordination.
+Scope the review to the **session-authored SHAs within `HC_BASE_ORIG..HEAD`**,
+review each commit's own diff, union the file set. Non-contiguous foreign commits
+fall out automatically. Peer's `/done` does the same against *its* ledger —
+disjoint sets, zero overlap, no cross-session coordination.
 
-"Ledger engaged" = `baselines/<sid>.own-commits` exists **and is non-empty** —
-identical predicate to `hc__resolve_session_base` line 885. Empty or absent →
-no set, fall back to the existing point-base path unchanged.
+"Ledger engaged" is decided **inside `hc__commit_session_authored`** (file exists
+AND non-empty). The helpers below therefore do not re-check it; they simply emit
+nothing when no commit passes the predicate, and callers treat empty output as
+"not engaged → use the point-base path unchanged."
+
+### The base-consistency requirement (load-bearing)
+
+Both new helpers, **and** the `hc_review_coverage_gap` changed-set, MUST be
+computed from **`HC_BASE_ORIG`**, not the advanced `HC_BASE`. Reason: the fix
+must include an **interior own-commit that sits between `HC_BASE_ORIG` and the
+advanced `HC_BASE`** (`base → [your A] → [peer X] → [your B]` — `hc__resolve_
+session_base` breaks at `A`, so `HC_BASE == HC_BASE_ORIG` here; but
+`base → [peer X] → [your A] → [peer Y] → [your B]` advances `HC_BASE` to `X` and
+`A` is then *below* `HC_BASE`).
+
+Consequence for the **attested-log chain-walk** in `hc_review_coverage_gap`
+(`harness-common.sh` ~lines 1290-1320): it currently admits prior review-logs by
+`is-ancestor <log> <head>` **AND NOT** `is-ancestor <log> <base>`, with `<base>`
+= the value passed by the caller (today `HC_BASE`). If the changed-set widens to
+`HC_BASE_ORIG` but the chain-walk keeps filtering against `HC_BASE`, an interior
+own-commit's own review-log (which *is* an ancestor of `HC_BASE`) gets filtered
+**out** of the chain while its files are now **demanded** by the widened changed
+set → spurious coverage gap, blocking a legitimately-reviewed file.
+
+**Fix:** when the ledger path is taken, pass `HC_BASE_ORIG` as the chain-walk
+`<base>` too, so the changed-set and the chain-walk share one lower bound. The
+`done-write-state.sh:315` / `done-gate.sh` call sites must pass `HC_BASE_ORIG`
+(available: `hc_resolve` sets it) alongside `HC_BASE` — see consumer change 4.
 
 ### New helper — `hc_session_changeset_commits`
 
-`scripts/harness-common.sh`, near `hc__resolve_session_base`.
+`scripts/harness-common.sh`, next to `hc__session_authored_count`.
 
 ```
-# hc_session_changeset_commits <session_id> [proj]
+# hc_session_changeset_commits <orig_base> <head> <session_id> [proj]
 #
-# Emits, one SHA per line oldest→newest, the commits in HC_BASE_ORIG..HEAD that
-# are members of this session's ledger (baselines/<sid>.own-commits). This is
-# the SET the DoD review must cover in session mode when the ledger is engaged
-# — as opposed to the contiguous <base>..HEAD range, which wrongly includes
-# interior foreign commits (peer sessions, same git identity).
+# Emits, one SHA per line oldest→newest, the commits in <orig_base>..<head> that
+# hc__commit_session_authored deems positively this session's own work (ledger
+# membership when the ledger is engaged; committer-email otherwise). This is the
+# SET the DoD review must cover in session mode — as opposed to the contiguous
+# <base>..<head> range, which wrongly includes interior foreign commits (peer
+# sessions sharing the git identity).
 #
-# Prints nothing (rc 0) when: ledger absent or empty, no base anchor, git
-# failure, or the intersection is empty. Callers treat "empty output" as
-# "ledger not engaged → use the point-base path".
+# Prints nothing (rc 0) when: empty orig_base, git failure, empty range, or no
+# commit passes the predicate. Callers treat empty output as "not engaged -> use
+# the point-base path". Mirrors hc__session_authored_count's structure exactly,
+# emitting SHAs instead of a count.
 ```
-
-Implementation sketch:
 
 ```sh
 hc_session_changeset_commits() {
-  local session_id="$1"
-  local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
-  local ledger="$HARNESS_DIR/baselines/${session_id}.own-commits"
-  [ -s "$ledger" ] || return 0
-
-  local base_file="$HARNESS_DIR/baselines/${session_id}.sha"
-  [ -f "$base_file" ] || return 0
-  local base; base=$(cat "$base_file" 2>/dev/null)
-  [ -z "$base" ] && return 0
-
-  local head; head=$(git -C "$proj" rev-parse HEAD 2>/dev/null)
-  [ -z "$head" ] && return 0
-
-  local revs; revs=$(git -C "$proj" rev-list --reverse "$base..$head" 2>/dev/null) || return 0
-  local c
+  local orig_base="$1" head="$2" session_id="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  [ -z "$orig_base" ] && return 0
+  local revs c
+  revs=$(git -C "$proj" rev-list --reverse "$orig_base..$head" 2>/dev/null) || return 0
+  [ -z "$revs" ] && return 0
   while IFS= read -r c; do
     [ -z "$c" ] && continue
-    hc__commit_in_ledger "$c" "$session_id" && printf '%s\n' "$c"
+    hc__commit_session_authored "$c" "$session_id" && printf '%s\n' "$c"
   done <<EOF
 $revs
 EOF
+  return 0
 }
 ```
 
 Notes:
-- Reuses `hc__commit_in_ledger` (`harness-common.sh:689`) — exact-line grep, the
-  same membership test `hc__resolve_session_base` uses.
-- Bounded by `base..head` ancestry so stale ledger lines from an
-  amended/rebased-away commit that is no longer reachable simply don't appear.
-- No dependency on `HC_BASE` (the *advanced* base) — always the original anchor,
-  so an interior own-commit before an interior foreign one is still included.
+- Bounded by `orig_base..head` ancestry, so a stale ledger line for an
+  amended/rebased-away commit no longer reachable from `head` simply never
+  appears in `revs`.
+- Takes `orig_base` explicitly (not read from a file) so the caller controls the
+  lower bound and the base-consistency requirement above is enforced at the call
+  site, visibly.
 
-### Changed-file set for coverage
-
-Add a sibling that turns that commit set into the changed-path set the coverage
-check needs:
+### Changed-file set — `hc_session_changeset_files`
 
 ```
-# hc_session_changeset_files <session_id> [proj]
+# hc_session_changeset_files <orig_base> <head> <session_id> [proj]
 #
-# Union of `git diff --name-only <c>^ <c>` over every SHA from
+# Union (sorted -u) of the per-commit changed paths over every SHA from
 # hc_session_changeset_commits. The paths the DoD review must cover when the
-# ledger is engaged. Empty output → ledger not engaged (caller uses point-base).
+# ledger path is taken. Empty output -> not engaged (caller uses point-base).
 ```
 
-Merge commits: `git diff --name-only <c>^ <c>` uses first-parent; acceptable —
+```sh
+hc_session_changeset_files() {
+  local orig_base="$1" head="$2" session_id="$3"
+  local proj="${4:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  local commits c out=""
+  commits=$(hc_session_changeset_commits "$orig_base" "$head" "$session_id" "$proj")
+  [ -z "$commits" ] && return 0
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    # Parentless (root) commit: `<c>^` errors. Use diff-tree against the empty
+    # tree via --root so the initial commit's full file set is still emitted.
+    local paths
+    if git -C "$proj" rev-parse -q --verify "${c}^" >/dev/null 2>&1; then
+      paths=$(git -C "$proj" diff --name-only "${c}^" "$c" 2>/dev/null)
+    else
+      paths=$(git -C "$proj" diff-tree --no-commit-id --name-only -r --root "$c" 2>/dev/null)
+    fi
+    out="${out:+$out
+}${paths}"
+  done <<EOF
+$commits
+EOF
+  printf '%s\n' "$out" | grep -v '^$' | sort -u
+  return 0
+}
+```
+
+Merge commits: `git diff --name-only <c>^ <c>` is first-parent; acceptable —
 harness convention is linear history on `main`, and a merge the session itself
 performed is in its ledger and its first-parent diff is the right scope.
 
@@ -143,108 +199,151 @@ performed is in its ledger and its first-parent diff is the right scope.
 
 ### 1. `hc_review_coverage_gap` (`harness-common.sh:1238`)
 
-Currently: `changed=$(git -C "$proj" diff --name-only "$base" "$head")`.
+Signature today: `hc_review_coverage_gap <log> <base> <head> [proj] [extra] [chain]`.
 
-Change: before that line, try the ledger set —
+Change:
+
+1. **New leading param** `<orig_base>` OR reuse the `[proj]` position — cleaner
+   to add `<orig_base>` as param 4 and shift the rest, updating both call sites.
+   (Bikeshed at implementation; the point is the function needs `HC_BASE_ORIG`.)
+2. Compute `changed` via the ledger set first, falling back to the range —
+   **preserving the existing git-failure SKIP on both paths**:
 
 ```sh
-if hc_has_fn hc_session_changeset_files && [ -n "${HC_SESSION_ID:-}" ]; then
-  local ledger_changed
-  ledger_changed=$(hc_session_changeset_files "$HC_SESSION_ID" "$proj")
-  [ -n "$ledger_changed" ] && changed="$ledger_changed"
+local changed=""
+if hc_has_fn hc_session_changeset_files && [ -n "${HC_SESSION_ID:-}" ] && [ -n "$orig_base" ]; then
+  changed=$(hc_session_changeset_files "$orig_base" "$head" "$HC_SESSION_ID" "$proj")
 fi
-[ -n "$changed" ] || changed=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null) || { printf 'SKIP'; return 0; }
+if [ -z "$changed" ]; then
+  # unchanged from today (harness-common.sh:1262): git failure here -> SKIP.
+  changed=$(git -C "$proj" diff --name-only "$base" "$head" 2>/dev/null) \
+    || { printf 'SKIP'; return 0; }
+fi
+# From here down: existing logic unchanged. An EMPTY changed set is still
+# "nothing to cover -> PASS" (harness-common.sh ~:1268) whether it came from an
+# empty ledger-union (all session commits were empty/no-op) or an empty range.
 ```
 
-`hc_resolve` takes `session_id` as `$1` but does **not** currently persist it as
-a global (confirmed: `harness-common.sh:573-614` — resets `HC_*` outputs, never
-stores the id). Add `HC_SESSION_ID="$session_id"` to the reset block (~line 585)
-so consumers can reach it. If empty, `hc_review_coverage_gap` degrades to the
-existing range exactly as today.
+   Note the empty-union case is now explicitly *fine*: if every session-authored
+   commit in range changed zero files, `changed=""` and coverage is trivially
+   satisfied — same as an empty range. It does **not** fall through to the range
+   diff (that would re-introduce interior foreign files).
 
-The attested-log chain-walk below (lines ~1290-1320) is unaffected: it filters
-logs by ancestry to `head` and non-ancestry to `base`, which is still correct —
-an interior foreign commit's log (if any) is simply not this session's and its
-paths, if they don't intersect `changed`, cost nothing.
+3. **Chain-walk base:** in the ledger path, the chain-walk's `!is-ancestor
+   <log> <base>` filter must use `<orig_base>`, not `<base>` — see
+   "base-consistency requirement" above. Concretely: bind a local
+   `chain_base="${orig_base:-$base}"` and use it in the two `merge-base
+   --is-ancestor` calls of the chain-walk loop.
 
-### 2. `agents/dod-reviewer.md`
+### 2. `HC_SESSION_ID` — do NOT touch `hc_resolve`
+
+`HC_SESSION_ID` is **already a live global**, set manually at exactly one site:
+`done-gate.sh:478` (`HC_SESSION_ID="$SESSION_ID"`, comment at `:469` — lets
+`hc_changeset_summary` find the baseline mtime), and read by `hc_changeset_
+summary` (`harness-common.sh:1545`).
+
+Adding `HC_SESSION_ID="$session_id"` to `hc_resolve`'s reset block would set it
+in **every** caller — including `run-task.sh:310` (passes `$TASK_ID`) and
+`finish-worktree.sh:103` (passes the literal string `"finish-worktree"`),
+poisoning the global for `hc_changeset_summary` in those paths.
+
+**Instead:** mirror `done-gate.sh` — `done-write-state.sh` must set
+`HC_SESSION_ID="$SESSION_ID"` explicitly after its `hc_resolve` call (it already
+resolves `SESSION_ID` locally at `:55-65`; it just never exports it as the
+global). One line, same pattern as `done-gate.sh:478`. No change to the shared
+resolver.
+
+### 3. `agents/dod-reviewer.md`
 
 Round-1 input currently: `<base>` + "Review `git diff <base> <head>` in full."
 
-Change the round-1 contract to accept a **commit list** when given one:
+- New optional input line `<commits>` — newline-separated SHAs (oldest→newest)
+  constituting this session's changeset. When present, round 1 reviews
+  `git diff <c>^ <c>` per listed commit (root commit: `git show --name-only` /
+  `diff-tree --root`), union is the changeset; `files_reviewed` attests that
+  union.
+- Absent (ledger not engaged, or task mode) → exactly today's `git diff <base>
+  <head>`.
+- Round 2 (delta-scoped) unchanged — `git diff <prevHEAD> <head>`.
 
-- New optional input line: `<commits>` — a newline-separated list of SHAs
-  (oldest→newest) that constitute this session's changeset. When present, round 1
-  reviews `git diff <c>^ <c>` for **each** listed commit and the union is the
-  changeset; `files_reviewed` attests the union of `git diff --name-only <c>^ <c>`.
-- When `<commits>` is absent (ledger not engaged, or task mode), behaviour is
-  exactly today's `git diff <base> <head>`.
-- Round 2 (delta-scoped) is unchanged — `git diff <prevHEAD> <head>`.
+`files_reviewed` attestation rule (line 74+) gains: "When given a `<commits>`
+list, `files_reviewed ⊇ ⋃ (git diff --name-only <c>^ <c>)` over the list."
 
-`files_reviewed` attestation rule (line 74+) gains one bullet: "When reviewing a
-commit list, `files_reviewed ⊇ ⋃ git diff --name-only <c>^ <c>` over the list."
+### 4. `skills/done/dod-protocol.md`
 
-### 3. `skills/done/dod-protocol.md`
+- ~line 107 ("scope everything to `git diff <base> HEAD`"): replace with —
+  "resolve the changeset base **and** `HC_BASE_ORIG`. When any commit in
+  `HC_BASE_ORIG..HEAD` is session-authored (`hc_session_changeset_commits`
+  non-empty), scope the review to that commit set (`git diff <c>^ <c>` per
+  commit, union); otherwise `git diff <base> HEAD`."
+- line ~18 ("agents still race"): note same-identity parallel sessions on shared
+  main are now scoped apart by per-commit session-authorship, not just base
+  point.
+- **Step 5 reviewer dispatch** (`dod-protocol.md` ~lines 238-263 — "spawn the
+  shipped reviewer agent", "Pass the agent only: `<base>`, `<head>`,
+  `min_review_level`, and the mode"): add the `<commits>` list to the passed
+  inputs when `hc_session_changeset_commits` is non-empty.
 
-- Line ~105-106: replace "resolve the changeset base … scope everything to
-  `git diff <base> HEAD`" with: "resolve the changeset base **and** the ledger
-  commit set via the shared resolver. When the ledger is engaged, scope the
-  review to that commit set (`git diff <c>^ <c>` per commit, union); otherwise
-  `git diff <base> HEAD`."
-- Line ~18: the "agents still race" caveat can note that same-identity parallel
-  sessions on shared main are now scoped apart by ledger membership, not just by
-  base point.
-- Step 5 round-1 dispatch (line ~322): pass the commit list to the reviewer when
-  `hc_session_changeset_commits` is non-empty.
+### 5. `done-gate.sh` / `done-write-state.sh` call sites
 
-### 4. `done-gate.sh` / `done-write-state.sh`
-
-`done-gate.sh` Step 8 and `done-write-state.sh:315` both call
-`hc_review_coverage_gap` with `<base> <head>`. Once (1) reads the ledger set
-internally, **no call-site change is needed** — the range args stay as the
-fallback. Confirm `HC_SESSION_ID` is in scope at both call sites (it is: both
-`hc_resolve` first).
-
-`base_sha` written into the review-log/done-state (`done-write-state.sh:366`)
-stays `HC_BASE` (the advanced point base) — it is still a valid lower bound for
-the gate's HEAD-keyed evidence check and the anchor-recovery paths. The ledger
-set is a *scoping* refinement, not a new persisted anchor. No schema change.
+- `done-write-state.sh:315` — `hc_review_coverage_gap "$REVIEW_LOG" "$HC_BASE"
+  "$VERIFIED_SHA" …`: add `$HC_BASE_ORIG` in the new param position, and add the
+  `HC_SESSION_ID="$SESSION_ID"` line (consumer change 2).
+- `done-gate.sh` — its `hc_review_coverage_gap` call gets `$HC_BASE_ORIG` in the
+  new param position. `HC_SESSION_ID` already set at `:478`.
+- `base_sha` written into review-log/done-state (`done-write-state.sh:366`) stays
+  `HC_BASE` (the advanced point base) — still a valid lower bound for the gate's
+  HEAD-keyed evidence check and anchor-recovery. The ledger set is a *scoping*
+  refinement, not a persisted anchor. **No schema change.**
 
 ---
 
 ## Test — `tests/test-gate.sh`
 
-New chunk: **interior foreign commit is excluded from session-mode DoD scope.**
+New chunk: **interior foreign commit excluded from session-mode DoD scope.**
 
-Setup:
-1. Init repo, one commit `C0`. Record it as `baselines/<sid>.sha`.
-2. Simulate the session's own commit `A` — append `A` to
-   `baselines/<sid>.own-commits`.
-3. Simulate a **peer** commit `X` (not appended to the ledger).
-4. Simulate the session's own commit `B` — append `B`.
+Setup (extends the ledger fixtures already in `tests/test-commit-ledger.sh`):
+1. Init repo, commit `C0`. Record `C0` as `baselines/<sid>.sha` → `HC_BASE_ORIG`.
+2. Own commit `A` touching `a.txt` — append `A` to `baselines/<sid>.own-commits`.
+3. **Peer** commit `X` touching `x.txt` — NOT appended.
+4. Own commit `B` touching `b.txt` — append `B`.
    History: `C0 → A → X → B` (HEAD).
 
 Assertions:
-- `hc_session_changeset_commits <sid>` emits exactly `A\nB` (not `X`).
-- `hc_session_changeset_files <sid>` = union of A's and B's changed paths, and
-  **does not** include a path touched only by `X`.
-- `hc_review_coverage_gap` with a review-log attesting only A's + B's files
-  returns empty (PASS) — i.e. `X`'s file is not demanded.
-- Control: with the ledger **absent**, `hc_review_coverage_gap` still demands
-  `X`'s file (existing behaviour preserved).
-- Control: with the ledger **empty** (`-f` but 0 bytes), same as absent.
+- `hc_session_changeset_commits C0 HEAD <sid>` emits exactly `A\nB` (not `X`).
+- `hc_session_changeset_files C0 HEAD <sid>` = `a.txt\nb.txt` — **not** `x.txt`.
+- `hc_review_coverage_gap` (ledger path) with a review-log attesting `a.txt` +
+  `b.txt` returns empty (PASS) — `x.txt` not demanded.
+- **Interior-own-before-advanced-base variant:** history
+  `C0 → X → A → Y → B`, ledger `{A, B}`. `hc__resolve_session_base` advances
+  `HC_BASE` to `X`; `HC_BASE_ORIG` stays `C0`. Assert
+  `hc_session_changeset_commits C0 HEAD <sid>` still emits `A\nB`, and the
+  chain-walk (fed `HC_BASE_ORIG`) does **not** drop `A`'s review-log →
+  no spurious gap for `a.txt`.
+- **Empty-union:** own commits `A`, `B` are both empty (`--allow-empty`).
+  `hc_session_changeset_files` → empty → `hc_review_coverage_gap` PASSes and does
+  **not** fall through to the range diff (assert `x.txt` still not demanded).
+- **Root commit:** `<sid>` owns the initial commit `C0` itself.
+  `hc_session_changeset_files` emits `C0`'s full file set (no `<c>^` error).
+- Control — ledger **absent**: `hc_review_coverage_gap` still demands `x.txt`
+  (point-base behaviour preserved).
+- Control — ledger **empty** (`-f`, 0 bytes): same as absent
+  (`hc__commit_session_authored` degrades to email-only).
+- **Git-failure SKIP preserved:** a bogus `<base>` on the range path still
+  yields `SKIP`, not a block.
 
-Also pin: `hc__resolve_session_base` still `break`s at `A` (its point-base
-behaviour is unchanged — this spec adds a set path, does not alter the loop).
+Also pin (unchanged behaviour): `hc__resolve_session_base` still `break`s at the
+first ledgered commit — this spec adds a set path, it does not alter the loop.
 
 ---
 
 ## Non-goals
 
-- No cross-session locking, claim files, or coordination channel. Ledger
-  membership is sufficient and needs no communication.
+- No cross-session locking, claim files, or coordination channel. Per-commit
+  session-authorship is sufficient and needs no communication.
 - No change to task mode.
 - No change to the working-tree (`.dirty`) path.
+- No change to `hc_resolve` (see consumer change 2).
 - No new persisted anchor or review-log field.
 
 ---
@@ -253,10 +352,12 @@ behaviour is unchanged — this spec adds a set path, does not alter the loop).
 
 | File | Change |
 |---|---|
-| `scripts/harness-common.sh` | + `hc_session_changeset_commits`, + `hc_session_changeset_files`; `hc_review_coverage_gap` consults them; + `HC_SESSION_ID="$session_id"` in `hc_resolve` reset block (~line 585) |
-| `agents/dod-reviewer.md` | round-1 accepts optional `<commits>` list; `files_reviewed` attestation bullet |
-| `skills/done/dod-protocol.md` | scope wording (§105-106), Step 5 dispatch passes commit list, race caveat note |
-| `tests/test-gate.sh` | + interior-foreign-commit chunk with absent/empty ledger controls |
+| `scripts/harness-common.sh` | + `hc_session_changeset_commits`, + `hc_session_changeset_files` (both reuse `hc__commit_session_authored`); `hc_review_coverage_gap` gains an `<orig_base>` param, prefers the ledger set, keeps git-failure SKIP on both paths, and uses `orig_base` for the chain-walk filter |
+| `scripts/done-write-state.sh` | set `HC_SESSION_ID="$SESSION_ID"` after `hc_resolve` (mirror `done-gate.sh:478`); pass `$HC_BASE_ORIG` to `hc_review_coverage_gap` |
+| `scripts/done-gate.sh` | pass `$HC_BASE_ORIG` to `hc_review_coverage_gap` |
+| `agents/dod-reviewer.md` | round-1 accepts optional `<commits>` list; `files_reviewed` attestation bullet; root-commit diff note |
+| `skills/done/dod-protocol.md` | scope wording (~line 107), Step 5 dispatch (~lines 238-263) passes `<commits>`, race caveat (~line 18) |
+| `tests/test-gate.sh` | + interior-foreign-commit chunk: base-order variant, empty-union, root-commit, absent/empty-ledger controls, git-failure SKIP |
 
-`done-gate.sh` and `done-write-state.sh`: no code change if `hc_review_coverage_gap`
-absorbs it internally — verify `HC_SESSION_ID` scope only.
+**NOT touched:** `scripts/harness-common.sh` `hc_resolve` (the shared resolver
+stays as-is).
