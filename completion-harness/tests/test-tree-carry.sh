@@ -71,6 +71,14 @@ mk_verified() {
   git -C "$REPO" commit -qm "the work" >/dev/null 2>&1
   HEAD0=$(git -C "$REPO" rev-parse HEAD)
   TREE0=$(git -C "$REPO" rev-parse 'HEAD^{tree}')
+  # Attribution is ledger-only (committer email is not a signal), so the work
+  # commit must be recorded as this session's or base-advance would walk
+  # HC_BASE to HEAD, the changeset would be empty, and every case below would
+  # trivially allow. The subsequent amends/rewrites in each case orphan this
+  # sha, which trips hc__ledger_history_rewritten — that refuses to advance the
+  # base, which is exactly what these cases need: the full changeset stays and
+  # the gate evaluates the tree-carry logic on it.
+  printf '%s\n' "$HEAD0" > "$HDIR/baselines/$SID.own-commits"
 
   write_review_log "$HEAD0" "$HEAD0"
   write_done_state "$HEAD0" "$TREE0" "$HEAD0"

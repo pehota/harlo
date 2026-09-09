@@ -90,18 +90,26 @@ HDIR="$PROJECT_DIR/.claude/.harness"
 mkdir -p "$HDIR/baselines" "$HDIR/done-state" "$HDIR/review-log"
 
 # helper to set the baseline file for a session (still keyed by raw session id).
-# P0-a attribution is now EMAIL-ONLY (M1 fix): the session commits here carry the
-# repo identity (email t@t) so they are NOT confidently-foreign → base-advance
-# STOPS at them → they stay in the changeset. The baseline .sha mtime is no
-# longer consulted, so its value is irrelevant; we do not backdate it.
+# Attribution is LEDGER-ONLY: a commit counts as the session's own iff some
+# baselines/*.own-commits lists it. Committer email is not a signal (deleted —
+# the human and the agent share one git identity). So a fixture that wants the
+# c2 commit to BE the session's work must say so in the ledger; without it,
+# base-advance would (correctly) walk HC_BASE to HEAD, the changeset would be
+# empty, and every "commits happened → block" case here would silently become
+# an allow, testing nothing. The baseline .sha mtime is not consulted, so its
+# value is irrelevant; we do not backdate it.
 set_baseline() {
   printf '%s\n' "$2" > "$HDIR/baselines/$1.sha"
+  printf '%s\n' "$HEAD_SHA" > "$HDIR/baselines/$1.own-commits"
 }
 # Done-state is now keyed by HC_TASK_KEY. These fixtures run on `main` (the
 # repo's trunk) → session mode → task_key = "session-<session_id>". So the
 # done-state path for session id $1 is done-state/session-$1.json.
 write_done() { printf '%s\n' "$2" > "$HDIR/done-state/session-$1.json"; }
-clear_state() { rm -f "$HDIR/baselines/$1.sha" "$HDIR/done-state/session-$1.json"; }
+# Ledgers are read ACROSS sessions (hc__commit_in_any_ledger), and every case
+# here shares one $PROJECT_DIR — so a ledger left behind by an earlier case
+# would still own HEAD_SHA for a later one. Wipe them all, not just this sid's.
+clear_state() { rm -f "$HDIR/baselines/$1.sha" "$HDIR/done-state/session-$1.json" "$HDIR/baselines/"*.own-commits; }
 
 # Review-log is keyed by HEAD SHA (shared across all step-8-reaching cases, so
 # it must be set EXPLICITLY per case — clear_state does NOT touch it).
@@ -163,15 +171,19 @@ SID=s3; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
 run_case "3 missing done-state (HEAD>baseline) -> block" block \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 
-# Case 3-ledger — REGRESSION PIN (0.1.15). An empty-but-present commit ledger
-# (the PostToolUse hook touched baselines/<sid>.own-commits but never swept a
-# commit in — a first non-commit Bash call, a stale cursor, or a writer/reader
-# session-id disagreement) must NOT let hc__resolve_session_base advance the
-# base to HEAD and silently pass unverified committed work. Same fixture as
-# Case 3 plus an empty ledger → still BLOCK.
+# Case 3-ledger — INVERTED from the old 0.1.15 pin. An empty-but-present ledger
+# (a Bash call fired PreToolUse, but HEAD never moved inside any call window)
+# now means what it says: this session observed no commit of its own. Every
+# commit in base..HEAD is therefore foreign, HC_BASE advances to HEAD, the
+# changeset is empty, and with a clean tree Step 3c ALLOWS the Stop. The old
+# assertion (still block, "silent-pass regression") encoded the committer-email
+# degrade, which was inert — one shared git identity means nothing is ever
+# provably foreign, so it never advanced anything and only produced permanent
+# /done demands for commits the session never made. Uncommitted work is
+# unaffected: hc_tree_status gates it against the tree baseline, ledger-free.
 SID=s3l; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
-: > "$HDIR/baselines/$SID.own-commits"
-run_case "3l missing done-state + EMPTY ledger -> block (0.1.15 silent-pass regression)" block \
+: > "$HDIR/baselines/$SID.own-commits"      # present, empty -> nothing observed
+run_case "3l missing done-state + EMPTY ledger -> allow (nothing observed, empty changeset)" allow \
   "{\"session_id\":\"$SID\",\"stop_hook_active\":false}"
 rm -f "$HDIR/baselines/$SID.own-commits"
 
@@ -885,6 +897,10 @@ printf '# docs\n' > "$PR_REPO/README.md"
 git -C "$PR_REPO" add -A; git -C "$PR_REPO" commit -qm docs
 PR_HEAD=$(git -C "$PR_REPO" rev-parse HEAD)
 printf '%s\n' "$PR_BASE" > "$PRHDIR/baselines/pr1.sha"
+# Attribution is ledger-only: without recording the docs commit as the
+# session's own, base-advance would (correctly) walk to HEAD and the changeset
+# would be empty — the case would then test nothing.
+printf '%s\n' "$PR_HEAD" > "$PRHDIR/baselines/pr1.own-commits"
 run_case "F1 prose-only committed changeset, no done-state -> block" block \
   '{"session_id":"pr1","stop_hook_active":false}' "$PR_REPO"
 
@@ -1240,7 +1256,13 @@ else
 fi
 rm -rf "$CLD"
 
-# --- L5: control — ledger ABSENT: point-base behaviour preserved -------------
+# --- L5: control — ledger ABSENT: the SET is empty, point-base path is used ---
+# REWRITTEN. This case asserted the deleted email fallback (t@t authored all
+# three, so all three were emitted). There is no email tier: with no ledger,
+# nothing is agent-authored and the helper emits NOTHING, which is exactly the
+# "not engaged -> use the point-base range path" signal its callers expect. The
+# coverage assertion below is the one that matters and is unchanged: x.txt is
+# still demanded, now via the range path rather than an email-built union.
 CLD=$(cl_repo); SID=csL5
 C0=$(cl_commit "$CLD" c0.txt)
 A=$(cl_commit "$CLD" a.txt)
@@ -1248,10 +1270,7 @@ X=$(cl_commit "$CLD" x.txt)
 B=$(cl_commit "$CLD" b.txt)
 # no own-commits file at all
 GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
-# email-only fallback: t@t authored all -> all four emitted (A,X,B; C0 is the
-# lower bound, excluded).
-cl_eq "L5 ledger absent: changeset_commits falls back to email (A,X,B all emitted)" \
-  "$GOT" "$(printf '%s\n%s\n%s' "$A" "$X" "$B")"
+cl_eq "L5 ledger absent: changeset_commits emits nothing (no email tier)" "$GOT" ""
 # coverage gap: log attests only a.txt+b.txt -> x.txt STILL demanded (point-base
 # range path OR email-union both include x.txt; either way it is not dropped).
 cl_write_log "$CLD" "$B" a.txt b.txt
@@ -1261,6 +1280,9 @@ case "$GOT" in *x.txt*) printf 'PASS  %s\n' "L5 ledger absent: coverage_gap stil
 rm -rf "$CLD"
 
 # --- L6: control — ledger EMPTY (0 bytes): same as absent -------------------
+# REWRITTEN alongside L5: absent and empty are one statement ("no agent commit
+# observed"), so both emit an empty set and both fall through to the point-base
+# range path, where x.txt is still demanded.
 CLD=$(cl_repo); SID=csL6
 C0=$(cl_commit "$CLD" c0.txt)
 A=$(cl_commit "$CLD" a.txt)
@@ -1268,8 +1290,7 @@ X=$(cl_commit "$CLD" x.txt)
 B=$(cl_commit "$CLD" b.txt)
 : > "$CLD/.claude/.harness/baselines/${SID}.own-commits"   # exists, 0 bytes
 GOT=$(cl_changeset_commits "$CLD" "$C0" HEAD "$SID")
-cl_eq "L6 empty ledger degrades to email-only (A,X,B emitted, same as absent)" \
-  "$GOT" "$(printf '%s\n%s\n%s' "$A" "$X" "$B")"
+cl_eq "L6 empty ledger emits nothing, same as absent (no email tier)" "$GOT" ""
 cl_write_log "$CLD" "$B" a.txt b.txt
 GOT=$(cl_gap "$CLD" "$CLD/.claude/.harness/review-log/${B}.json" "$C0" "$B" "$SID" "$C0")
 case "$GOT" in *x.txt*) printf 'PASS  %s\n' "L6 empty ledger: coverage_gap still demands x.txt"; PASS=$((PASS+1)) ;;

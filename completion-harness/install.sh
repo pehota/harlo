@@ -125,12 +125,16 @@ STOP_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/done-gate.sh"'
 START_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/baseline-snapshot.sh"'
 PRE_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
 POST_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh"'
+# PreToolUse(Bash) half of the commit ledger: pins HEAD so the PostToolUse half
+# can sweep exactly what moved during the call (see commit-ledger.sh).
+PREL_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh" pre'
 
 MERGED=$(jq \
   --arg stop "$STOP_CMD" \
   --arg start "$START_CMD" \
   --arg pre "$PRE_CMD" \
-  --arg post "$POST_CMD" '
+  --arg post "$POST_CMD" \
+  --arg prel "$PREL_CMD" '
   # ensure hooks containers exist
   .hooks = (.hooks // {})
   | .hooks.Stop = (.hooks.Stop // [])
@@ -155,6 +159,12 @@ MERGED=$(jq \
   | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $pre)) as $hasPre
   | if $hasPre then .
     else .hooks.PreToolUse += [ {"matcher":"Write|Edit","hooks": [ {"type":"command","command":$pre} ]} ]
+    end
+
+  # append PreToolUse(Bash) commit-ledger `pre` hook only if not already wired.
+  | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $prel)) as $hasPreL
+  | if $hasPreL then .
+    else .hooks.PreToolUse += [ {"matcher":"Bash","hooks": [ {"type":"command","command":$prel} ]} ]
     end
 
   # append PostToolUse(Bash) commit-ledger hook only if not already wired.

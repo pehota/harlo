@@ -100,8 +100,9 @@ hc_require_jq() {
 #   HC_HOOK_TOOL_FILE_PATH   .tool_input.file_path
 #   HC_HOOK_TOOL_COMMAND     .tool_input.command (Bash tool payloads only —
 #                            empty for every other tool_name, which is fine:
-#                            the one consumer, commit-ledger.sh, only fires on
-#                            PostToolUse(Bash))
+#                            no current consumer reads it — commit-ledger.sh
+#                            observes HEAD movement instead of parsing command
+#                            text)
 #   HC_HOOK_SOURCE           .source
 #   HC_HOOK_STOP_ACTIVE      .stop_hook_active (text "true"/"false")
 hc_read_hook_input() {
@@ -668,81 +669,115 @@ hc__resolve_task_base() {
 }
 
 # ---------------------------------------------------------------------------
-# hc__commit_in_ledger <commit_sha> <session_id>
+# hc__commit_in_any_ledger <commit_sha>
 #
-# Returns 0 iff <commit_sha> is a recorded line in THIS session's commit
-# ledger: $HARNESS_DIR/baselines/<session_id>.own-commits, appended to by the
-# PostToolUse(Bash) commit-ledger.sh hook every time a Bash call lands new
-# commits. Ledger membership is a POSITIVE, directly-observed signal ("we
-# watched this commit happen via a tool call in this session") — unlike
-# hc__commit_confidently_foreign's email guess, it cannot be fooled by a human
-# committing under the session's own git identity from a terminal or `!`
-# passthrough (the exact case that motivated this predicate: no separate
-# "Claude" git identity here, so email alone can never tell the two apart).
+# THE session-authorship predicate. Returns 0 iff <commit_sha> is a recorded
+# whole line in ANY session's commit ledger under $HARNESS_DIR/baselines/
+# *.own-commits — the append-only files the commit-ledger.sh Bash hook writes
+# (PreToolUse pins HEAD, PostToolUse sweeps whatever HEAD moved over during the
+# call). Ledger membership is a POSITIVE, DIRECTLY-OBSERVED signal: HEAD moved
+# inside an agent tool-call window, so an agent produced it.
 #
-# Returns 1 on ANY other outcome: empty sha, empty session_id, no ledger FILE
-# at $HARNESS_DIR/baselines/<session_id>.own-commits, or the sha simply absent
-# from it. Callers that need to distinguish "ledger absent → unknown, fall
-# back to email" from "ledger present but sha absent → confidently not ours"
-# must check ledger existence themselves (hc__resolve_session_base does); this
-# predicate only answers membership, not presence.
-hc__commit_in_ledger() {
-  local sha="$1" session_id="$2"
+# WHY ACROSS ALL SESSIONS, not just the querying one: a commit authored by a
+# CONCURRENT agent session is still agent-authored. Scoped per-session it would
+# look foreign to every reader — the peer's commit absent from OUR ledger, ours
+# absent from THEIRS — and both sessions would advance their base past work that
+# nobody then reviews. Cross-session membership needs no extra age/scope bound:
+# every query runs over base..HEAD (commits created after the querying session's
+# own baseline), and session baselines are age-reaped at 14 days.
+#
+# Returns 1 on ANY other outcome: empty sha, no baselines dir, no ledger files,
+# or the sha simply absent from all of them. A grep FAILURE is never read as a
+# positive — only an explicit match sets the success rc.
+#
+# There is no email fallback and no "ledger absent → unknown" tier. Committer
+# email cannot distinguish agent from human: they share one git identity (there
+# is no separate "Claude" identity), so nothing is ever provably foreign under
+# email and the base never advances. An ABSENT or EMPTY ledger therefore means
+# exactly "no agent commit observed" → every commit in range is foreign →
+# hc__resolve_session_base advances to HEAD → an empty changeset the Stop gate
+# allows without a DoD run. That is the intended reading, not a degradation:
+# a session that committed nothing has nothing to review. Uncommitted work is
+# unaffected — hc_tree_status gates it against the tree baseline, which never
+# consults the ledger.
+hc__commit_in_any_ledger() {
+  local sha="$1"
   [ -z "$sha" ] && return 1
-  [ -z "$session_id" ] && return 1
-  local ledger="$HARNESS_DIR/baselines/${session_id}.own-commits"
-  [ -f "$ledger" ] || return 1
-  grep -Fxq -- "$sha" "$ledger" 2>/dev/null
+  [ -z "$HARNESS_DIR" ] && return 1
+  local dir="$HARNESS_DIR/baselines"
+  [ -d "$dir" ] || return 1
+  local f
+  for f in "$dir"/*.own-commits; do
+    # No-glob-match leaves the literal pattern; -f filters it out.
+    [ -f "$f" ] || continue
+    if grep -qxF -- "$sha" "$f" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------------------
-# hc__commit_confidently_foreign <commit_sha> <session_id>
+# hc__ledger_history_rewritten <session_id> [proj]
 #
-# CONFIDENTLY-FOREIGN attribution predicate (shared by base-advance / P1-a /
-# P2-a). Returns 0 (CONFIDENTLY-FOREIGN — provably NOT this session's work) iff
-# ALL of:
-#   - `git config user.email` (session_email) is NON-EMPTY, AND
-#   - the commit's committer_email is NON-EMPTY, AND
-#   - they DIFFER.
-# Returns 1 (NOT confidently foreign) on ANY other outcome — same email, either
-# email empty, session_email empty, or any git error.
+# UNCERTAINTY TRIPWIRE, not a fix. Returns 0 (rewrite detected) iff at least one
+# sha in THIS SESSION'S ledger (baselines/<session_id>.own-commits) is either
+# gone from the object store or no longer reachable from HEAD.
 #
-# This is deliberately EMAIL-ONLY. The old predicate also required the commit's
-# committer_date >= mtime(baselines/<sid>.sha); that mtime is MUTABLE (a
-# touch/copy-without-`-p`/clock-skew can advance it past a genuinely-authored
-# commit's date), which would misclassify a real session commit as FOREIGN, let
-# the base advance past it, and allow the gate to PASS with real work unverified
-# — a false-PASS (the exact bug #6 prevents). The commit range orig_base..HEAD
-# already guarantees "after the session baseline" by ancestry, so the mtime
-# signal added only risk, no signal, and is dropped.
+# WHY: the ledger keys on SHA identity, but rebase / amend / cherry-pick change
+# the SHA while preserving the content. A mid-session `git pull --rebase`
+# rewrites the agent's own commit A into A'; A' is in no ledger, so it reads as
+# FOREIGN, the base advances past it, and REAL AGENT WORK SILENTLY SKIPS REVIEW.
+# That is the one direction this harness must never fail in. So when our own
+# ledgered shas have stopped being reachable, we refuse to attribute anything:
+# the caller leaves HC_BASE at HC_BASE_ORIG, the full range stays in the
+# changeset, and the gate engages. This does not RECOVER the attribution — it
+# converts a silent skip into an over-block.
 #
-# FAIL-SAFE: the caller (hc__resolve_session_base) advances the base ONLY while
-# the leading commit is CONFIDENTLY-FOREIGN and STOPS on the first commit that is
-# NOT — so any uncertainty (this predicate returning 1) keeps the commit (and
-# everything after) in the changeset and the gate engages. NEVER advances past a
-# commit that might be the session's.
-hc__commit_confidently_foreign() {
-  local sha="$1" session_id="$2"
-  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
-
-  local session_email committer_email
-  session_email=$(git -C "$proj" config user.email 2>/dev/null)
-  [ -z "$session_email" ] && return 1
-  committer_email=$(git -C "$proj" show -s --format='%ce' "$sha" 2>/dev/null)
-  [ -z "$committer_email" ] && return 1
-  [ "$committer_email" = "$session_email" ] && return 1
-
-  return 0
+# SCOPE IS THIS SESSION'S LEDGER ONLY, deliberately — not the any-ledger set.
+# Rewriting OUR OWN commits is the case we cannot attribute. Other sessions'
+# ledgers routinely hold shas unreachable from our HEAD (they were on other
+# branches, since deleted); tripping on those would block every session
+# permanently for no reason.
+#
+# Absent or empty ledger has nothing to check → returns 1 (no-op). A session
+# that observed no commit of its own cannot have had one rewritten, so the
+# "nothing observed → advance to HEAD" path (a pure Q&A session Stopping
+# cleanly) is untouched by this.
+#
+# Short-circuits on the first failure, so cost is one cat-file + one merge-base
+# per ledger line at worst, once per Stop-gate resolve.
+#
+# ponytail: THE REAL FIX is content identity — store `git patch-id` alongside
+# each sha and match on either, which survives rebase/amend/cherry-pick and
+# recovers the attribution instead of merely refusing to guess. That is a ledger
+# FORMAT change with its own migration and tests, deliberately out of scope
+# here. Until then this over-blocks, which is the safe direction.
+hc__ledger_history_rewritten() {
+  local session_id="$1"
+  local proj="${2:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+  [ -z "$session_id" ] && return 1
+  [ -z "$HARNESS_DIR" ] && return 1
+  local ledger="$HARNESS_DIR/baselines/${session_id}.own-commits"
+  [ -s "$ledger" ] || return 1
+  local sha
+  while IFS= read -r sha; do
+    [ -z "$sha" ] && continue
+    git -C "$proj" cat-file -e "${sha}^{commit}" 2>/dev/null || return 0
+    git -C "$proj" merge-base --is-ancestor "$sha" HEAD 2>/dev/null || return 0
+  done < "$ledger"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
 # hc__session_authored_count <orig_base> <head> <session_id>
 #
 # Prints the integer count of SESSION-AUTHORED commits in orig_base..HEAD
-# (oldest→newest). AUTHORED (email-only, consistent with the confidently-foreign
-# predicate): committer_email non-empty AND == session_email (git config
-# user.email). Guarded; on any git failure or an empty range it prints 0. Shared
-# by P2-a (preflight divergence warn) and the changeset summary (P1-a).
+# (oldest→newest). AUTHORED = present in a commit ledger
+# (hc__commit_session_authored → hc__commit_in_any_ledger); with no ledger the
+# tally is honestly 0. Guarded; on any git failure or an empty range it prints
+# 0. Shared by P2-a (preflight divergence warn) and the changeset summary
+# (P1-a).
 hc__session_authored_count() {
   local orig_base="$1" head="$2" session_id="$3"
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -766,11 +801,11 @@ EOF
 # hc_session_changeset_commits <orig_base> <head> <session_id> [proj]
 #
 # Emits, one SHA per line oldest→newest, the commits in <orig_base>..<head> that
-# hc__commit_session_authored deems positively this session's own work (ledger
-# membership when the ledger is engaged; committer-email otherwise). This is the
-# SET the DoD review must cover in session mode — as opposed to the contiguous
-# <base>..<head> range, which wrongly includes interior foreign commits (peer
-# sessions sharing the git identity).
+# hc__commit_session_authored deems agent-authored (ledger membership — the
+# single source of truth). This is the SET the DoD review must cover in session
+# mode — as opposed to the contiguous <base>..<head> range, which wrongly
+# includes interior foreign commits (a human hand-commit landing between two of
+# the agent's own, under the same git identity).
 #
 # Prints nothing (rc 0) when: empty orig_base, git failure, empty range, or no
 # commit passes the predicate. Callers treat empty output as "not engaged -> use
@@ -826,92 +861,53 @@ EOF
 # ---------------------------------------------------------------------------
 # hc__commit_session_authored <commit_sha> <session_id>
 #
-# Positive session-authorship predicate for the human-readable "N authored
-# this session" tally (changeset summary / preflight). Ledger-preferring, same
-# as hc__resolve_session_base: when $HARNESS_DIR/baselines/<session_id>.own-
-# commits EXISTS, membership in it (hc__commit_in_ledger) is the answer — a
-# human commit sharing the session's git identity must not be counted as
-# "authored this session" just because the email matches. Falls back to the
-# EMAIL-ONLY check (unchanged) when the ledger file does not exist OR IS EMPTY,
-# so a session that made zero Bash calls, predates the ledger hook, or whose
-# writer resolved a different session id degrades exactly as before:
-# committer_email NON-EMPTY AND == session_email (git config user.email, itself
-# non-empty). An empty ledger carries no positive record and must not be read as
-# "authored nothing" (mirrors the hc__resolve_session_base fix). This is the
-# summary/preflight
-# counterpart to hc__commit_confidently_foreign — a commit can be neither
-# (either email empty, ledger says no) so the two are NOT strict negations;
-# this one answers "is THIS commit positively the session's?"
+# Thin named alias over hc__commit_in_any_ledger — "was this commit produced by
+# an agent tool call?" Kept as a separate name because it is the vocabulary the
+# callers speak (changeset summary, preflight tally, changeset-set scoping) and
+# because <session_id> is part of the published shell ABI signature; the id is
+# now VESTIGIAL (membership is cross-session by design — see
+# hc__commit_in_any_ledger) and is accepted only for signature stability.
+#
+# Absent/empty ledger → returns 1 for every commit. Intended: nothing observed,
+# nothing owned, nothing to review. There is no email tier (deleted with
+# hc__commit_confidently_foreign) — one shared git identity makes email a coin
+# flip that never advanced the base and left the gate demanding /done for work
+# the session never touched.
 hc__commit_session_authored() {
-  local sha="$1" session_id="$2"
-  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
-
-  if [ -n "$session_id" ] && [ -s "$HARNESS_DIR/baselines/${session_id}.own-commits" ]; then
-    hc__commit_in_ledger "$sha" "$session_id"
-    return $?
-  fi
-
-  local session_email committer_email
-  session_email=$(git -C "$proj" config user.email 2>/dev/null)
-  [ -z "$session_email" ] && return 1
-  committer_email=$(git -C "$proj" show -s --format='%ce' "$sha" 2>/dev/null)
-  [ -z "$committer_email" ] && return 1
-  [ "$committer_email" = "$session_email" ] || return 1
-  return 0
+  local sha="$1"
+  hc__commit_in_any_ledger "$sha"
 }
 
 # Session-mode base: read the SessionStart baseline if present, else empty.
-# Then ADVANCE past any LEADING run of commits this session did NOT itself
-# produce, so old/foreign history sitting under HEAD does not get dragged into
-# a review demand.
+# Then ADVANCE past any LEADING run of commits NO agent tool call produced, so
+# old/foreign history sitting under HEAD does not get dragged into a review
+# demand.
 #
-# "Not this session's own work" is decided two ways, LEDGER first:
-#   LEDGER-ENGAGED ($HARNESS_DIR/baselines/<session_id>.own-commits exists AND
-#     is NON-EMPTY — the PostToolUse(Bash) commit-ledger.sh hook has swept at
-#     least one commit this session): a commit is confidently-foreign iff it is
-#     NOT a line in that ledger (hc__commit_in_ledger). This is the PRIMARY
-#     signal — membership is directly observed, not guessed, so it is immune to
-#     the case that broke the old email-only predicate: a human committing via
-#     terminal/`!` under the SAME git identity Claude Code commits under (the
-#     common case — no separate "Claude" identity here). Email can never tell
-#     those apart; ledger membership always can, because we watched the commit
-#     happen (or not) via a tool call.
-#   LEDGER ABSENT OR EMPTY (hook never fired this session — zero Bash calls
-#     before this Stop check, or an older/unwired install — OR fired but swept
-#     nothing: its first-Bash-call touch created the file, no commit-shaped call
-#     ever appended, or its writer resolved a DIFFERENT session id than this
-#     reader): graceful degrade to the ORIGINAL email-only predicate
-#     (hc__commit_confidently_foreign), UNCHANGED — a commit whose committer
-#     email PROVABLY differs from the session's (both emails non-empty). An
-#     empty ledger records no positive ownership, so reading it as
-#     "owns nothing" and advancing HC_BASE to HEAD silently passed unverified
-#     committed work (0.1.15 regression); it now degrades exactly like absent.
-#     This is also what keeps every ledger-unaware fixture (test-gate.sh,
-#     test-anchor-recovery.sh — neither ever creates a ledger) passing as-is.
+# "Agent-produced" has exactly ONE source of truth: membership in a commit
+# ledger under $HARNESS_DIR/baselines/*.own-commits (hc__commit_in_any_ledger).
+# The ledger records HEAD movement observed INSIDE a Bash tool-call window
+# (PreToolUse pins HEAD, PostToolUse sweeps the delta), across all sessions —
+# so a concurrent agent session's commit still counts as agent work.
 #
-# Advance rule (same shape under either source): walk orig_base..HEAD
-# oldest→newest; while the leading commit is confidently-foreign under
-# whichever predicate is active, set the new base to that commit; STOP at the
-# FIRST commit that is NOT. HC_BASE becomes the new (advanced) base;
-# HC_BASE_ORIG stays the original unadvanced baseline.
+# There is NO email tier. It was deleted, not degraded away from: the human and
+# Claude Code commit under the SAME git identity, so no commit is ever provably
+# foreign by email, the base never advances, and a session that changed nothing
+# still got a full /done demand because someone hand-committed in another
+# terminal. That was the whole failure mode.
 #
-# FAIL-SAFE, both branches: any uncertainty → STOP → keep the commit (and
-# everything after) in the changeset → gate engages. Ledger branch: sha absent
-# from a NON-EMPTY ledger IS the foreign signal (not uncertainty) — that ledger
-# has positively recorded this session's own commits, so a sha it does not list
-# was made some other way. An EMPTY ledger is the exception: it means the
-# PostToolUse hook ran but recorded nothing (its first-Bash-call touch created
-# the file; no commit-shaped call ever swept a sha in; or the writer resolved a
-# DIFFERENT session id than this reader — the same id-disagreement the gate
-# works around elsewhere). "Recorded nothing" is NOT "owns nothing": treating it
-# as foreign-everything advanced HC_BASE to HEAD and silently PASSED unverified
-# committed work (the 0.1.15 regression). So an empty ledger degrades to the
-# email-only predicate, exactly like ledger-absent.
-# Email branch: session_email empty → nothing is confidently-foreign →
-# NO advance (full changeset); we do NOT consult the baseline .sha mtime at
-# all — it is MUTABLE and was the M1 false-PASS risk (see
-# hc__commit_confidently_foreign); ancestry (orig_base..HEAD) already bounds
-# the range to commits after the baseline.
+# CONSEQUENCE, DELIBERATE: ledger ABSENT or EMPTY ⇒ no commit in range is
+# agent-authored ⇒ the loop advances HC_BASE all the way to HEAD ⇒ the gate's
+# Step 3c sees an empty changeset and allows the Stop with no DoD run. Correct:
+# no observed agent commit means no agent-committed work to review. Do NOT
+# reintroduce a "safety" fallback here — it re-creates the block-forever bug.
+# Uncommitted work is NOT covered by this and must not be: hc_tree_status gates
+# it against the pinned tree baseline, ledger-independently.
+#
+# Advance rule: walk orig_base..HEAD oldest→newest; while the leading commit is
+# NOT in any ledger, set the new base to that commit; STOP at the FIRST commit
+# that IS. HC_BASE becomes the new (advanced) base; HC_BASE_ORIG stays the
+# original unadvanced baseline, so interior peer commits still fall out of the
+# review SET (hc_session_changeset_commits) rather than out of the range.
 hc__resolve_session_base() {
   local session_id="$1"
   local base_file="$HARNESS_DIR/baselines/${session_id}.sha"
@@ -934,37 +930,26 @@ hc__resolve_session_base() {
   revs=$(git -C "$proj" rev-list --reverse "$HC_BASE_ORIG..$head" 2>/dev/null) || return 0
   [ -z "$revs" ] && return 0
 
-  # Ledger engaged iff the file exists AND is NON-EMPTY — checked ONCE per call,
-  # not per-commit, since the hook only ever creates/appends (never deletes
-  # mid-Stop-check). An empty ledger (`-f` but not `-s`) does NOT engage: it
-  # carries no positive ownership record, and treating "recorded nothing" as
-  # "owns nothing" advanced the base to HEAD and silently passed unverified work
-  # (0.1.15 regression). Empty → ledger_engaged=0 → email-only path below,
-  # identical to ledger-absent.
-  local ledger_file="$HARNESS_DIR/baselines/${session_id}.own-commits"
-  local ledger_engaged=0
-  [ -s "$ledger_file" ] && ledger_engaged=1
+  # TRIPWIRE: if any commit THIS session recorded has become unreachable, our
+  # own history was rewritten underneath us (a mid-session `git pull --rebase`
+  # turns our A into an A' that is in no ledger and would read as foreign).
+  # Attribution is then unknowable, so refuse to advance at all — the whole
+  # range stays in the changeset and the gate engages. See
+  # hc__ledger_history_rewritten. No-op on an absent/empty ledger.
+  if hc__ledger_history_rewritten "$session_id" "$proj"; then
+    return 0
+  fi
 
   while IFS= read -r c; do
     [ -z "$c" ] && continue
-    if [ "$ledger_engaged" -eq 1 ]; then
-      if hc__commit_in_ledger "$c" "$session_id"; then
-        # IN the ledger → positively this session's own work → STOP here.
-        break
-      else
-        # NOT in the ledger → confidently-foreign → advance past it.
-        HC_BASE="$c"
-      fi
-      continue
-    fi
-    if hc__commit_confidently_foreign "$c" "$session_id"; then
-      # Leading CONFIDENTLY-FOREIGN commit → advance the base to it.
-      HC_BASE="$c"
-    else
-      # NOT confidently foreign (same email, empty email, or any doubt) → STOP;
-      # base sits just below it. Keep it (and everything after) in the changeset.
+    if hc__commit_in_any_ledger "$c"; then
+      # IN a ledger → an agent tool call produced it → STOP here; it and
+      # everything after stay in the changeset and the gate engages.
       break
     fi
+    # In NO ledger → never observed inside a tool-call window → foreign →
+    # advance past it.
+    HC_BASE="$c"
   done <<EOF
 $revs
 EOF
@@ -1624,7 +1609,7 @@ EOF
 # on, so a block message says WHAT is in the range instead of a bare "/done".
 # Uses base_orig (the UNADVANCED base — HC_BASE_ORIG) so it can honestly report
 # "0 authored this session" when every commit in the range is foreign (P1-a,
-# #6). Reuses the email-only authorship predicate (hc__commit_session_authored).
+# #6). Reuses the ledger authorship predicate (hc__commit_session_authored).
 #
 # Prints up to three newline-joined lines:
 #   changeset <b7>..<h7> — N files, +add/-del

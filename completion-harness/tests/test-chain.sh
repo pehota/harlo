@@ -15,6 +15,7 @@ BUNDLE="$(cd "$(dirname "$0")/../scripts" && pwd)"
 BASELINE="$BUNDLE/baseline-snapshot.sh"
 GATE="$BUNDLE/done-gate.sh"
 WRITE="$BUNDLE/done-write-state.sh"
+LEDGER_HOOK="$BUNDLE/commit-ledger.sh"
 
 # shellcheck source=./test-helpers.sh
 . "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
@@ -95,10 +96,24 @@ fi
 # ============================================================================
 # Step 3 — make a change + commit (advance HEAD past the baseline)
 # ============================================================================
+# Driven through the REAL commit-ledger.sh hook pair, because that is the chain:
+# attribution is ledger-only, and the ledger is what the PreToolUse(Bash) /
+# PostToolUse(Bash) halves produce by observing HEAD move inside the call
+# window. Without the ledger the gate would (correctly) see an empty changeset
+# and step 4 would allow — so this step also proves the hook pair works against
+# the same session id and project dir the rest of the chain uses.
+LEDGER_IN=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"git commit"}}' "$SID")
+printf '%s' "$LEDGER_IN" | CLAUDE_PROJECT_DIR="$REPO" bash "$LEDGER_HOOK" pre >/dev/null 2>&1
 echo "export const x = 1;" > "$REPO/change.js"
 git -C "$REPO" add -A
 git -C "$REPO" commit -qm "advance HEAD"
+printf '%s' "$LEDGER_IN" | CLAUDE_PROJECT_DIR="$REPO" bash "$LEDGER_HOOK" >/dev/null 2>&1
 NEW_SHA=$(git -C "$REPO" rev-parse HEAD)
+if grep -Fxq -- "$NEW_SHA" "$REPO/.claude/.harness/baselines/${SID}.own-commits" 2>/dev/null; then
+  ok "step3: commit-ledger hook pair recorded the commit as session-authored"
+else
+  bad "step3: commit not in the ledger" "$(cat "$REPO/.claude/.harness/baselines/${SID}.own-commits" 2>/dev/null)"
+fi
 if [ "$NEW_SHA" != "$INITIAL_SHA" ]; then
   ok "step3: HEAD advanced ($NEW_SHA)"
 else

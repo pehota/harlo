@@ -333,6 +333,10 @@ C1=$(git -C "$R" rev-parse HEAD~2); C2=$(git -C "$R" rev-parse HEAD~1)
 seed_tree_base "$R" "$SID"
 seed_green_done "$R" "$SID" "$C1"
 printf '%s\n' "$C2" > "$R/.claude/.harness/baselines/$SID.sha"   # real anchor = C2
+# Attribution is ledger-only, so record the commit above C2 as this session's;
+# otherwise base-advance correctly walks HC_BASE to HEAD and the case would be
+# asserting the advance, not the anchor-vs-baseline precedence it is about.
+printf '%s\n' "$(git -C "$R" rev-parse HEAD)" > "$R/.claude/.harness/baselines/$SID.own-commits"
 printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$R" bash "$WRITER" "$SID" >/dev/null 2>&1
 REWROTE=$(jq -r '.base_sha // ""' "$R/.claude/.harness/done-state/session-$SID.json" 2>/dev/null)
 if [ "$REWROTE" = "$C2" ]; then

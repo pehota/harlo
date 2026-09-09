@@ -173,7 +173,7 @@
       "name": "hc_session_changeset_commits",
       "globals": [],
       "args": "<orig_base> <head> <session_id> [proj]",
-      "stdout": "one SHA per line oldest->newest for the commits in orig_base..head that hc__commit_session_authored deems this session's own work; empty when orig_base empty, git failure, empty range, or no commit passes",
+      "stdout": "one SHA per line oldest->newest for the commits in orig_base..head that hc__commit_session_authored deems agent-authored (commit-ledger membership, checked across all sessions' ledgers); empty when orig_base empty, git failure, empty range, or no commit passes",
       "return_codes": "always 0",
       "sentinels": []
     },

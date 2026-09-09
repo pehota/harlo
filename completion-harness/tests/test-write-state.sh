@@ -351,6 +351,10 @@ printf 'cov2\n' > "$TMP/cov2.txt"
 git -C "$TMP" add -A
 git -C "$TMP" commit -qm "coverage changeset"
 COV_HEAD=$(git -C "$TMP" rev-parse HEAD)
+# Attribution is ledger-only, so this commit must be recorded as the session's
+# own; otherwise base-advance walks HC_BASE to HEAD, the changeset is empty
+# again, and coverage is trivially satisfied — the case would test nothing.
+printf '%s\n' "$COV_HEAD" > "$TMP/.claude/.harness/baselines/sess-abc123.own-commits"
 COV_DONE="$TMP/.claude/.harness/done-state/session-sess-abc123.json"
 cov_payload='{"dod":{"sources":["base"],"items":["x"]},"tests":{"exit_code":0,"command":"t","output_tail":"ok"},"lint":{"exit_code":0,"command":"t","output_tail":"ok"},"task_checks":[{"desc":"x","status":"passed"}],"escalation":null}'
 cov_log() { printf '{"contract_version":1,"reviewed_sha":"%s","min_review_level":"high","files_reviewed":%s,"findings":[]}\n' "$COV_HEAD" "$1" > "$TMP/.claude/.harness/review-log/$COV_HEAD.json"; }

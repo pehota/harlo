@@ -198,26 +198,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Chunk A (P0-a, M1 fix): session-mode base advances past CONFIDENTLY-FOREIGN
-# commits ONLY — email-only predicate, NO mutable mtime signal. These drive
-# hc__resolve_session_base directly (session mode = on trunk, no feature branch).
-# We source harness-common.sh (already sourced above) and set a per-session
-# baseline .sha at a chosen fork point, then assert HC_BASE. A leading commit is
-# CONFIDENTLY-FOREIGN iff session_email non-empty AND commit committer_email
-# non-empty AND they DIFFER; the base advances past it. Anything else (same
-# email, empty email) STOPS the advance — the commit is KEPT in the changeset.
-# The baseline .sha mtime is NO LONGER consulted (it was a mutable false-PASS
-# risk); its date is irrelevant to every case below (case A10 locks that in).
+# Chunk A (P0-a): session-mode base advances past commits NO agent tool call
+# produced. The predicate is LEDGER MEMBERSHIP and nothing else: a commit is
+# the agent's iff some baselines/*.own-commits lists it (written by
+# commit-ledger.sh, which observes HEAD movement inside a Bash call window).
+# The base advances past every leading NON-ledgered commit and STOPS at the
+# first ledgered one, which is KEPT in the changeset.
+#
+# Two signals these cases deliberately prove are NOT consulted:
+#   - committer EMAIL. Deleted (hc__commit_confidently_foreign is gone): the
+#     human and Claude Code share one git identity, so email never separated
+#     them, the base never advanced, and the gate demanded /done for commits the
+#     session never made. Cases A8/A10 pin that a same-email — and even an
+#     identity-less — repo behaves purely on the ledger.
+#   - the baseline .sha MTIME, a mutable false-PASS risk (M1). Cases A8/A11 pin
+#     that neither a touched mtime nor a backdated committer-date changes the
+#     verdict.
+# These drive hc__resolve_session_base directly (session mode = on trunk).
 seed_baseline() {
   local sha="$1"
   mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
   printf '%s\n' "$sha" > "$REPO/.claude/.harness/baselines/${SID}.sha"
 }
 
+# Record <sha>... in this session's commit ledger, as commit-ledger.sh's
+# PostToolUse sweep would have after observing HEAD move inside a call window.
+seed_ledger() {
+  mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+  local sha
+  for sha in "$@"; do
+    printf '%s\n' "$sha" >> "$REPO/.claude/.harness/baselines/${SID}.own-commits"
+  done
+}
+
 # Run hc_resolve in-process against $REPO for session $SID; sets HC_BASE etc.
 resolve_inproc() { CLAUDE_PROJECT_DIR="$REPO" hc_resolve "$SID" 2>/dev/null; }
 
-printf '== Case 7 (P0-a): different-email commit → base advances past it ==\n'
+printf '== Case 7 (P0-a): un-ledgered commit → base advances past it ==\n'
 new_repo; CLEANUP+=("$REPO"); SID="A7"
 commit_file base.txt                                   # c0 (orig base)
 C0=$(git -C "$REPO" rev-parse HEAD)
@@ -232,33 +249,42 @@ eq "case7 mode session" "session" "$HC_MODE"
 eq "case7 base advanced past foreign commit" "$CF" "$HC_BASE"
 eq "case7 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
 
-printf '== Case 8 (P0-a): SAME-email commit → base STOPS (not dropped), any mtime ==\n'
+printf '== Case 8 (P0-a): LEDGERED commit → base STOPS (not dropped), any mtime ==\n'
 new_repo; CLEANUP+=("$REPO"); SID="A8"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-commit_file mine.txt                                   # session identity (test@example.com)
+commit_file mine.txt                                   # observed in a call window
+C1=$(git -C "$REPO" rev-parse HEAD)
 seed_baseline "$C0"
+seed_ledger "$C1"
 # Advance the baseline .sha mtime to NOW (well AFTER the commit): under the old
-# AND-mtime logic this could misclassify the commit; under email-only it must NOT.
+# AND-mtime logic this could misclassify the commit; the mtime is not read.
 touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
 resolve_inproc
-eq "case8 base unchanged (same-email commit stays in changeset)" "$C0" "$HC_BASE"
+eq "case8 base unchanged (ledgered commit stays in changeset)" "$C0" "$HC_BASE"
 
 printf '== Case 9 (P0-a): leading-foreign-then-authored → base at first authored ==\n'
+# Ordering property: the advance is a LEADING run only, and stops dead at the
+# first ledgered commit. Both commits here carry the SAME git identity — proving
+# the split is membership, not email.
 new_repo; CLEANUP+=("$REPO"); SID="A9"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
-  GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
-  bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
+commit_file foreign.txt                                # never observed → foreign
 CF=$(git -C "$REPO" rev-parse HEAD)
-commit_file mine.txt                                   # session-authored (same email), after foreign
+commit_file mine.txt                                   # observed → ledgered
+C2=$(git -C "$REPO" rev-parse HEAD)
 seed_baseline "$C0"
+seed_ledger "$C2"
 resolve_inproc
 eq "case9 base lands just below first authored (= foreign sha)" "$CF" "$HC_BASE"
 eq "case9 base_orig unchanged" "$C0" "$HC_BASE_ORIG"
 
-printf '== Case 10 (P0-a): unset user.email → base UNCHANGED (full range) ==\n'
+printf '== Case 10 (P0-a): committer email is not consulted at all ==\n'
+# A DIFFERENT-email commit that IS ledgered must be KEPT (an agent can commit
+# with --author, or under a repo-local identity that differs from the global
+# one), and the verdict must not change when git has no user.email to compare
+# against — there is nothing left in this path that reads email.
 new_repo; CLEANUP+=("$REPO"); SID="A10"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
@@ -266,31 +292,34 @@ seed_baseline "$C0"
 GIT_COMMITTER_EMAIL="foreign@other.test" GIT_COMMITTER_NAME="Foreign" \
   GIT_AUTHOR_EMAIL="foreign@other.test" GIT_AUTHOR_NAME="Foreign" \
   bash -c "cd '$REPO' && echo x > foreign.txt && git add foreign.txt && git commit -qm foreign"
-git -C "$REPO" config --unset user.email 2>/dev/null                 # no identity → nothing confidently foreign
+CF=$(git -C "$REPO" rev-parse HEAD)
+seed_ledger "$CF"
+git -C "$REPO" config --unset user.email 2>/dev/null                 # no identity to compare with
 resolve_inproc
-eq "case10 base UNCHANGED with empty user.email (full range)" "$C0" "$HC_BASE"
+eq "case10 base UNCHANGED: ledgered commit kept despite a different email" "$C0" "$HC_BASE"
 git -C "$REPO" config user.email "test@example.com" >/dev/null 2>&1   # restore
 
-printf '== Case 11 (M1 regression lock): same-email commit older than baseline mtime → KEPT ==\n'
+printf '== Case 11 (M1 regression lock): ledgered commit older than baseline mtime → KEPT ==\n'
 # The M1 bug: the old AND-mtime logic would misclassify a genuinely session-
 # authored commit as FOREIGN when the baseline .sha mtime is advanced past the
 # commit's committer-date (touch/clock-skew), advancing the base past it and
 # letting the gate PASS with real work unverified. This case backdates the
 # commit's committer-date to WELL BEFORE the baseline .sha mtime. Under the old
-# logic the base would wrongly advance to the commit (base == C1); under the new
-# email-only logic the same-email commit is NOT confidently foreign → base STAYS
-# at C0 → the commit remains in the changeset. Fails under old logic, passes now.
+# logic the base would wrongly advance to the commit (base == C1); ledger
+# membership carries no timestamp at all → base STAYS at C0 → the commit remains
+# in the changeset. Fails under the old logic, passes now.
 new_repo; CLEANUP+=("$REPO"); SID="A11"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)
-# Same-email commit, but committer-date backdated far into the past.
+# Ledgered commit, but committer-date backdated far into the past.
 GIT_COMMITTER_DATE="2001-01-01T00:00:00" GIT_AUTHOR_DATE="2001-01-01T00:00:00" \
   bash -c "cd '$REPO' && echo m > mine.txt && git add mine.txt && git commit -qm mine"
 seed_baseline "$C0"
+seed_ledger "$(git -C "$REPO" rev-parse HEAD)"
 # Force the baseline .sha mtime to NOW — far AFTER the commit's 2001 date.
 touch "$REPO/.claude/.harness/baselines/${SID}.sha" 2>/dev/null
 resolve_inproc
-eq "case11 base UNCHANGED (same-email commit kept despite older date)" "$C0" "$HC_BASE"
+eq "case11 base UNCHANGED (ledgered commit kept despite older date)" "$C0" "$HC_BASE"
 
 # ---------------------------------------------------------------------------
 printf '\n== Summary: %d passed, %d failed ==\n' "$PASS" "$FAIL"
