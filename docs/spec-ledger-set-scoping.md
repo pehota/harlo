@@ -1,8 +1,28 @@
 # Spec — ledger-set scoping for the DoD reviewer range
 
-**Status:** draft
+**Status:** implemented — **the attribution half is superseded** (see note)
 **Date:** 2026-09-04
 **Owner:** harlo-2d session (design consult; harlo-advisor peer offline)
+
+> **Superseded in part, 2026-09-09.** The *set-scoping* fix this spec proposes
+> shipped and still stands: the DoD scope is the agent-authored commit **set**
+> within `HC_BASE_ORIG..HEAD`, not a range off a single base point. ⚠ But read the
+> Problem section below with care: the specific grievance it opens with — "Session
+> A's `/done` DoD-reviews a commit that Session B produced" — is now **intended
+> behaviour**, not the bug. Membership is cross-session, so two concurrent agent
+> sessions carry the same authored set; the alternative (each reading the peer's
+> commit as foreign and advancing past it) meant nobody reviewed it. What
+> set-scoping still fixes is the interior commit in **no** ledger — a human
+> hand-commit landing between two of the agent's own. What changed
+> underneath it is the **membership predicate** the set is built from. This spec
+> describes `hc__commit_session_authored` as *ledger-preferring with a
+> committer-email fallback*; the email tier and the per-session
+> `hc__commit_in_ledger` have since been **deleted**, and membership is now
+> `hc__commit_in_any_ledger` — ledger membership across all sessions, with
+> absent-or-empty meaning "no agent commit observed". Read the code listings
+> below as the historical proposal they are; `docs/architecture.md` §7/§12 and
+> `docs/design.md` carry the current behaviour. Kept as the record of *why* the
+> set-vs-point argument was made.
 
 ---
 
@@ -50,7 +70,10 @@ The per-commit "is this positively the session's own work?" predicate **already
 exists**: `hc__commit_session_authored` (`harness-common.sh:784`). It is
 **ledger-preferring** — when `baselines/<sid>.own-commits` exists and is
 non-empty it delegates to `hc__commit_in_ledger`; otherwise it falls back to the
-committer-email check. `hc__session_authored_count` (`:746`) already walks
+committer-email check. *(As of 2026-09-09 both of those are gone: it is a thin
+alias over `hc__commit_in_any_ledger`, no email tier — see the note at the top.
+The spec's reuse argument is unaffected, since the predicate kept its name and
+signature.)* `hc__session_authored_count` (`:746`) already walks
 `orig_base..head` applying it, for the "N authored this session" summary line.
 
 **This spec reuses `hc__commit_session_authored`** as the membership test — it
@@ -61,8 +84,17 @@ must not introduce a parallel ledger call. The only new code is a helper that
 
 - Uncommitted parallel edits — `hc_tree_status` is per-session via the `.dirty`
   baseline (`harness-common.sh:913+`).
-- Ledger-absent / empty-ledger sessions — email-only fallback in
-  `hc__commit_session_authored` stays as-is (0.1.15 regression guard).
+- Ledger-absent / empty-ledger sessions — at the time of writing these degraded
+  to the email-only fallback in `hc__commit_session_authored`, kept as a guard
+  against the 0.1.15 regression (reading an empty ledger as "owns nothing"
+  advanced `HC_BASE` to HEAD and let the gate PASS with real committed work
+  unverified). ⚠ **No longer true (2026-09-09):** the email tier is gone, and
+  absent-or-empty now means "no agent commit observed" → base advances to HEAD →
+  the gate's Step 3c allows the Stop with no DoD. The 0.1.15 false-PASS is closed
+  from the other end instead: the ledger sweep is unconditional (it no longer
+  depends on a command-text heuristic that routinely missed real agent commits),
+  so an empty ledger beside a non-empty commit range now genuinely means an agent
+  did not make those commits. See `architecture.md` §14, entry 2026-09-09.
 - Task mode — `hc__resolve_task_base` deliberately never advances past foreign
   commits; the pinned fork point is the anchor. This spec is **session mode
   only**.

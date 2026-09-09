@@ -100,8 +100,10 @@ git facts; everything the agent *says* is trust-but-falsifiable.
 
 ## 3. C4 Level 2 — Containers
 
-The harness is four hooks + one skill + one sourced library + config + a state
-store. Each hook fires on a different runtime event. The **shared resolver
+The harness is four hook *events* — wired five times, because `commit-ledger.sh`
+is wired **twice** on the same `Bash` matcher (PreToolUse pins, PostToolUse
+sweeps; §10, §12) — plus one skill, one sourced library, config and a state
+store. Each event fires at a different runtime moment. The **shared resolver
 library** (`harness-common.sh`) is *sourced* by every script that needs identity
 or tree classification — never reimplemented — so the gate, the writer, and the
 preflight can never disagree.
@@ -117,7 +119,7 @@ C4Container
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
     Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
-    Container(post, "PostToolUse hook", "commit-ledger.sh", "matcher Bash — session mode only; commit-shaped commands (commit/merge/rebase/cherry-pick/revert/am/pull) append newly-landed SHAs to baselines/&lt;sid&gt;.own-commits; recovers from amend/rebase by retrying against the session's .sha baseline")
+    Container(post, "Pre+PostToolUse hook (wired twice)", "commit-ledger.sh", "matcher Bash — session mode only; PreToolUse pins HEAD to baselines/&lt;sid&gt;.cursor, PostToolUse sweeps CURSOR..HEAD (unconditionally, deduped) into baselines/&lt;sid&gt;.own-commits. HEAD moving inside a tool-call window IS the attribution; no command-text parsing, no committer-email guess. No-ops mid-rebase/merge")
     Container(skill, "/done skill (thin)", "skills/done/SKILL.md + dod-protocol.md", "Thin entry point: runs triage, then reads each applicable step's section from dod-protocol.md on demand (progressive disclosure)")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base, authorship base-advance) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_review_blocking/hc_review_coverage_gap (blob-keyed) + hc_validate (jq-only schema validator) + hc_state (S0/S1/S2/S4/S5)")
     Container(wrap, "Resolver wrapper", "harness-resolve.sh (exec)", "Sources lib, prints mode/task_key/base as a self-validated JSON object (resolver-output contract)")
@@ -135,7 +137,7 @@ C4Container
   Rel(agent, gate, "turn exit → fires")
   Rel(agent, start, "session begins → fires")
   Rel(agent, pre, "Write/Edit → fires")
-  Rel(agent, post, "Bash → fires (session mode only)")
+  Rel(agent, post, "Bash → fires TWICE (pre + post; session mode only)")
   Rel(user, skill, "invokes /done")
 
   Rel(gate, lib, "sources → hc_resolve, hc_tree_status")
@@ -155,7 +157,7 @@ C4Container
   Rel(gate, state, "reads done-state + review-log")
   Rel(start, state, "writes baselines/tree-base/task-base")
   Rel(pre, state, "writes tree-base")
-  Rel(post, state, "appends baselines/&lt;sid&gt;.own-commits")
+  Rel(post, state, "pins baselines/&lt;sid&gt;.cursor → appends baselines/&lt;sid&gt;.own-commits")
   Rel(write, state, "writes done-state")
   Rel(detect, cfg, "seed/refresh + write-time validate")
   Rel(gate, schemas, "hc_validate done-state + review-log")
@@ -170,11 +172,16 @@ C4Container
 **How to read this / key decisions.**
 - **Hook timing:** SessionStart runs once at session begin (before any edit) →
   it is the *only* reliable place to pin a clean tree baseline. PreToolUse fires
-  before *every* Write/Edit (cheap off-trunk fast-path). PostToolUse fires
-  after *every* Bash call (session mode only) — a commit-shaped command appends
-  the SHAs it just landed to the session's own-commits ledger, feeding
-  base-advance's ledger-first predicate (§10, §12). Stop fires on *every*
-  turn exit — the structurally unavoidable enforcement point.
+  before *every* Write/Edit (cheap off-trunk fast-path). PreToolUse **also**
+  fires on *every* Bash call, and PostToolUse fires after it (both session mode
+  only): the pair brackets the call into a **window**, pinning HEAD before and
+  sweeping `CURSOR..HEAD` after, so every commit the window spans lands in the
+  session's own-commits ledger — the single base-advance signal (§10, §12).
+  Bracketing is what makes the ledger *observation* rather than inference: the
+  hook never reads the command text, so a commit made inside a script, a
+  Makefile target, a git alias or `gh pr merge` is recorded exactly like a bare
+  `git commit`. Stop fires on *every* turn exit — the structurally unavoidable
+  enforcement point.
 - **Sourced, not shelled:** the gate/writer/preflight `. harness-common.sh` and
   call `hc_resolve`/`hc_tree_status`/`hc_validate` as shell functions. The skill
   instead runs `harness-resolve.sh` (an executable wrapper) because a skill can
@@ -194,10 +201,14 @@ C4Container
   - **`install.sh` mirror**: copies the bundle into the target's `.claude/`
     (including `contracts/` → `.claude/contracts/`, the schema store `hc_validate`
     reads, and `agents/` → `.claude/agents/`, so Step 5's reviewer resolves bare as
-    `dod-reviewer` instead of `completion-harness:dod-reviewer`), wires **only**
-    Stop + SessionStart + PreToolUse into
-    `settings.local.json` via a `jq` merge (PostToolUse/`commit-ledger.sh` is
-    plugin-only — see §12's edge-case matrix), and
+    `dod-reviewer` instead of `completion-harness:dod-reviewer`), wires
+    **all four events** into `settings.local.json` via a `jq` merge — Stop,
+    SessionStart, PreToolUse(`Write|Edit`, auto-branch), PreToolUse(`Bash`,
+    `commit-ledger.sh pre`) and PostToolUse(`Bash`, `commit-ledger.sh`) — each
+    appended only if that exact command string is not already present, so the
+    merge is idempotent and the mirror is hook-for-hook equivalent to the plugin
+    (⚠ this doc previously claimed PostToolUse was plugin-only; it never was —
+    see §14), and
     `sed`-rewrites `${CLAUDE_PLUGIN_ROOT}` → `$CLAUDE_PROJECT_DIR/.claude` in the
     copied `SKILL.md`. State refs (`$CLAUDE_PROJECT_DIR/.claude/.harness/...`) are
     untouched. `install.sh` copies `dod/base-dod.md` → **`.claude/dod/base-dod.md`**
@@ -312,8 +323,9 @@ sequenceDiagram
   Note over RT,ST: hc_resolve; if task mode pin task-base/tree-base
   AG->>GIT: edits code (Write/Edit)
   RT->>GIT: PreToolUse (auto-branch.sh)<br/>on trunk → checkout -b task/&lt;ts&gt;; pin tree-base
-  AG->>GIT: git commit
-  RT->>ST: PostToolUse (commit-ledger.sh)<br/>session mode + commit-shaped command → append landed SHA(s) to baselines/&lt;sid&gt;.own-commits
+  RT->>ST: PreToolUse (commit-ledger.sh pre)<br/>session mode → pin HEAD to baselines/&lt;sid&gt;.cursor (window opens)
+  AG->>GIT: git commit (directly, or inside a script/alias/Makefile — indistinguishable here, by design)
+  RT->>ST: PostToolUse (commit-ledger.sh)<br/>session mode → sweep CURSOR..HEAD, dedupe, append to baselines/&lt;sid&gt;.own-commits (window closes)
   AG-->>RT: ends turn ("done")
   RT->>ST: Stop (done-gate.sh) reads done-state/&lt;task_key&gt;
   ST-->>RT: absent
@@ -472,9 +484,18 @@ flowchart TD
   rather than the done-state "run /done" reason.
 - **Step 3c empty-changeset short-circuit (#6).** Reaching here means no
   introduced tree blockers. If `git diff --quiet HC_BASE HEAD` (the committed
-  range is genuinely empty — e.g. after authorship base-advance left HEAD atop
-  an identical tree), there is nothing to verify → allow. `git diff --quiet`
-  exits 0 only on a truly empty diff; any git failure falls through to the gate.
+  range is genuinely empty), there is nothing to verify → allow. `git diff
+  --quiet` exits 0 only on a truly empty diff; any git failure falls through to
+  the gate. **This is the exit for a session that committed nothing** — not an
+  exotic case but the common one: with no commit in any ledger, base-advance
+  walks `HC_BASE_ORIG..HEAD` to its last entry (HEAD itself), `HC_BASE == HEAD`,
+  and the range is empty. So a pure Q&A session Stops silently even if the human
+  hand-committed in another terminal meanwhile. Note the exact scope of that
+  promise: it holds only while nothing **agent-authored** landed in the range — a
+  *concurrent agent session's* commit IS in a ledger (membership is cross-session),
+  so the walk breaks there and the gate engages. Before the ledger became the
+  single source of truth that session blocked forever (§14, and §12's "Leading
+  foreign commits" row).
 - **Step 3d escalation-accept sidecar (cross-session, #6).** An accepted
   escalation is also persisted as `escalation-accept/<HEAD>.json`, keyed to the
   exact committed HEAD. A *different* session (fresh `session-<id>` key) has no
@@ -605,44 +626,94 @@ flowchart TD
   MBQ -->|no| DEGR["UNRELATED HISTORIES:<br/>degrade → SESSION mode<br/>task_key = session-&lt;id&gt;, do NOT pin"]
 
   SESS --> SB["HC_BASE = baselines/&lt;id&gt;.sha (or empty)<br/>HC_BASE_ORIG = same (unadvanced)"]
-  SB --> ADV["ADVANCE past leading CONFIDENTLY-FOREIGN commits (#6)<br/>walk HC_BASE_ORIG..HEAD oldest→newest;<br/>while committer_email ≠ session_email (both non-empty)<br/>→ HC_BASE = that commit; STOP at first non-foreign<br/>(same/empty email or any doubt → keep it & everything after)"]
+  SB --> TW{"TRIPWIRE: hc__ledger_history_rewritten<br/>every sha in THIS session's ledger still<br/>cat-file -e AND is-ancestor of HEAD?<br/>(absent/empty ledger → vacuously yes)"}
+  TW -->|"NO — our own history was rewritten"| NOADV["DO NOT ADVANCE AT ALL<br/>HC_BASE stays HC_BASE_ORIG → full changeset → gate engages<br/>(refuses to guess; over-block, never a silent skip)"]
+  TW -->|yes| ADV["ADVANCE past leading NON-LEDGERED commits (#6)<br/>walk HC_BASE_ORIG..HEAD oldest→newest;<br/>while sha is in NO session's *.own-commits ledger<br/>→ HC_BASE = that commit; STOP at the first sha that IS<br/>(no ledger at all → walks to HEAD → empty changeset)"]
   DEGR --> SB
 
   READ --> TB
   WRITE --> TB
+  NOADV --> TB
   ADV --> TB["set HC_TREE_BASE_FILE on FINAL mode:<br/>TASK → tree-base/&lt;key&gt;.dirty (pinned once)<br/>SESSION → baselines/&lt;id&gt;.dirty (per session)"]
 ```
 
 **How to read this / key decisions.**
 - **Authorship-scoped base advance (SESSION mode, #6).** After reading the
   SessionStart baseline, `hc__resolve_session_base` walks `HC_BASE_ORIG..HEAD`
-  oldest→newest and advances `HC_BASE` past each **CONFIDENTLY-FOREIGN** leading
-  commit — one whose committer email is non-empty and *provably differs* from the
-  session's `git config user.email` (also non-empty). It **STOPS** at the first
-  commit that is not confidently foreign (same email, either email empty, or any
-  git error) and keeps that commit and everything after it in the changeset. This
-  is **fail-safe**: any uncertainty keeps the commit in the gate; we never advance
-  past a commit that might be the session's. The email-only predicate deliberately
-  dropped the old mutable `committer_date >= mtime(baseline.sha)` signal (a
-  touch/clock-skew could misclassify a real session commit as foreign → false
-  PASS). `HC_BASE_ORIG` retains the *unadvanced* baseline so `hc_changeset_summary`
-  can honestly report "0 authored this session". **Task mode never advances** — the
-  pinned fork point is the anchor, so `HC_BASE_ORIG` always mirrors `HC_BASE`.
+  oldest→newest and advances `HC_BASE` past each leading commit that is
+  **agent-authored by nobody** — i.e. absent from *every* session's
+  `baselines/*.own-commits` ledger (`hc__commit_in_any_ledger`). It **STOPS** at
+  the first sha that IS in a ledger, keeping that commit and everything after it
+  in the changeset.
+- **Why ledger membership is the only signal.** Membership is *direct
+  observation*: HEAD moved between a Bash call's PreToolUse pin and its
+  PostToolUse sweep, so an agent tool call produced the commit. Nothing about the
+  command text, the author, or the clock is consulted, so nothing can be
+  misread. The predicate is checked **across all sessions'** ledgers, not just
+  the querying one: a concurrent agent session's commit is still agent work, and
+  a per-session check would make each session read the other's commits as foreign
+  and advance past work nobody then reviews. Cross-session scope needs no extra
+  age bound — every query already runs over `HC_BASE_ORIG..HEAD`, and baselines
+  age-reap at 14 days.
+- **Absent or empty ledger means "no agent commit observed" — and that is the
+  answer, not a gap.** There is no second tier. Committer email used to be one,
+  and it could never work: the human and Claude Code commit under the **same git
+  identity**, so no commit was ever provably foreign, the base never advanced,
+  and a session that changed nothing was told to run a full `/done` because
+  someone had hand-committed in another terminal. With no ledger the walk reaches
+  the range's last entry (HEAD), `HC_BASE == HEAD`, and Step 3c allows the Stop
+  with no DoD run — correct, because nothing observed means nothing to review.
+  Uncommitted work is **not** covered by this and must not be: `hc_tree_status`
+  gates it against the pinned tree baseline, ledger-independently.
+- **Reachability tripwire (runs BEFORE any advance).** The ledger keys on SHA
+  identity, but rebase / amend / cherry-pick change a SHA while preserving its
+  content. A mid-session `git pull --rebase` turns the agent's own `A` into `A'`,
+  which is in no ledger, would read as foreign, and would take **real agent work
+  silently out of the changeset** — the one direction this harness must never
+  fail in. So `hc__ledger_history_rewritten` first checks that every sha in
+  **this session's** ledger still exists (`cat-file -e`) and is still an ancestor
+  of HEAD. Any failure ⇒ history was rewritten underneath us ⇒ **no advance at
+  all**, full changeset, gate engages. It does not *recover* the attribution; it
+  refuses to guess, converting a silent skip into an over-block. Scope is
+  deliberately this session's ledger only — other sessions' ledgers routinely
+  hold shas unreachable from our HEAD (deleted branches), and tripping on those
+  would block every session forever. Content identity (`git patch-id` stored
+  beside each sha, matching either) is the real fix and is a ledger **format**
+  change deferred to its own changeset.
+- **Fail-safe direction, restated.** Every uncertain path here **over**-includes:
+  doubt keeps commits in the changeset and makes the gate demand a `/done`. The
+  unsafe direction — dropping a real agent commit — requires HEAD to move
+  *outside* every tool-call window, which is exactly the genuine human/foreign
+  case the advance is meant to skip. `HC_BASE_ORIG` retains the *unadvanced*
+  baseline so `hc_changeset_summary` can honestly report "0 authored this
+  session". **Task mode never advances** — the pinned fork point is the anchor,
+  so `HC_BASE_ORIG` always mirrors `HC_BASE`.
 - **Interior foreign commit — set scope, not point (SESSION mode).** Base-advance
   only skips the *contiguous leading* run; an interior peer commit
   (`base → A → X → B`) stays in `HC_BASE_ORIG..HEAD`. So the DoD review and
   `hc_review_coverage_gap` scope to the session-authored **SET** within
   `HC_BASE_ORIG..HEAD` (`hc_session_changeset_commits` / `hc_session_changeset_files`,
   reusing `hc__commit_session_authored`), not the `<base>..HEAD` range —
-  non-contiguous foreign commits fall out, disjoint from the peer session's own
-  ledger-scoped `/done`. Computed from `HC_BASE_ORIG` (not the advanced `HC_BASE`)
+  a non-contiguous commit that is in **no** ledger (a human hand-commit landing
+  between two of the agent's own) falls out — that is what set-scoping buys. A
+  commit in **another agent session's** ledger stays in, deliberately: membership
+  is cross-session, so two concurrent agent sessions carry the *same* authored set
+  rather than disjoint ones. That is the chosen side of the tradeoff — under
+  per-session ledgers each session read the peer's commit as foreign and advanced
+  past it, so *nobody* reviewed it; cross-session membership means one session may
+  review work it did not write. Over-block, consistent with every other uncertain
+  path here. Computed from `HC_BASE_ORIG` (not the advanced `HC_BASE`)
   so an interior own-commit below the advanced base is still covered, and the
   coverage-gap chain-walk shares that lower bound. Engagement is
-  `hc__commit_session_authored` (ledger membership when `own-commits` is present
-  and non-empty, committer-email match otherwise — so the set path is the norm,
-  not the exception, under a shared git identity); empty helper output (no commit
-  passes that predicate, no session id, or empty `orig_base`) → range-diff path,
-  today's behaviour. See the edge-case matrix row "Interior foreign commit".
+  `hc__commit_session_authored`, now a thin alias over
+  `hc__commit_in_any_ledger` — ledger membership, nothing else (its
+  `<session_id>` argument is **vestigial**, kept only for shell-ABI signature
+  stability, since membership is cross-session by design). Empty helper output
+  (no commit in range is in any ledger, no session id, or empty `orig_base`) →
+  range-diff path against the point base. With no ledger that point base has
+  already advanced to HEAD, so the range diff is empty and Step 3c takes over —
+  the set path and the point path agree on "nothing to review". See the
+  edge-case matrix row "Interior foreign commit".
 - `HC_TREE_BASE_FILE` is set **after** `hc__resolve_task_base` runs, because that
   function can degrade task→session on unrelated histories — the tree-base path
   must follow the *final* mode.
@@ -814,6 +885,7 @@ flowchart LR
   BL --> B1["&lt;sid&gt;.sha"]
   BL --> B2["&lt;sid&gt;.dirty"]
   BL --> B3["&lt;sid&gt;.own-commits"]
+  BL --> B3c["&lt;sid&gt;.cursor"]
   BL --> B4["&lt;sha&gt;.tests.json"]
   TB --> T1["&lt;task_key&gt;.sha"]
   TRB --> TR1["&lt;task_key&gt;.dirty"]
@@ -829,7 +901,8 @@ flowchart LR
 | `baselines/<sid>.sha` | HEAD at SessionStart (session base) | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present) | age 14d |
 | `current-session` | authoritative session id (from SessionStart hook stdin) | — (single file) | baseline-snapshot | rewritten each SessionStart (all sources incl. compact) | age 14d |
 | `baselines/<sid>.dirty` | fork-point porcelain (session mode tree baseline); 0 bytes = genuinely clean at SessionStart | **session id** | baseline-snapshot | rewritten each session (**not** on `source=compact` if present); **atomic** temp+`mv`, and on a failed `git status` **no file is left** — a stale one is removed too | age 14d |
-| `baselines/<sid>.own-commits` | commit ledger: SHAs landed via THIS session's own Bash tool calls, one per line | **session id** | commit-ledger.sh (PostToolUse Bash, session mode only) | **append-only**; created (empty) on first Bash call, appended to only on commit-shaped commands; presence alone (even empty) means the hook has run — the primary signal `hc__resolve_session_base` checks before falling back to email | age 14d |
+| `baselines/<sid>.own-commits` | commit ledger: SHAs whose creation was OBSERVED inside one of this session's Bash tool-call windows, one per line | **session id** | `commit-ledger.sh` (PostToolUse Bash, session mode only) | **append-only, deduped**; created (empty) by the `pre` half on the first Bash call, then swept unconditionally from `CURSOR..HEAD` after *every* Bash call — no command-shape gate. Presence-vs-absence carries **no tier distinction any more**: absent and empty both mean "no agent commit observed", and `hc__commit_in_any_ledger` reads *all* sessions' ledgers, not just this one | age 14d |
+| `baselines/<sid>.cursor` | HEAD as it stood when the current Bash call started — the tool-call window's lower bound | **session id** | `commit-ledger.sh pre` (PreToolUse Bash, session mode only) | **whole-file overwrite on every Bash call — last pin wins**, so nested/parallel calls *narrow* the window instead of widening it (the opposite of `.own-commits`, which only grows). Pinned externally, which is why the sweep needs no ancestor check: unlike the old ledger-tail cursor it has no feedback loop, so one orphaned sha cannot poison later calls. Missing at sweep time (an install with only PostToolUse wired, or a call denied before `pre` ran) → the sweep falls back to `baselines/<sid>.sha` and claims everything since SessionStart: a deliberate over-include, since over-claiming costs a spurious review demand while under-claiming silently skips one | age 14d |
 | `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | age 14d |
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
 | `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded; same atomic capture / no-file-on-failure rule | age-**excluded**; **terminal reap** on merge/gone |
@@ -897,7 +970,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Pre-existing untracked** | `?? x` in baseline → WARNING under `baseline` policy; BLOCKER under `strict` | `hc_tree_status` untracked handling |
 | **Agent's own new file** | Not in baseline → BLOCKER → gate Step 3b BLOCK; writer refuses | `hc_tree_status` else-branch (both policies) |
 | **Missing tree baseline (`.dirty`)** | SessionStart records it on every git-repo start (0 bytes when the tree is clean, session-scoped fallback if the resolver failed) — but the capture is atomic, so a failed `git status` leaves **no** file (and removes a stale one) rather than a misleading empty one. If absent, `hc_tree_status` sets `HC_TREE_BASELINE_MISSING=1` and degrades to STRICT (every pre-existing entry blocks → deadlock), with wording that **hedges on authorship** instead of claiming the session introduced those paths; preflight raises a **HARD problem** (NOT WINNABLE), not a warning | `baseline-snapshot.sh` `pin_tree_baseline` (temp+`mv`); `hc_tree_status` / `hc_tree_remediation`; `done-preflight.sh` Check 3 (blocking) |
-| **Tree-identical HEAD move** | `commit --amend -m` / `reset --soft` + recommit / a `pull --rebase` that replays the same patches → Step 5 falls back from sha to **tree** equality and carries the verification; `hc_state` applies the same test so SessionStart does not steer "run /done" at a HEAD the gate just allowed. Any tree-entry change (one byte, a mode flip, a symlink target, a gitlink bump) still blocks | `done-gate.sh` Step 5 `CARRY`; `hc_state` S2-vs-S5 boundary; `hc_done_state_blocked` two-path candidate set |
+| **Tree-identical HEAD move** | `commit --amend -m` / `reset --soft` + recommit / a `pull --rebase` that replays the same patches → Step 5 falls back from sha to **tree** equality and carries the verification; note this is the *gate*'s tolerance for a rewritten HEAD, orthogonal to the ledger's: the same rebase also trips `hc__ledger_history_rewritten`, which only refuses to advance the base (see "Mid-work rebase") — a wider changeset, still allowed by tree-carry if it was already verified; `hc_state` applies the same test so SessionStart does not steer "run /done" at a HEAD the gate just allowed. Any tree-entry change (one byte, a mode flip, a symlink target, a gitlink bump) still blocks | `done-gate.sh` Step 5 `CARRY`; `hc_state` S2-vs-S5 boundary; `hc_done_state_blocked` two-path candidate set |
 | **Orphaned review anchor** | After such an amend the reviewed sha is rewritten and drops out of the coverage chain. The done-state's `review_anchor_sha` is re-admitted by name — resolved at **its own sha** (`chain_admit`), so it cannot self-validate — and the reaper keeps its log alive. The next real commit only re-demands review of the files it actually touched | `done-gate.sh`/`done-write-state.sh` Step 8 admission split; `hc_review_coverage_gap` `chain_admit`; `hc_live_review_shas` |
 | **Session-id disagreement (gate id ≠ SessionStart id)** | Gate Step 2a-0 adopts `baselines/<marker_id>.sha` **as `HC_BASE`** — same producer (SessionStart, live HEAD, pre-edit) as the anchor it replaces, so it restores the Step-3 quiet exit for a session that changed nothing. Bounded: raw object id, live commit, **ancestor of HEAD**, session mode only, marker contents untrusted as a filename | `done-gate.sh` Step 2a-0; `tests/test-anchor-recovery.sh` I1–I3 |
 | **Prose-only edit on trunk** | The `PreToolUse` branch hook does not look at the edited path at all: every edit is in scope, so a docs-only task branches exactly like a code task and is then gated exactly like one | `auto-branch.sh`; `tests/test-autobranch.sh` cases 6–7 |
@@ -912,9 +985,12 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Non-git repo** | Gate Step 2 exit 0 (allow); SessionStart writes `no-git` baseline; preflight "harness inactive"; auto-branch no-ops | `done-gate.sh` Step 2; `baseline-snapshot.sh`; `done-preflight.sh` Check 1; `auto-branch.sh` `is-inside-work-tree` |
 | **Stop-hook loop guard** | `stop_hook_active==true` → exit 0 immediately (a block never traps forever) | `done-gate.sh` Step 1 |
 | **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 3b tree-check | `done-gate.sh` Step 3 |
-| **Empty committed changeset** | No introduced tree blockers AND `git diff --quiet HC_BASE HEAD` (range empty — e.g. after authorship base-advance left HEAD atop an identical tree) → exit 0 (nothing to verify) | `done-gate.sh` Step 3c; `git diff --quiet` |
-| **Leading foreign commits (session mode)** | `hc_resolve` advances HC_BASE past a leading run of NOT-this-session's commits; `HC_BASE_ORIG` keeps the unadvanced base for honest "N authored this session" reporting. Two-tier predicate, ledger first: if `baselines/<sid>.own-commits` EXISTS (the PostToolUse(Bash) ledger hook has fired this session), foreign = NOT a line in it — directly observed, immune to a human committing under the session's own git identity from a terminal. If the ledger is ABSENT (zero Bash calls this session, or the `install.sh` distribution mode, which never wires PostToolUse — see §3 — and so runs this fallback permanently, not as a transitional case), degrade to the original email-only predicate: foreign iff committer email is non-empty and provably differs from the session's. Fail-safe both ways: any doubt → keep the commit in the changeset | `hc__resolve_session_base`; `hc__commit_in_ledger`; `hc__commit_confidently_foreign`; `hc_changeset_summary`; `commit-ledger.sh` |
-| **Interior foreign commit (session mode)** | Base-advance only skips a *contiguous leading* run of foreign commits — an interior peer commit (`base → A → X → B`, `X` written by another session sharing the git identity) stays inside `HC_BASE_ORIG..HEAD`. When the ledger is engaged the DoD review scope is therefore the **session-authored commit SET** within `HC_BASE_ORIG..HEAD` (per-commit diff, unioned), not the `<base>..HEAD` range: `hc_session_changeset_commits` emits the SHAs `hc__commit_session_authored` accepts, `hc_session_changeset_files` unions their changed paths, and `hc_review_coverage_gap` demands coverage of that union. Non-contiguous foreign commits fall out; the peer's own `/done` scopes against its ledger — disjoint sets, no coordination. "Engaged" is via `hc__commit_session_authored` — ledger membership when `own-commits` is present and non-empty, **committer-email match otherwise** (so with no ledger file but a shared git identity the set path still engages, just email-scoped). Empty helper output (no session id, empty `orig_base`, or every commit confidently foreign) → range-diff path, exactly today's behaviour. Session mode only (task mode never advances past foreign commits) | `hc_session_changeset_commits`; `hc_session_changeset_files`; `hc__commit_session_authored`; `hc_review_coverage_gap` (7th `[orig_base]` arg) |
+| **Empty committed changeset** | No introduced tree blockers AND `git diff --quiet HC_BASE HEAD` → exit 0 (nothing to verify). This is the **primary** exit for a session that committed nothing, not a corner case: with no commit in any ledger the base-advance walks all the way to HEAD, so the range is empty by construction (see "Ledger absent or empty"). It also still covers the older shape — base-advance leaving HEAD atop an identical tree | `done-gate.sh` Step 3c; `hc__resolve_session_base`; `git diff --quiet` |
+| **Leading foreign commits (session mode)** | `hc_resolve` advances HC_BASE past a leading run of commits **no agent tool call produced**; `HC_BASE_ORIG` keeps the unadvanced base for honest "N authored this session" reporting. **Single-tier predicate:** foreign = the sha is in no session's `baselines/*.own-commits` ledger. Membership is direct observation (HEAD moved inside a Bash call's pre→post window) and is checked across **all** sessions' ledgers, so a concurrent agent session's commit still counts as agent work. There is no email tier — one shared git identity made email a coin flip that never advanced the base (see the empty-ledger row below) | `hc__resolve_session_base`; `hc__commit_in_any_ledger`; `hc_changeset_summary`; `commit-ledger.sh` |
+| **Ledger absent or empty (session committed nothing)** | Means exactly "no agent commit observed" — the advance walks `HC_BASE_ORIG..HEAD` to its last entry (HEAD), so `HC_BASE == HEAD`, Step 3c sees an empty range, and the Stop is allowed with **no DoD run**. Correct: a session that committed nothing has nothing to review. This replaces a deliberate degrade-to-email that blocked such sessions forever — observed case: a pure Jira Q&A session (zero edits, zero commits) demanded a full `/done` because the human hand-committed in another terminal mid-session. **Do not reintroduce a "safety" fallback here** — it re-creates the block-forever bug. Uncommitted work is unaffected: `hc_tree_status` gates it against the tree baseline, ledger-independently | `hc__commit_in_any_ledger` (no email tier); `hc__resolve_session_base`; `done-gate.sh` Step 3c; `hc_tree_status` |
+| **Mid-work rebase / amend / cherry-pick (session mode)** | Rewriting history changes a commit's SHA while preserving its content, so a rewritten agent commit `A → A'` is in no ledger and would read as foreign — dropping **real agent work out of the changeset**, the one direction the harness must never fail in. `hc__ledger_history_rewritten` runs **before** any advance: every sha in *this session's* ledger must still `cat-file -e` **and** be an ancestor of HEAD. Any failure ⇒ **no advance at all** ⇒ full changeset ⇒ gate engages. It does not recover the attribution, it refuses to guess — a silent skip converted into an over-block. Scope is this session's ledger only (peer ledgers routinely hold shas unreachable from our HEAD, e.g. deleted branches; tripping on those would block every session forever). **Deferred:** content identity via `git patch-id` stored beside each sha would actually recover the attribution — a ledger format change with its own migration, out of scope here | `hc__ledger_history_rewritten`; `hc__resolve_session_base` (early return) |
+| **Foreign commit inside the agent's own long Bash call** | **Accepted residual.** A hand-commit landing during, say, a 3-minute test run is inside that call's pre→post window and gets swept into the ledger, so it is misattributed as agent work and costs a spurious `/done` demand. Ceiling on the damage: every race outcome here is an **over**-block, never a skipped review — going unrecorded requires HEAD to move *outside* every call window, which is exactly the genuine human/foreign case. Concurrent same-tree sessions are already unsupported-racy (see "Parallel same-branch"). Upgrade path if it ever bites: correlate `git reflog HEAD` entries with the window instead of a bare two-point HEAD diff, or have the agent's commit path stamp the sha directly | `commit-ledger.sh` (`ponytail:` accepted-residual note); `hc__commit_in_any_ledger` |
+| **Interior foreign commit (session mode)** | Base-advance only skips a *contiguous leading* run of foreign commits — an interior peer commit (`base → A → X → B`, `X` written by another session sharing the git identity) stays inside `HC_BASE_ORIG..HEAD`. When the ledger is engaged the DoD review scope is therefore the **session-authored commit SET** within `HC_BASE_ORIG..HEAD` (per-commit diff, unioned), not the `<base>..HEAD` range: `hc_session_changeset_commits` emits the SHAs `hc__commit_session_authored` accepts, `hc_session_changeset_files` unions their changed paths, and `hc_review_coverage_gap` demands coverage of that union. A non-contiguous commit in **no** ledger (a human hand-commit) falls out — that is the value. A commit in **another agent session's** ledger stays in, deliberately: membership is cross-session, so two concurrent agent sessions carry the *same* authored set, not disjoint ones (⚠ disjointness was a property of the per-session ledger, deleted 2026-09-09). Per-session scoping made each session read the peer's commit as foreign and advance past it, so *nobody* reviewed it; the cost of the swap is that one session may review work it did not write — an over-block, consistent with every other uncertain path here. "Engaged" is via `hc__commit_session_authored`, now a thin alias over `hc__commit_in_any_ledger` — **ledger membership, nothing else** (its `<session_id>` arg is vestigial, kept for shell-ABI signature stability). Empty helper output (no session id, empty `orig_base`, or no commit in range in any ledger) → range-diff path; with no ledger the point base has already advanced to HEAD, so that range diff is empty too and Step 3c takes over — set path and point path agree on "nothing to review". Session mode only (task mode never advances past foreign commits) | `hc_session_changeset_commits`; `hc_session_changeset_files`; `hc__commit_session_authored`; `hc_review_coverage_gap` (7th `[orig_base]` arg) |
 | **Cross-turn escalation question** | `/done` writes `pending-escalation/<task_key>.json` before AskUserQuestion; the gate consumes it and allows **exactly once** so the question reaches the user; next Stop re-gates | `done-gate.sh` Step 2b; `dod-protocol.md` escalation rules |
 | **Cross-session accepted escalation** | Accepted escalation persisted as `escalation-accept/<HEAD>.json`; a fresh session with no done-state still passes at that exact HEAD via Step 3d; any new commit → new sha → re-block | `done-gate.sh` Step 3d; `done-write-state.sh` sidecar write |
 | **Tests could not run** | `tests:{status:"not_run", reason}` accepted **only** with an escalation; without one → BLOCK ("tests were not run and there is no escalation") | `done-gate.sh` Step 8 `not_run` guard; `done-write-state.sh` refusal |
@@ -922,7 +998,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Triage unavailable / errors** | `done-triage.sh` exits non-zero or prints nothing → SKILL fallback runs ALL steps (a wrongly-excluded step is the one unacceptable outcome); the audit plan is best-effort and the gate has NO precondition on it | `done-triage.sh` fail-safe; thin `SKILL.md` fallback |
 | **Prose-only changeset** | No special case: the harness snapshots git state at SessionStart and reviews **everything** that changed at Stop. A docs-only changeset lands in S1/S2 and is gated like any other — there is no file classification anywhere in the harness, because every classify-and-skip feature historically ended up disarming the gate | `hc_state`; `done-gate.sh` Steps 3b/3c; `done-triage.sh` (no scope short-circuit) |
 | **Auto-branch fallback (empty pin)** | Branch created but no clean SessionStart `.dirty` snapshot → pin **empty** tree-base → everything blocks (safe) | `auto-branch.sh` `: > HC_TREE_BASE_FILE` |
-| **Mid-rebase/merge** | Auto-branch no-ops (MERGE_HEAD / rebase-apply / rebase-merge present) | `auto-branch.sh` git-dir guard |
+| **Mid-rebase/merge** | Auto-branch no-ops, and `commit-ledger.sh` no-ops in **both** modes (MERGE_HEAD / rebase-apply / rebase-merge present) — the same GIT_DIR probe, sited in the ledger hook's *shared* preamble so `pre` and `post` cannot diverge on it. Mid-operation HEAD is detached and steps over transient commits that vanish on completion; pinning or sweeping them would only dirty the ledger. Afterwards the next Bash call pins the cursor at the NEW HEAD, so the rewritten commits never enter the ledger — and the reachability tripwire then fires on the now-unreachable PRE-rebase sha and refuses to advance (see "Mid-work rebase") | `auto-branch.sh` git-dir guard; `commit-ledger.sh` shared preamble; `hc__ledger_history_rewritten` |
 | **14-day reap** | SessionStart deletes `.harness/*` files older than 14d, **excluding** `task-base/*` and `tree-base/*` | `baseline-snapshot.sh` `find -mtime +14 -delete -not -path` |
 | **Mid-task compact** | `source=="compact"` (manual `/compact` or auto-compaction) fires mid-task with a dirty tree. SessionStart **preserves** an existing `baselines/<sid>.{sha,dirty}` (writes only if absent) so the agent's own WIP is not captured as "pre-existing"; `current-session` marker still written. Other sources (startup/resume/clear/fork/empty) refresh as before | `baseline-snapshot.sh` `IS_COMPACT` guard on the `.sha` write and the session-mode `.dirty` write |
 | **Merged/gone task (terminal reap)** | A `br-*` task whose branch is merged into trunk or gone → its `task-base`/`tree-base`/`done-state` reaped; an **unmerged (in-progress)** branch's state is KEPT; the **current branch is always kept**; **skipped entirely when trunk is unconfident** (never guess "merged") | `baseline-snapshot.sh` terminal-reap block; `hc_live_task_keys` keep-set + `hc__detect_trunk` |
@@ -1021,7 +1097,9 @@ brought the docs back to the current code:
 - **Authorship-scoped changeset (#6).** In session mode `hc_resolve` advances the
   base past leading FOREIGN commits (committer-email, fail-safe) and keeps
   `HC_BASE_ORIG` for honest reporting; the block message prepends
-  `hc_changeset_summary`.
+  `hc_changeset_summary`. *(The committer-email predicate named here was deleted
+  outright in the 2026-09-09 entry below — see it for why email could never
+  work.)*
 - **Escalation across turns/sessions (#6).** `pending-escalation/<task_key>.json`
   one-shot pass (Step 2b); SHA-keyed `escalation-accept/<HEAD>.json` sidecar (Step
   3d + written by `done-write-state.sh`); `tests.status:"not_run"` valid only with
@@ -1075,16 +1153,92 @@ commits moved the gate ahead of the docs; this re-sync brought them back:
 `PostToolUse(Bash)` hook `commit-ledger.sh` and a ledger-first base-advance
 predicate ahead of the docs; this re-sync brought §2/§3's container/context
 diagrams, the lifecycle sequence, §10's state-store table and §12's edge-case
-matrix in line. Also disambiguated: §3's "wires the three hooks" line is
-`install.sh`-mirror-specific (that mirror's jq merge only ever wires
-Stop/SessionStart/PreToolUse, never PostToolUse) and now says so explicitly,
-since it previously sat right next to §3's new "the harness is four hooks"
-opener with nothing reconciling the two counts. The edge-case matrix's
-"email-only fallback" row previously called the no-ledger case an
-"older/unwired install," implying a transitional state; it does not apply to
-`install.sh` installs at all, which run email-only permanently since that
-distribution mode never wires PostToolUse. `design.md`'s matching predicate
-description was corrected the same way.
+matrix in line. ⚠ **That entry got one thing wrong, in three places** (see the
+2026-09-09 entry below for the correction): it "disambiguated" §3 by asserting
+that the `install.sh` mirror wires only Stop/SessionStart/PreToolUse and never
+PostToolUse, and propagated that into §12's matrix row and `design.md` as "the
+mirror runs email-only permanently." `install.sh` has wired `POST_CMD` →
+PostToolUse(Bash) all along (it even echoes "wired Stop + SessionStart +
+PreToolUse + PostToolUse"). The two hook counts it was trying to reconcile were
+never actually in conflict; the reconciliation invented a distribution
+difference that does not exist.
+
+**Ledger as the single authorship source of truth (added 2026-09-09).** Three
+coupled changes to `commit-ledger.sh` + `hc__resolve_session_base` retired the
+two-tier attribution model; §3, §5, §6's Step-3c bullet, §7's resolver
+flowchart and bullets, §10's state store and §12's matrix were re-synced, and
+`design.md` §"Identity & base resolution" with them.
+
+- **The defect.** Attribution had two tiers: the per-session commit ledger, and
+  a committer-email predicate the ledger degraded to when it was absent *or
+  present-but-empty*. That degrade was designed as a safety net — see the
+  preserved history below — but it was **inert**: the human and Claude Code
+  commit under the *same* git identity, so no commit was ever provably foreign,
+  the base never advanced, and the Stop gate demanded a full `/done` from
+  sessions that had changed nothing. Observed case: a pure Jira Q&A session
+  (zero edits, zero commits) blocked because the human hand-committed in another
+  terminal mid-session.
+- **Preserved history — why the empty-ledger degrade existed.** In 0.1.15,
+  reading an empty ledger as "this session owns nothing" advanced `HC_BASE` to
+  HEAD and let the gate **PASS with real committed work unverified** — a genuine
+  false-PASS regression, and the reason the degrade-to-email tier was added. That
+  reasoning is now void, not overturned: the false-PASS came from the *ledger
+  being empty while commits existed*, which was reachable only because the sweep
+  was gated on command text and routinely missed real agent commits (next
+  bullet). With the sweep unconditional, an empty ledger and a non-empty commit
+  range now genuinely mean "an agent did not make these", and the email tier that
+  was supposed to catch the difference never could — it compared one identity to
+  itself.
+- **Change 1 — the ledger is THE source of truth.**
+  `hc__commit_confidently_foreign` (email) is **deleted**;
+  `hc__commit_in_ledger` (per-session) is replaced by
+  `hc__commit_in_any_ledger`, which checks membership across *all* sessions'
+  `baselines/*.own-commits` so a concurrent agent session's commit still counts
+  as agent-authored. `hc__commit_session_authored` survives as a thin alias over
+  it (its `<session_id>` arg now vestigial, kept for shell-ABI signature
+  stability). Ledger absent **or** empty now means "this session authored
+  nothing" ⇒ every commit in `base..HEAD` is foreign ⇒ base advances to HEAD ⇒
+  Step 3c allows the Stop with no DoD.
+- **Change 2 — the ledger observes HEAD movement instead of reading commands.**
+  `looks_like_commit_command` is **deleted**. It was a text heuristic over
+  `tool_input.command` (`*git commit*`, `*git merge*`, …) and it missed every
+  indirect commit — inside a shell script, a Makefile target, a git alias, a
+  chained one-liner, `gh pr merge` — so real agent commits never reached the
+  ledger, were then read as foreign, and were **silently skipped by the review**.
+  `commit-ledger.sh` now takes a mode argument and is wired **twice** on the
+  `Bash` matcher: `pre` pins HEAD to `baselines/<sid>.cursor`, and the
+  PostToolUse half sweeps `CURSOR..HEAD` unconditionally with dedupe. HEAD
+  movement inside the agent's own tool-call window is *direct observation*, not
+  inference, and no command text can evade it. The old cursor-derivation chain
+  (ledger tail → `.sha` baseline → HEAD) and its `merge-base --is-ancestor`
+  retry-recovery block are deleted with it: both existed only because the cursor
+  was derived from the ledger's own tail, a feedback loop an externally-pinned
+  per-call cursor cannot have. `HC_HOOK_TOOL_COMMAND` still exists in
+  `hc_read_hook_input` and the shell ABI but now has **zero consumers**.
+- **Change 3 — reachability tripwire.** New `hc__ledger_history_rewritten`, run
+  before any advance: every sha in *this session's* ledger must still
+  `cat-file -e` and be an ancestor of HEAD, else no advance happens at all.
+  Rebase/amend/cherry-pick change a SHA while preserving content, so a rewritten
+  agent commit would read as foreign and drop out of the changeset — the one
+  direction the harness must never fail in. The tripwire does not recover the
+  attribution; it refuses to guess, converting a silent skip into an over-block.
+  Content identity (`git patch-id` beside each sha) is the real fix and is
+  explicitly deferred: it is a ledger **format** change with its own migration.
+- **Change 4 — rebase/merge-in-progress guard** in `commit-ledger.sh`'s shared
+  preamble (reusing `auto-branch.sh`'s GIT_DIR probe), so transient
+  detached-HEAD SHAs never enter the ledger and `pre`/`post` cannot diverge on
+  the condition.
+- **Accepted residual, documented not hidden.** A foreign commit landing during
+  the agent's own long Bash call is inside that window and gets swept in →
+  misattributed → spurious DoD demand. Every race outcome here is an
+  **over**-block; the unsafe direction requires HEAD to move outside *every*
+  call window, which is exactly the human/foreign case. Concurrent same-tree
+  sessions were already documented as unsupported-racy.
+- **Pre-existing drift also corrected:** the 2026-08-11 entry's claim that the
+  `install.sh` mirror never wires PostToolUse (it always has — the mirror is
+  hook-for-hook equivalent to the plugin) is called out at that entry, and the
+  three places it had propagated to (§3's distribution-modes bullet, §12's
+  matrix row, `design.md`'s predicate description) are fixed.
 
 ---
 
@@ -1092,12 +1246,13 @@ description was corrected the same way.
 
 | File | Responsibility |
 |---|---|
-| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base + authorship base-advance in session mode, `HC_BASE_ORIG`), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (BLOB-keyed coverage across the log chain; 7 args — `extra_admit`/`chain_admit` anchor admission, trailing `[orig_base]` engages the ledger-set scope: changed-set = `hc_session_changeset_files` union when a session id is live and `orig_base` non-empty, else the `<base>..HEAD` range diff; the chain-walk filter shares `orig_base` as its lower bound), `hc_session_changeset_commits` / `hc_session_changeset_files` (emit / union the session-authored SHAs in `orig_base..HEAD` — the DoD scope set when the ledger is engaged, dropping interior foreign commits), `hc_changeset_summary` (block-message summary), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set), `hc_validate` (jq-only JSON-Schema-subset validator, fail-closed on unsupported keywords; sets `HC_CONTRACTS_DIR`), `hc_done_state_blocked` + `hc_state` (composed operator state S0/S1/S2/S4/S5) |
+| `scripts/harness-common.sh` | Sourced lib: `hc_resolve` (identity/base/tree-base + authorship base-advance in session mode, `HC_BASE_ORIG`), `hc_tree_status` (tree classifier), `hc_tree_remediation`, `hc_review_blocking` (severity-gated review count), `hc_review_coverage_gap` (BLOB-keyed coverage across the log chain; 7 args — `extra_admit`/`chain_admit` anchor admission, trailing `[orig_base]` engages the ledger-set scope: changed-set = `hc_session_changeset_files` union when a session id is live and `orig_base` non-empty, else the `<base>..HEAD` range diff; the chain-walk filter shares `orig_base` as its lower bound), `hc_session_changeset_commits` / `hc_session_changeset_files` (emit / union the agent-authored SHAs in `orig_base..HEAD` — the DoD scope set, dropping interior foreign commits), `hc__commit_in_any_ledger` (THE authorship predicate: ledger membership across all sessions) + `hc__commit_session_authored` (thin alias) + `hc__ledger_history_rewritten` (reachability tripwire — refuse to advance when our own ledgered shas stop being reachable), `hc_changeset_summary` (block-message summary), `hc_live_task_keys` (terminal-reap keep-set), `hc_live_review_shas` (review-log hygiene keep-set), `hc_validate` (jq-only JSON-Schema-subset validator, fail-closed on unsupported keywords; sets `HC_CONTRACTS_DIR`), `hc_done_state_blocked` + `hc_state` (composed operator state S0/S1/S2/S4/S5) |
 | `scripts/harness-resolve.sh` | Executable wrapper — sources lib, prints resolver output as a **self-validated JSON object** (resolver-output contract), `jq`-parsed by the skill (no longer key=value) |
 | `contracts/*.json` | Hard-contract schema store: `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`, `resolver-output.schema.json`, `base-dod.schema.json`, `done-plan.schema.json` (the 6 JSON-Schemas `hc_validate` asserts), plus `base-dod.json` (the seed DoD) and `shell-abi.json` (the declared, test-enforced shell-function ABI) |
 | `scripts/done-gate.sh` | Stop hook — the gate (Steps 1→2→2a→2b→3/3b/3c/3d→4/4b→5→7→8→9); `hc_validate`s done-state (4b) + review-log (8) before trusting fields |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |
 | `scripts/auto-branch.sh` | PreToolUse(Write\|Edit) — trunk→task branch, pin task tree-base |
+| `scripts/commit-ledger.sh` | **Wired twice on the `Bash` matcher** — PreToolUse(`pre`) pins HEAD to `baselines/<sid>.cursor`, PostToolUse sweeps `CURSOR..HEAD` into `baselines/<sid>.own-commits` (unconditional, deduped). Session mode only; no-ops mid-rebase/merge; never fails the tool. HEAD movement inside the window IS the authorship signal — no command-text parsing, no committer-email guess |
 | `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint; stamps `contract_version:1`, auto-upgrades old configs, validates before writing |
 | `scripts/done-preflight.sh` | `/done` Step 0 — prove the gate is winnable |
 | `scripts/worktree-detect.sh` | Worktree provisioning probe — `install_cmd` from the lockfile, `link` from the filtered gitignored-config set, `setup_candidates` (never a runnable `setup_cmd`); writes the `worktree` block of `done-config.json`, preserving `worktree.overrides` |
@@ -1109,6 +1264,6 @@ description was corrected the same way.
 | `skills/done/dod-protocol.md` | Full `/done` protocol reference — every step section (anchors) + escalation rules |
 | `agents/dod-reviewer.md` | Shipped Step-5 review subagent — carries the review methodology so the executor never authors the prompt; writes `review-log/<HEAD>.json` |
 | `dod/base-dod.md` | Base DoD folded into the effective DoD (Step 0.5) |
-| `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) |
+| `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) — SessionStart, Stop, **two** PreToolUse entries (`Write\|Edit` → auto-branch, `Bash` → `commit-ledger.sh pre`), PostToolUse(`Bash`) |
 | `.claude-plugin/plugin.json` | Plugin manifest |
-| `install.sh` | Non-plugin installer (mirror into `.claude/`, `jq`-merge hooks) |
+| `install.sh` | Non-plugin installer (mirror into `.claude/`, idempotent `jq`-merge of **all five** hook wirings — hook-for-hook equivalent to the plugin) |
