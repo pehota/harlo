@@ -66,19 +66,38 @@ mk_verified() {
   : > "$HDIR/baselines/$SID.dirty"
   printf '%s\n' "$SID" > "$HDIR/current-session"
 
+  # W — an OWN commit that STAYS REACHABLE across every rewrite the cases below
+  # perform. Attribution is ledger-only (committer email is not a signal), so
+  # SOMETHING in BASE..HEAD must be ledgered or base-advance walks HC_BASE to
+  # HEAD, the changeset goes empty, and every case trivially allows.
+  #
+  # W exists so that ledger entry can be one the cases do not destroy. The
+  # fixture used to ledger HEAD0 instead — and every case then worked because
+  # its own amend ORPHANED that sha and tripped hc__ledger_history_rewritten,
+  # i.e. 8 of these assertions passed through the rewrite tripwire rather than
+  # through the tree-carry logic they name. Neutering the tripwire to `return 1`
+  # flipped them red. They were coupled to a mechanism the code itself marks for
+  # replacement (the deferred patch-id fix), so they would have gone red for
+  # reasons with nothing to do with tree carry.
+  #
+  # Every case here amends only the TIP, so W is never rewritten: base-advance
+  # breaks at W on the first iteration and HC_BASE == HC_BASE_ORIG == BASE —
+  # the same outcome the tripwire used to force, now reached on purpose.
+  #
+  # W touches ONLY a.js, and its content is overwritten by HEAD0, so (i) TREE0
+  # is unchanged, and (ii) the ledger-set changed-file union is exactly
+  # {a.js} — precisely what the review-log below attests.
+  printf 'a15\n' > "$REPO/a.js"
+  git -C "$REPO" add -A >/dev/null 2>&1
+  git -C "$REPO" commit -qm "the work, part 1" >/dev/null 2>&1
+  W=$(git -C "$REPO" rev-parse HEAD)
+
   printf 'a2\n' > "$REPO/a.js"
   git -C "$REPO" add -A >/dev/null 2>&1
   git -C "$REPO" commit -qm "the work" >/dev/null 2>&1
   HEAD0=$(git -C "$REPO" rev-parse HEAD)
   TREE0=$(git -C "$REPO" rev-parse 'HEAD^{tree}')
-  # Attribution is ledger-only (committer email is not a signal), so the work
-  # commit must be recorded as this session's or base-advance would walk
-  # HC_BASE to HEAD, the changeset would be empty, and every case below would
-  # trivially allow. The subsequent amends/rewrites in each case orphan this
-  # sha, which trips hc__ledger_history_rewritten — that refuses to advance the
-  # base, which is exactly what these cases need: the full changeset stays and
-  # the gate evaluates the tree-carry logic on it.
-  printf '%s\n' "$HEAD0" > "$HDIR/baselines/$SID.own-commits"
+  printf '%s\n' "$W" > "$HDIR/baselines/$SID.own-commits"
 
   write_review_log "$HEAD0" "$HEAD0"
   write_done_state "$HEAD0" "$TREE0" "$HEAD0"

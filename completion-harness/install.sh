@@ -128,13 +128,21 @@ POST_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh"'
 # PreToolUse(Bash) half of the commit ledger: pins HEAD so the PostToolUse half
 # can sweep exactly what moved during the call (see commit-ledger.sh).
 PREL_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh" pre'
+# Tool matcher for BOTH commit-ledger halves. Wider than Bash because a
+# non-Bash tool can move HEAD too (an MCP git server, a SlashCommand that
+# commits) and no Bash window would exist to observe it. NOT every tool: Read /
+# Edit / Glob cannot move HEAD, so pinning on them would cost two process
+# spawns per tool call for nothing. MUST stay identical to hooks/hooks.json —
+# the plugin path and this fallback installer wire the same pair.
+LEDGER_MATCHER='Bash|SlashCommand|mcp__.*'
 
 MERGED=$(jq \
   --arg stop "$STOP_CMD" \
   --arg start "$START_CMD" \
   --arg pre "$PRE_CMD" \
   --arg post "$POST_CMD" \
-  --arg prel "$PREL_CMD" '
+  --arg prel "$PREL_CMD" \
+  --arg ledgerm "$LEDGER_MATCHER" '
   # ensure hooks containers exist
   .hooks = (.hooks // {})
   | .hooks.Stop = (.hooks.Stop // [])
@@ -164,13 +172,13 @@ MERGED=$(jq \
   # append PreToolUse(Bash) commit-ledger `pre` hook only if not already wired.
   | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $prel)) as $hasPreL
   | if $hasPreL then .
-    else .hooks.PreToolUse += [ {"matcher":"Bash","hooks": [ {"type":"command","command":$prel} ]} ]
+    else .hooks.PreToolUse += [ {"matcher":$ledgerm,"hooks": [ {"type":"command","command":$prel} ]} ]
     end
 
   # append PostToolUse(Bash) commit-ledger hook only if not already wired.
   | ([ .hooks.PostToolUse[]?.hooks[]?.command ] | any(. == $post)) as $hasPost
   | if $hasPost then .
-    else .hooks.PostToolUse += [ {"matcher":"Bash","hooks": [ {"type":"command","command":$post} ]} ]
+    else .hooks.PostToolUse += [ {"matcher":$ledgerm,"hooks": [ {"type":"command","command":$post} ]} ]
     end
 ' "$SETTINGS_FILE" 2>/dev/null)
 

@@ -20,6 +20,18 @@
       "sentinels": []
     },
     {
+      "name": "hc_resolve_light",
+      "globals": [
+        "PROJECT_DIR",
+        "HARNESS_DIR",
+        "HC_MODE"
+      ],
+      "args": "(none)",
+      "stdout": "none (sets globals; HC_MODE is task or session)",
+      "return_codes": "always 0",
+      "sentinels": []
+    },
+    {
       "name": "hc_has_fn",
       "globals": [],
       "args": "<name> \u2014 a function or command name to probe for",
@@ -58,6 +70,7 @@
         "HC_HOOK_SESSION_ID",
         "HC_HOOK_TOOL_FILE_PATH",
         "HC_HOOK_TOOL_COMMAND",
+        "HC_HOOK_TOOL_BACKGROUND",
         "HC_HOOK_SOURCE",
         "HC_HOOK_STOP_ACTIVE"
       ],

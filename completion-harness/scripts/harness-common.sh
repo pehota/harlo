@@ -103,6 +103,13 @@ hc_require_jq() {
 #                            no current consumer reads it — commit-ledger.sh
 #                            observes HEAD movement instead of parsing command
 #                            text)
+#   HC_HOOK_TOOL_BACKGROUND  .tool_input.run_in_background (text "true"/"false";
+#                            Bash tool payloads only, "false" everywhere else).
+#                            commit-ledger.sh needs it because PostToolUse fires
+#                            when the TOOL RETURNS, not when a backgrounded
+#                            shell exits — so a session that backgrounded a job
+#                            can commit BETWEEN call windows and the
+#                            "outside every window ⇒ foreign" inference dies.
 #   HC_HOOK_SOURCE           .source
 #   HC_HOOK_STOP_ACTIVE      .stop_hook_active (text "true"/"false")
 hc_read_hook_input() {
@@ -110,12 +117,14 @@ hc_read_hook_input() {
   HC_HOOK_SESSION_ID=""
   HC_HOOK_TOOL_FILE_PATH=""
   HC_HOOK_TOOL_COMMAND=""
+  HC_HOOK_TOOL_BACKGROUND="false"
   HC_HOOK_SOURCE=""
   HC_HOOK_STOP_ACTIVE="false"
   if hc_has_jq; then
     HC_HOOK_SESSION_ID=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.session_id // ""' 2>/dev/null)
     HC_HOOK_TOOL_FILE_PATH=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
     HC_HOOK_TOOL_COMMAND=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.command // ""' 2>/dev/null)
+    HC_HOOK_TOOL_BACKGROUND=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)
     HC_HOOK_SOURCE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.source // ""' 2>/dev/null)
     HC_HOOK_STOP_ACTIVE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.stop_hook_active // false' 2>/dev/null)
   fi
@@ -571,6 +580,45 @@ hc__detect_trunk() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# hc_resolve_light
+#
+# The two cheap facts (PROJECT_DIR/HARNESS_DIR + HC_MODE) with NONE of the base
+# resolution. For hooks that fire on EVERY tool call and only need to know where
+# the state dir is and which mode they are in — commit-ledger.sh, which must not
+# resolve or advance a base at all.
+#
+# WHY IT EXISTS: commit-ledger.sh used to call full hc_resolve in both halves
+# purely to read HC_MODE. hc_resolve → hc__resolve_session_base walks
+# HC_BASE_ORIG..HEAD and runs the rewrite tripwire over the whole ledger, so a
+# ledger that grew to a few hundred lines (one in-window `git pull` on a repo
+# well behind trunk does that) added SECONDS to every single Bash tool call.
+# Measured before this split: ~0.6s at 0 ledger lines, ~4.9s at 40, ~19s at 200.
+#
+# A separate NAME rather than a mode flag inside hc_resolve: the flag variant
+# would leave HC_BASE/HC_BASE_ORIG/HC_TREE_BASE_FILE half-set, and a later
+# caller in the same shell could not tell a light resolve from a real one.
+#
+# Sets only: PROJECT_DIR, HARNESS_DIR, HC_MODE. Deliberately leaves every other
+# hc_resolve global untouched — do NOT use it anywhere a base is needed.
+hc_resolve_light() {
+  PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+  HARNESS_DIR="$PROJECT_DIR/$HC_HARNESS_REL"
+  HC_MODE="session"
+
+  local branch trunk
+  branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
+  trunk=$(hc__detect_trunk)
+  # Same predicate as hc_resolve's: a real branch, a confident trunk, and
+  # branch != trunk. Kept in lockstep with it by construction (one condition,
+  # copied verbatim) — there is nothing shareable to factor out that would not
+  # drag the base resolution back in.
+  if [ -n "$branch" ] && [ -n "$trunk" ] && [ "$branch" != "$trunk" ]; then
+    HC_MODE="task"
+  fi
+  return 0
+}
+
 hc_resolve() {
   local session_id="$1"
 
@@ -745,8 +793,22 @@ hc__commit_in_any_ledger() {
 # "nothing observed → advance to HEAD" path (a pure Q&A session Stopping
 # cleanly) is untouched by this.
 #
-# Short-circuits on the first failure, so cost is one cat-file + one merge-base
-# per ledger line at worst, once per Stop-gate resolve.
+# COST IS O(1) IN PROCESS COUNT — exactly two git calls, whatever the ledger
+# size. It used to be two forks PER LINE, which blew the Stop hook's 10s budget
+# at a few hundred entries (measured: 120 lines 5.6s, 150 lines 6.0s) — and a
+# single in-window `git pull` on a repo 150 commits behind produces a 150-line
+# ledger in one go. Batched:
+#   1. EXISTENCE — one `cat-file --batch-check` fed every ledger sha (peeled
+#      `^{commit}`, preserving the old check's semantics: a non-commit object
+#      must read as missing, not as a type). Any line reporting `missing` ⇒
+#      rewritten.
+#   2. REACHABILITY — one `rev-list --stdin ^HEAD` fed every ledger sha. Any
+#      output at all means some ledger sha (or an ancestor of one) is not
+#      reachable from HEAD ⇒ rewritten.
+# ORDER IS LOAD-BEARING: existence first, because rev-list ERRORS OUT on a
+# missing object instead of reporting it. `--ignore-missing` is deliberately
+# NOT used as a substitute — it would silently swallow the destroyed-object case
+# and turn it back into a skipped review.
 #
 # ponytail: THE REAL FIX is content identity — store `git patch-id` alongside
 # each sha and match on either, which survives rebase/amend/cherry-pick and
@@ -760,12 +822,34 @@ hc__ledger_history_rewritten() {
   [ -z "$HARNESS_DIR" ] && return 1
   local ledger="$HARNESS_DIR/baselines/${session_id}.own-commits"
   [ -s "$ledger" ] || return 1
-  local sha
-  while IFS= read -r sha; do
-    [ -z "$sha" ] && continue
-    git -C "$proj" cat-file -e "${sha}^{commit}" 2>/dev/null || return 0
-    git -C "$proj" merge-base --is-ancestor "$sha" HEAD 2>/dev/null || return 0
-  done < "$ledger"
+
+  # Blank-stripped sha list. All-blank (a ledger of newlines) is the empty
+  # ledger case → no-op, so case A keeps working.
+  local shas
+  shas=$(grep -v '^[[:space:]]*$' "$ledger" 2>/dev/null)
+  [ -z "$shas" ] && return 1
+
+  # 1. EXISTENCE. batch-check exits 0 even for unknown objects, echoing the
+  #    INPUT line followed by " missing" — so the exit status only tells us
+  #    whether git ran at all.
+  local check rc
+  check=$(printf '%s\n' "$shas" | sed 's/$/^{commit}/' \
+          | git -C "$proj" cat-file --batch-check 2>/dev/null)
+  rc=$?
+  # git itself failed, or produced nothing for a non-empty input: we cannot say
+  # the ledger is intact, so report rewritten (over-block).
+  [ "$rc" -ne 0 ] && return 0
+  [ -z "$check" ] && return 0
+  printf '%s\n' "$check" | grep -q ' missing$' && return 0
+
+  # 2. REACHABILITY. `^HEAD` (per-rev negation) rather than `--not HEAD`, so the
+  #    flag state of command-line args cannot leak onto the stdin revs.
+  local unreachable
+  unreachable=$(printf '%s\n' "$shas" | git -C "$proj" rev-list --stdin '^HEAD' 2>/dev/null)
+  rc=$?
+  [ "$rc" -ne 0 ] && return 0
+  [ -n "$unreachable" ] && return 0
+
   return 1
 }
 
@@ -903,6 +987,13 @@ hc__commit_session_authored() {
 # Uncommitted work is NOT covered by this and must not be: hc_tree_status gates
 # it against the pinned tree baseline, ledger-independently.
 #
+# TWO UNCERTAINTY TRIPWIRES suppress the advance entirely (see the calls below):
+# our own ledgered history having been rewritten under us
+# (hc__ledger_history_rewritten), and a sweep the hook could not complete
+# (baselines/<sid>.sweep-failed). Both mean attribution is unknowable, which is
+# NOT the same statement as "nothing observed" — so they over-block rather than
+# advance. Neither fires on the absent/empty-ledger path.
+#
 # Advance rule: walk orig_base..HEAD oldest→newest; while the leading commit is
 # NOT in any ledger, set the new base to that commit; STOP at the FIRST commit
 # that IS. HC_BASE becomes the new (advanced) base; HC_BASE_ORIG stays the
@@ -937,6 +1028,17 @@ hc__resolve_session_base() {
   # range stays in the changeset and the gate engages. See
   # hc__ledger_history_rewritten. No-op on an absent/empty ledger.
   if hc__ledger_history_rewritten "$session_id" "$proj"; then
+    return 0
+  fi
+
+  # SECOND TRIPWIRE, same over-block: commit-ledger.sh could not complete a
+  # sweep (the pinned cursor object was destroyed — `git gc --prune=now` or a
+  # `reflog expire` after an in-window amend — and the .sha-baseline retry
+  # failed too), so it recorded baselines/<sid>.sweep-failed instead of
+  # exiting quietly. A sweep we COULD NOT COMPLETE is UNKNOWN attribution, not
+  # absence of work: the commits in that window may well be the agent's own and
+  # simply never reached the ledger. Refuse to advance at all.
+  if [ -f "$HARNESS_DIR/baselines/${session_id}.sweep-failed" ]; then
     return 0
   fi
 

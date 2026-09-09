@@ -8,10 +8,10 @@
     ],
     "PreToolUse": [
       { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/auto-branch.sh\"" } ] },
-      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-ledger.sh\" pre" } ] }
+      { "matcher": "Bash|SlashCommand|mcp__.*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-ledger.sh\" pre" } ] }
     ],
     "PostToolUse": [
-      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-ledger.sh\"" } ] }
+      { "matcher": "Bash|SlashCommand|mcp__.*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-ledger.sh\"" } ] }
     ]
   }
 }

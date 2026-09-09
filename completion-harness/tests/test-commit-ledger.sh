@@ -115,6 +115,25 @@ _fire() {
 }
 run_pre()  { _fire pre "$1" "${2:-}"; }
 run_post() { _fire ""  "$1" "${2:-}"; }
+
+# _fire_ex <mode> <sid> <tool_name> <run_in_background true|false>
+# The same drive as _fire, with the two payload fields the widened matcher and
+# the background-aware cursor rule depend on: .tool_name (the hook is
+# deliberately tool-agnostic — the matcher decides which events reach it) and
+# .tool_input.run_in_background.
+_fire_ex() {
+  local mode="$1" sid="$2" tool="$3" bg="${4:-false}"
+  HOOK_RC_OUT=$(printf '{"session_id":"%s","tool_name":"%s","tool_input":{"command":"echo hi","run_in_background":%s}}' \
+      "$sid" "$tool" "$bg" \
+    | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" ${mode:+$mode} 2>/dev/null)
+  HOOK_RC=$?
+}
+run_pre_bg()  { _fire_ex pre "$1" Bash true; }
+run_post_bg() { _fire_ex ""  "$1" Bash true; }
+
+watermark_path()    { printf '%s/.claude/.harness/baselines/%s.watermark' "$REPO" "$1"; }
+bgseen_path()       { printf '%s/.claude/.harness/baselines/%s.bg-seen' "$REPO" "$1"; }
+sweepfailed_path()  { printf '%s/.claude/.harness/baselines/%s.sweep-failed' "$REPO" "$1"; }
 # window <sid> <command-text> <shell code...> — the honest shape of a Bash tool
 # call: PreToolUse fires, the command runs, PostToolUse fires.
 window() {
@@ -632,6 +651,298 @@ fi
 resolve_inproc "$SID"
 eq "caseB base does NOT advance (the commit is agent-authored)" "$C0" "$HC_BASE"
 eq "caseB gate BLOCKS the Stop (real work, no /done run)" "block" "$(gate_verdict "$SID")"
+
+# ---------------------------------------------------------------------------
+printf '== Case F (DIRECTIONAL): a BACKGROUNDED Bash call commits after the tool returns ==\n'
+# THE HOLE: PostToolUse fires when the TOOL RETURNS, not when a backgrounded
+# shell exits. The job commits later; the next `pre` used to pin the cursor
+# ABOVE that commit, so it entered NO window, read as foreign, the base advanced
+# past it and the agent's own committed work SILENTLY SKIPPED REVIEW.
+# THE FIX: a backgrounded call marks the session (baselines/<sid>.bg-seen), and
+# from then on `pre` pins to the WATERMARK — the last HEAD a sweep actually
+# reached — instead of to current HEAD.
+new_repo; SID="LF"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+run_pre_bg "$SID"                       # the agent backgrounds a job
+run_post_bg "$SID"                      # the TOOL returns; HEAD has not moved
+eq "caseF post exit 0" "0" "$HOOK_RC"
+if [ -f "$(bgseen_path "$SID")" ]; then ok "caseF bg-seen marker created"; else bad "caseF bg-seen marker created" "missing"; fi
+eq "caseF watermark recorded at the unmoved HEAD" "$C0" "$(cat "$(watermark_path "$SID")" 2>/dev/null)"
+# The backgrounded job commits now — OUTSIDE every window.
+commit_file bg-work.txt
+CB=$(git -C "$REPO" rev-parse HEAD)
+window "$SID" "echo next" ':'           # the agent's next Bash call
+eq "caseF next pre pinned the WATERMARK, not HEAD" "$C0" "$(cat "$(cursor_path "$SID")" 2>/dev/null)"
+LEDGER=$(ledger_path "$SID")
+if grep -Fxq -- "$CB" "$LEDGER" 2>/dev/null; then
+  ok "caseF the backgrounded job's commit IS ledgered"
+else
+  bad "caseF the backgrounded job's commit IS ledgered" "$(cat "$LEDGER" 2>/dev/null)"
+fi
+resolve_inproc "$SID"
+eq "caseF base does NOT advance past it" "$C0" "$HC_BASE"
+eq "caseF gate BLOCKS (real agent work, no /done run)" "block" "$(gate_verdict "$SID")"
+
+# ---------------------------------------------------------------------------
+printf '== Case G (GUARD on case A): with NO backgrounded call the cursor still pins HEAD ==\n'
+# The emptiness of the ledger is LOAD-BEARING, so case F must not be bought by
+# sweeping more eagerly in general. A session that never backgrounded a job
+# cannot have committed between windows, so between-window HEAD movement stays
+# soundly foreign and `pre` must keep pinning CURRENT HEAD — never the
+# watermark. This is the case that fails if the watermark is applied
+# unconditionally (or if the cursor were pinned at min(cursor, .sha baseline),
+# which degenerates to sweeping the SessionStart baseline every call).
+new_repo; SID="LG"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+window "$SID" "cat notes.md" ':'        # a plain read-only call: watermark := C0
+eq "caseG watermark recorded" "$C0" "$(cat "$(watermark_path "$SID")" 2>/dev/null)"
+if [ ! -f "$(bgseen_path "$SID")" ]; then ok "caseG no bg-seen marker (nothing was backgrounded)"; else bad "caseG no bg-seen marker" "present"; fi
+# The human hand-commits in another terminal, OUTSIDE any window.
+commit_file human-work.txt
+CH=$(git -C "$REPO" rev-parse HEAD)
+run_pre "$SID" "cat more.md"
+eq "caseG cursor pins current HEAD, NOT the older watermark" "$CH" "$(cat "$(cursor_path "$SID")" 2>/dev/null)"
+run_post "$SID" "cat more.md"
+if [ ! -s "$(ledger_path "$SID")" ]; then ok "caseG ledger still EMPTY (human commit not claimed)"; else bad "caseG ledger still EMPTY" "$(cat "$(ledger_path "$SID")")"; fi
+resolve_inproc "$SID"
+eq "caseG base advances to HEAD (case A intact)" "$CH" "$HC_BASE"
+eq "caseG gate ALLOWS the Stop" "allow" "$(gate_verdict "$SID")"
+
+# ---------------------------------------------------------------------------
+printf '== Case H: a TASK-mode commit later merged to trunk by the human ==\n'
+# The hook used to exit early when HC_MODE != session, so a feature-branch
+# session ledgered NOTHING. If the human then merged to trunk outside a window,
+# the session flipped to session mode with an ABSENT ledger and advanced the
+# base straight to HEAD — the agent's own branch work skipping review.
+# The write path now runs in task mode too. It is inert there
+# (hc__resolve_task_base returns the pinned fork point and never advances past
+# anything) and matters only when a later session-mode resolve reads it.
+new_repo; SID="LH"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+git -C "$REPO" checkout -q -b feat/ledger >/dev/null 2>&1
+resolve_inproc "$SID"
+eq "caseH fixture: the branch really resolves as TASK mode" "task" "$HC_MODE"
+window "$SID" "git commit -m feat" 'commit_file feat.txt'
+CT=$(git -C "$REPO" rev-parse HEAD)
+LEDGER=$(ledger_path "$SID")
+if grep -Fxq -- "$CT" "$LEDGER" 2>/dev/null; then
+  ok "caseH the task-mode commit IS ledgered"
+else
+  bad "caseH the task-mode commit IS ledgered" "$(cat "$LEDGER" 2>/dev/null)"
+fi
+# The human merges to trunk OUTSIDE any window, and the session is now on trunk.
+git -C "$REPO" checkout -q main >/dev/null 2>&1
+git -C "$REPO" merge -q --no-ff -m "merge feat/ledger" feat/ledger >/dev/null 2>&1
+CM=$(git -C "$REPO" rev-parse HEAD)
+eq "caseH fixture: trunk really moved" "false" "$([ "$CM" = "$C0" ] && echo true || echo false)"
+resolve_inproc "$SID"
+eq "caseH now session mode" "session" "$HC_MODE"
+eq "caseH base does NOT advance past the ledgered task-mode commit" "$C0" "$HC_BASE"
+
+# ---------------------------------------------------------------------------
+printf '== Case I (DIRECTIONAL): a DEAD cursor object must not sweep silently ==\n'
+# `rev-list CURSOR..HEAD` exits 128 when the pinned cursor object is gone
+# (`git gc --prune=now` / `reflog expire` after an in-window amend, or a
+# .cursor outliving its objects). With the status discarded and stderr
+# swallowed, an empty result was INDISTINGUISHABLE from "nothing to sweep" and
+# the agent's commit never reached the ledger — a silent skip.
+printf -- '-- I-a: both anchors dead ⇒ .sweep-failed is recorded (hook still exits 0) --\n'
+new_repo; SID="LI"
+commit_file base.txt
+commit_file work.txt
+run_pre "$SID"                          # pins the pre-amend sha
+git -C "$REPO" commit --amend -q -m "amended inside the window" >/dev/null 2>&1
+# Destroy the orphaned cursor object. No .sha baseline exists, so the retry has
+# no live anchor either.
+git -C "$REPO" reflog expire --expire=now --expire-unreachable=now --all >/dev/null 2>&1
+git -C "$REPO" gc --prune=now -q >/dev/null 2>&1
+DEADC=$(cat "$(cursor_path "$SID")" 2>/dev/null)
+if git -C "$REPO" cat-file -e "${DEADC}^{commit}" 2>/dev/null; then
+  bad "caseI fixture: the cursor object is really gone" "still present"
+else
+  ok "caseI fixture: the cursor object is really gone"
+fi
+run_post "$SID"
+eq "caseI-a post exit 0 (never fails the tool)" "0" "$HOOK_RC"
+if [ -f "$(sweepfailed_path "$SID")" ]; then
+  ok "caseI-a .sweep-failed recorded instead of a silent empty sweep"
+else
+  bad "caseI-a .sweep-failed recorded" "missing"
+fi
+
+printf -- '-- I-b: a dead cursor with a LIVE .sha baseline retries and still sweeps --\n'
+# The retry is the first line of defence: over-including costs a spurious review
+# demand, under-including silently skips one.
+new_repo; SID="LI2"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+commit_file work.txt
+run_pre "$SID"                          # pins the pre-amend sha
+git -C "$REPO" commit --amend -q -m "amended inside the window" >/dev/null 2>&1
+C1P=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" reflog expire --expire=now --expire-unreachable=now --all >/dev/null 2>&1
+git -C "$REPO" gc --prune=now -q >/dev/null 2>&1
+run_post "$SID"
+if grep -Fxq -- "$C1P" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseI-b the commit was swept via the .sha-baseline retry"
+else
+  bad "caseI-b the commit was swept via the .sha-baseline retry" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+if [ ! -f "$(sweepfailed_path "$SID")" ]; then ok "caseI-b no .sweep-failed (the retry succeeded)"; else bad "caseI-b no .sweep-failed" "present"; fi
+
+printf -- '-- I-c: .sweep-failed present ⇒ the base refuses to advance and the gate BLOCKS --\n'
+# A sweep we could not complete is UNKNOWN attribution, not absence of work:
+# whatever HEAD moved over may well be the agent's own. Same over-block as the
+# rewrite tripwire. Planted here (as caseD plants ledgers) so the resolver
+# contract is pinned independently of how the marker came to exist.
+new_repo; SID="LI3"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+commit_file unattributed.txt
+CU=$(git -C "$REPO" rev-parse HEAD)
+mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+: > "$(ledger_path "$SID")"             # present and EMPTY — would normally advance
+: > "$(sweepfailed_path "$SID")"
+resolve_inproc "$SID"
+eq "caseI-c base does NOT advance despite an empty ledger" "$C0" "$HC_BASE"
+eq "caseI-c base_orig unchanged" "$C0" "$HC_BASE_ORIG"
+eq "caseI-c gate BLOCKS" "block" "$(gate_verdict "$SID")"
+
+# ---------------------------------------------------------------------------
+printf '== Case J: the rewrite tripwire is BATCHED — same verdicts, O(1) processes ==\n'
+# hc__ledger_history_rewritten used to spawn TWO git processes PER LEDGER LINE
+# on every resolve, so the Stop hook's 10s budget (hooks.json) was gone at a
+# couple of hundred entries — and ONE in-window `git pull` on a repo 150
+# commits behind produces a 150-line ledger in one go. It is now two git calls
+# total: `cat-file --batch-check` for existence, then `rev-list --stdin ^HEAD`
+# for reachability. Existence FIRST, because rev-list errors out on a missing
+# object rather than reporting it.
+trip() {
+  CLAUDE_PROJECT_DIR="$REPO" HARNESS_DIR="$REPO/.claude/.harness" \
+    hc__ledger_history_rewritten "$1" "$REPO" && printf 'fired' || printf 'quiet'
+}
+new_repo; SID="LJ"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+commit_file one.txt
+C1=$(git -C "$REPO" rev-parse HEAD)
+commit_file two.txt
+C2=$(git -C "$REPO" rev-parse HEAD)
+mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+eq "caseJ absent ledger: quiet" "quiet" "$(trip "$SID")"
+: > "$(ledger_path "$SID")"
+eq "caseJ empty ledger: quiet" "quiet" "$(trip "$SID")"
+printf '\n\n' > "$(ledger_path "$SID")"
+eq "caseJ all-blank ledger: quiet" "quiet" "$(trip "$SID")"
+printf '%s\n%s\n' "$C1" "$C2" > "$(ledger_path "$SID")"
+eq "caseJ clean ledger (all reachable): quiet" "quiet" "$(trip "$SID")"
+printf '%s\ndeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' "$C1" > "$(ledger_path "$SID")"
+eq "caseJ destroyed object: fired (existence pass, before rev-list can error)" "fired" "$(trip "$SID")"
+# An UNREACHABLE-but-present sha: build it on a side branch, then delete the ref
+# so it is orphaned yet still in the object store.
+git -C "$REPO" checkout -q -b throwaway "$C0" >/dev/null 2>&1
+commit_file orphan.txt
+CORPH=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" checkout -q main >/dev/null 2>&1
+git -C "$REPO" branch -q -D throwaway >/dev/null 2>&1
+if git -C "$REPO" cat-file -e "${CORPH}^{commit}" 2>/dev/null; then
+  ok "caseJ fixture: the orphaned sha still EXISTS (so reachability is what decides)"
+else
+  bad "caseJ fixture: the orphaned sha still exists" "already pruned"
+fi
+printf '%s\n%s\n' "$C1" "$CORPH" > "$(ledger_path "$SID")"
+eq "caseJ unreachable-but-present sha: fired" "fired" "$(trip "$SID")"
+
+printf -- '-- J-b: a 250-line ledger resolves well inside the Stop hook 10s budget --\n'
+# 250 repeats of one reachable sha: the tripwire does not care about
+# uniqueness, so this is a faithful 250-LINE input. Before batching that was
+# 500 git forks (~10s measured on this machine, i.e. the whole Stop budget);
+# after, it is 2 processes whatever the line count.
+: > "$(ledger_path "$SID")"
+i=0
+while [ "$i" -lt 250 ]; do printf '%s\n' "$C1" >> "$(ledger_path "$SID")"; i=$((i + 1)); done
+eq "caseJ-b fixture: ledger really has 250 lines" "250" "$(grep -c . "$(ledger_path "$SID")" | tr -d ' ')"
+J_T0=$SECONDS
+resolve_inproc "$SID"
+J_EL=$((SECONDS - J_T0))
+eq "caseJ-b verdict unchanged: C1 is owned and reachable ⇒ no advance" "$C0" "$HC_BASE"
+if [ "$J_EL" -lt 5 ]; then
+  ok "caseJ-b resolve took ${J_EL}s (< 5s, well inside the 10s Stop budget)"
+else
+  bad "caseJ-b resolve took ${J_EL}s" "must be < 5s — the Stop hook budget is 10s"
+fi
+
+# ---------------------------------------------------------------------------
+printf '== Case K: the hook is wired for every tool that can move HEAD ==\n'
+# A non-Bash tool can move HEAD too (an MCP git server; a SlashCommand that
+# commits), and no Bash window exists to observe it. Both matchers are widened
+# to `Bash|SlashCommand|mcp__.*` — deliberately NOT every tool, because
+# Read/Edit/Glob cannot move HEAD and pinning on them would add two process
+# spawns to every single tool call for nothing.
+HOOKS_JSON="$BUNDLE_DIR/../hooks/hooks.json"
+if [ -f "$HOOKS_JSON" ] && command -v jq >/dev/null 2>&1; then
+  # The matcher is a regex Claude Code applies to tool_name. Assert the SHIPPED
+  # one really admits each shape, rather than string-comparing it.
+  for ev in PreToolUse PostToolUse; do
+    M=$(jq -r --arg e "$ev" '.hooks[$e][]? | select((.hooks[]?.command // "") | test("commit-ledger")) | .matcher' "$HOOKS_JSON" 2>/dev/null)
+    if [ -z "$M" ]; then
+      bad "caseK $ev commit-ledger hook is wired in hooks.json" "no entry found"
+      continue
+    fi
+    ok "caseK $ev commit-ledger hook is wired (matcher $M)"
+    for tn in Bash SlashCommand mcp__git__commit; do
+      if printf '%s\n' "$tn" | grep -qE "^($M)$" 2>/dev/null; then
+        ok "caseK $ev matcher admits $tn"
+      else
+        bad "caseK $ev matcher admits $tn" "matcher=$M"
+      fi
+    done
+    for tn in Read Edit Glob; do
+      if printf '%s\n' "$tn" | grep -qE "^($M)$" 2>/dev/null; then
+        bad "caseK $ev matcher does NOT admit $tn (no HEAD movement possible)" "matcher=$M"
+      else
+        ok "caseK $ev matcher does NOT admit $tn (no HEAD movement possible)"
+      fi
+    done
+  done
+else
+  bad "caseK hooks.json readable" "missing at $HOOKS_JSON (or no jq)"
+fi
+# …and the hook itself is tool-agnostic: given such an event it pins and sweeps
+# exactly as it does for Bash.
+new_repo; SID="LK"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+_fire_ex pre "$SID" SlashCommand
+eq "caseK SlashCommand pre pinned the cursor" "$C0" "$(cat "$(cursor_path "$SID")" 2>/dev/null)"
+commit_file slash.txt
+CS=$(git -C "$REPO" rev-parse HEAD)
+_fire_ex "" "$SID" SlashCommand
+if grep -Fxq -- "$CS" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseK SlashCommand-shaped event swept its commit"
+else
+  bad "caseK SlashCommand-shaped event swept its commit" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+_fire_ex pre "$SID" mcp__git__commit
+eq "caseK mcp__ pre pinned the cursor" "$CS" "$(cat "$(cursor_path "$SID")" 2>/dev/null)"
+commit_file mcp.txt
+CMCP=$(git -C "$REPO" rev-parse HEAD)
+_fire_ex "" "$SID" mcp__git__commit
+if grep -Fxq -- "$CMCP" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseK mcp__-shaped event swept its commit"
+else
+  bad "caseK mcp__-shaped event swept its commit" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
 
 # ---------------------------------------------------------------------------
 printf '\n== Summary: %d passed, %d failed ==\n' "$PASS" "$FAIL"
