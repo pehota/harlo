@@ -71,6 +71,7 @@
         "HC_HOOK_TOOL_FILE_PATH",
         "HC_HOOK_TOOL_COMMAND",
         "HC_HOOK_TOOL_BACKGROUND",
+        "HC_HOOK_TOOL_USE_ID",
         "HC_HOOK_SOURCE",
         "HC_HOOK_STOP_ACTIVE"
       ],

@@ -210,6 +210,53 @@ while IFS= read -r ln; do
   esac
 done < "$REPO/.abi_ts.out"
 
+# 2c. hc_read_hook_input — every declared global must be SET from a payload that
+#     carries the corresponding field, and the ones that gate BEHAVIOUR must
+#     carry the payload's VALUE, not merely exist.
+#
+#     WHY THE VALUE CHECK: declaration-only coverage is what let
+#     HC_HOOK_TOOL_USE_ID sit undeclared while commit-ledger.sh depended on it.
+#     A refactor dropping the jq read would leave it empty, silently reverting
+#     the per-call cursor to the shared one and re-opening the interleaved-window
+#     skip (a commit landing in no ledger at all). Existence alone cannot see
+#     that; the value can.
+(
+  cd "$REPO" || exit 1
+  # Stdin by REDIRECT, never a pipe: a pipeline runs hc_read_hook_input in a
+  # subshell and every global it sets dies with it — the assertions below would
+  # all fail against perfectly good code.
+  hc_read_hook_input >/dev/null 2>&1 <<'EOF_PAYLOAD'
+{"session_id":"sid-abi","tool_use_id":"toolu_abi123","tool_input":{"command":"git status","run_in_background":true,"file_path":"/tmp/x"},"source":"startup","stop_hook_active":false}
+EOF_PAYLOAD
+  RC=$?
+  RH_GLOBALS=$(jq -r '.functions[] | select(.name=="hc_read_hook_input") | .globals[]' "$ABI" 2>/dev/null)
+  while IFS= read -r g; do
+    [ -z "$g" ] && continue
+    if is_set "$g" && declare -p "$g" >/dev/null 2>&1; then
+      printf 'SET %s\n' "$g"
+    else
+      printf 'UNSET %s\n' "$g"
+    fi
+  done <<EOF3
+$RH_GLOBALS
+EOF3
+  printf 'VAL_USE_ID %s\n' "${HC_HOOK_TOOL_USE_ID:-}"
+  printf 'VAL_SID %s\n' "${HC_HOOK_SESSION_ID:-}"
+  printf 'VAL_BG %s\n' "${HC_HOOK_TOOL_BACKGROUND:-}"
+  printf 'RC %s\n' "$RC"
+) > "$REPO/.abi_rh.out" 2>/dev/null
+
+while IFS= read -r ln; do
+  case "$ln" in
+    "SET "*)   ok "hc_read_hook_input sets declared global ${ln#SET }" ;;
+    "UNSET "*) bad "hc_read_hook_input does NOT set declared global ${ln#UNSET } (ABI drift)" ;;
+    "VAL_USE_ID "*) eq "hc_read_hook_input parses tool_use_id (per-call cursor key)" "toolu_abi123" "${ln#VAL_USE_ID }" ;;
+    "VAL_SID "*)    eq "hc_read_hook_input parses session_id" "sid-abi" "${ln#VAL_SID }" ;;
+    "VAL_BG "*)     eq "hc_read_hook_input parses run_in_background" "true" "${ln#VAL_BG }" ;;
+    "RC "*)    if [ "${ln#RC }" = "0" ]; then ok "hc_read_hook_input returns 0 (matches declared 'always 0')"; else bad "hc_read_hook_input returned ${ln#RC } (declared always 0)"; fi ;;
+  esac
+done < "$REPO/.abi_rh.out"
+
 # ===========================================================================
 # 3. SENTINELS — the declared sentinel strings are really emittable, AND
 # 4. RETURN CODES — always-0 functions stay 0 on degraded/sentinel paths.

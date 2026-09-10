@@ -759,7 +759,12 @@ hc__resolve_task_base() {
 #
 # So the union of every ledger's SHAs is built ONCE per range walk
 # (hc__ledger_set_load) into a newline-FRAMED blob and membership is an
-# in-process `case` match — ZERO forks, whatever the file or commit count.
+# in-process `case` match — zero forks per COMMIT, and the walk's cost stops
+# scaling with the range at all. The load itself costs one fork per ledger
+# FILE; see hc__ledger_set_load for why that trade is the right way round, and
+# for the file-count ceiling it leaves behind. Do NOT restate this as "zero
+# forks": that exact claim sat here while the loader underneath it was
+# quadratic, and an over-confident comment is what let the regression ship.
 #
 # WHY A BLOB AND NOT AN ASSOCIATIVE ARRAY: `declare -A` needs bash 4, and macOS
 # still ships bash 3.2 as /bin/bash — the interpreter of every hook here. The
