@@ -10,6 +10,7 @@
   "trunk": null,
   "untracked_policy": "baseline",
   "min_review_level": "high",
+  "artifact_paths": ["docs/**", "tasks/**", "README*", "CHANGELOG*", "LICENSE*"],
   "headless_max_turns": 60,
   "headless_timeout_minutes": 45
 }

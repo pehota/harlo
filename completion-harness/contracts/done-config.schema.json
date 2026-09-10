@@ -35,6 +35,11 @@
     "trunk": { "type": ["string", "null"] },
     "untracked_policy": { "enum": ["baseline", "strict"] },
     "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
+    "artifact_paths": {
+      "description": "Exclude list for the task-DoD walking skeleton (dod/). A changed path matched by ANY of these globs is ARTIFACT surface (spec/plan/notes — no task DoD required); a path matched by NONE is PRODUCT surface. Fails CLOSED: an unlisted new directory counts as product. Deliberately NOT a blanket **/*.md — DOD.md and dod-protocol.md ARE the harness's behavioural contract. Read via dod/lib-classify.sh; default in done-config.default.json.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "headless_max_turns": { "type": "integer" },
     "headless_timeout_minutes": { "type": "integer" },
     "worktree": {
