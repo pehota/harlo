@@ -420,8 +420,11 @@ make_trunk_repo() {
   git -C "$dir" commit -q -m "root"
   printf '%s' "$dir"
 }
-set_cfg() {
-  jq "$2" "$1/.claude/done-config.json" > "$1/cfg.tmp" && mv "$1/cfg.tmp" "$1/.claude/done-config.json"
+# cfg <repo> <key> <default> — read a key exactly as a hook would: the REAL
+# harness-common.sh, sourced fresh, and hc_cfg pointed at <repo> via its own
+# <proj> argument so no ambient PROJECT_DIR has to be staged.
+cfg() {
+  ( . "$SCRIPTS/harness-common.sh" >/dev/null 2>&1; hc_cfg "$2" "$3" "$1" )
 }
 
 # T1 — on trunk: the user must be told the harness is in session fallback, so
@@ -463,6 +466,23 @@ printf '{"untracked_policy":"strict"}\n' > "$SC"
 printf '{"session_id":"t5"}' | CLAUDE_PROJECT_DIR="$DIR" bash "$BASELINE" >/dev/null 2>&1
 if [ -f "$SC" ]; then FAILS=$((FAILS+1)); CASES=$((CASES+1)); printf 'FAIL  T5 empty source kept the override\n'
 else CASES=$((CASES+1)); printf 'PASS  T5 empty source DROPS the override (fails toward config)\n'; fi
+
+# T6 — a FALSY literal in the session layer is a VALUE, not an absence. hc_cfg
+#      probes with has() for exactly this: jq's `//` treats a literal `false`
+#      as empty, so a bare `//` default would silently un-do the override and
+#      hand back the built-in. `false` is the ONE shape that exercises this —
+#      to jq only `false` and `null` are falsy, so a literal 0 or "" survives
+#      a bare `//` unharmed. No boolean key is read through hc_cfg today
+#      (untracked_policy is a string, the two headless_* keys are integers),
+#      so the probe key below is deliberately arbitrary: what is under test is
+#      hc_cfg's contract, standing guard for the next boolean key added.
+DIR=$(make_trunk_repo)
+SC="$DIR/.claude/.harness/session-config.json"
+assert_eq "T6 key absent from every layer → the caller's default" \
+  "$(cfg "$DIR" hc_probe_flag true)" "true"
+printf '{"hc_probe_flag":false}\n' > "$SC"
+assert_eq "T6 a literal false in the session layer overrides the default instead of falling through to it" \
+  "$(cfg "$DIR" hc_probe_flag true)" "false"
 
 # ---------------------------------------------------------------------------
 echo

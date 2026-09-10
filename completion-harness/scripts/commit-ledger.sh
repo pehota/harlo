@@ -126,11 +126,11 @@ fi
 # Rebase / merge in progress → HEAD is detached and moves repeatedly over
 # transient commits; pinning or sweeping them would only dirty the ledger with
 # SHAs that vanish when the operation finishes. Kept in the SHARED preamble so
-# pre and post cannot diverge on it. After the operation completes, the next Bash call pins the cursor at the
-# NEW HEAD, so the rewritten commits never enter the ledger at all — and
-# hc__resolve_session_base's reachability tripwire then fires on the now-
-# unreachable PRE-rebase sha and refuses to advance the base. Over-block,
-# never a silent skip.
+# pre and post cannot diverge on it. After the operation completes, the next
+# Bash call pins the cursor at the NEW HEAD, so the rewritten commits never
+# enter the ledger at all — and hc__resolve_session_base's reachability
+# tripwire then fires on the now-unreachable PRE-rebase sha and refuses to
+# advance the base. Over-block, never a silent skip.
 GIT_DIR=$(git -C "$PROJECT_DIR" rev-parse --git-dir 2>/dev/null)
 if [ -n "$GIT_DIR" ]; then
   case "$GIT_DIR" in

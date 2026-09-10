@@ -219,8 +219,11 @@ hc_is_block_category() {
 #   2. $HC_CONFIG_REL — the repo's persisted config.
 #   3. <default> — the built-in.
 #
-# Keys read through this: untracked_policy, baseline_snapshot. `trunk` is
-# deliberately NOT among them — see hc__detect_trunk.
+# Keys read through this — the complete live set: untracked_policy (below, in
+# hc_tree_status), headless_max_turns and headless_timeout_minutes
+# (run-task.sh). `baseline_snapshot` is NOT one of them: done-preflight.sh and
+# baseline-snapshot.sh read it with a direct jq, so it takes no part in this
+# layering. `trunk` is deliberately NOT among them — see hc__detect_trunk.
 #
 # A `has()` probe, never a bare `//` default: jq's `//` treats a literal `false`
 # as empty and would flip an explicit `false` back to the default. A
