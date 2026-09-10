@@ -822,6 +822,16 @@ HC__LEDGER_SET_SCOPE=0
 # the splice would have eaten. Blank interior lines survive here where the old
 # loop dropped them; harmless, since a match needs HC__NL<sha>HC__NL and
 # hc__commit_in_any_ledger rejects an empty sha before looking.
+#
+# THE CEILING THIS LEAVES: the concat is quadratic in LEDGER FILES now, not
+# lines. Measured end-to-end on done-gate.sh: 40 files 0.32s, 200 2.02s, 500
+# 9.24s, 1000 30.4s — so ~500 files is where the 10s Stop timeout is in play
+# again, and a timed-out gate emits no decision. caseP guards the LINE axis
+# (5851) but pins files at 40, so this axis is unguarded by test. Reachability
+# is remote today (one file per session, age-reaped at 14 days, live dirs hold
+# single digits), which is why it is documented rather than fixed.
+# ponytail: quadratic in file count; chunk the concat or accumulate into an
+# array joined once if a repo ever carries hundreds of session ledgers.
 hc__ledger_set_load() {
   HC__LEDGER_SET=""
   [ -z "${HARNESS_DIR:-}" ] && return 0

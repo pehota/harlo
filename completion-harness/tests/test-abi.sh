@@ -145,6 +145,20 @@ echo "-- globals --"
 # is_set <VARNAME> → 0 if the variable is currently set (even if empty value).
 is_set() { eval "[ \"\${$1+set}\" = set ]"; }
 
+# trace_pinned <file> <label> — a reader loop over an EMPTY trace file emits
+# ZERO assertions and the suite still reports pass: default-success, the same
+# silent-skip shape this harness exists to prevent. Pin every trace as
+# non-empty before consuming it, so a subshell that died before printing
+# anything fails loudly instead of vanishing.
+trace_pinned() {
+  if [ -s "$1" ]; then
+    ok "$2 trace is non-empty (its assertions really ran)"
+    return 0
+  fi
+  bad "$2 trace is EMPTY — its subshell produced nothing, so its assertions silently did not run" "non-empty trace"
+  return 1
+}
+
 # 2a. hc_resolve — after a real call in a task-mode fixture, every global its
 #     shell-abi globals[] declares must be SET.
 new_task_repo
@@ -171,6 +185,7 @@ EOF2
   printf 'RC %s\n' "$RC"
   [ -z "$miss" ] && printf 'ALLSET\n' || printf 'MISSING%s\n' "$miss"
 ) > "$REPO/.abi_resolve.out" 2>/dev/null
+trace_pinned "$REPO/.abi_resolve.out" "hc_resolve"
 
 # Report each declared hc_resolve global from the subshell trace.
 while IFS= read -r ln; do
@@ -201,6 +216,7 @@ $TS_GLOBALS
 EOF2
   printf 'RC %s\n' "$RC"
 ) > "$REPO/.abi_ts.out" 2>/dev/null
+trace_pinned "$REPO/.abi_ts.out" "hc_tree_status"
 
 while IFS= read -r ln; do
   case "$ln" in
@@ -245,6 +261,7 @@ EOF3
   printf 'VAL_BG %s\n' "${HC_HOOK_TOOL_BACKGROUND:-}"
   printf 'RC %s\n' "$RC"
 ) > "$REPO/.abi_rh.out" 2>/dev/null
+trace_pinned "$REPO/.abi_rh.out" "hc_read_hook_input"
 
 while IFS= read -r ln; do
   case "$ln" in
@@ -256,6 +273,42 @@ while IFS= read -r ln; do
     "RC "*)    if [ "${ln#RC }" = "0" ]; then ok "hc_read_hook_input returns 0 (matches declared 'always 0')"; else bad "hc_read_hook_input returned ${ln#RC } (declared always 0)"; fi ;;
   esac
 done < "$REPO/.abi_rh.out"
+
+# 2d. GLOBALS, THE OTHER DIRECTION — every HC_HOOK_* global the library actually
+#     ASSIGNS must be DECLARED in shell-abi.json.
+#
+# 2a/2b/2c all walk declared -> set. That direction cannot see a global that is
+# set but UNDECLARED, which is exactly how HC_HOOK_TOOL_USE_ID hid: it was
+# assigned by hc_read_hook_input and depended on by commit-ledger.sh for the
+# per-call cursor, while the ABI never mentioned it, so nothing failed when it
+# was missing from the contract. 1b guards undeclared FUNCTIONS; this guards
+# undeclared GLOBALS, for any future HC_HOOK_* field.
+#
+# Source of truth is the assignments in the function body, read straight from
+# `declare -f` output so it tracks the real code rather than a hand-kept list.
+RH_ASSIGNED=$(declare -f hc_read_hook_input 2>/dev/null \
+  | grep -oE '\bHC_HOOK_[A-Z0-9_]+=' 2>/dev/null \
+  | sed 's/=$//' | sort -u)
+RH_DECLARED=$(jq -r '.functions[] | select(.name=="hc_read_hook_input") | .globals[]' "$ABI" 2>/dev/null | sort -u)
+
+if [ -z "$RH_ASSIGNED" ]; then
+  bad "could not read any HC_HOOK_* assignment out of hc_read_hook_input (this check would silently pass)" "at least one assignment"
+else
+  ok "hc_read_hook_input assignments are introspectable ($(printf '%s' "$RH_ASSIGNED" | grep -c .) globals found)"
+  while IFS= read -r g; do
+    [ -z "$g" ] && continue
+    case "
+$RH_DECLARED
+" in
+      *"
+$g
+"*) ok "assigned global $g is declared in shell-abi.json" ;;
+      *)  bad "assigned global $g is NOT declared in shell-abi.json (ABI drift: set but undeclared)" "declared in globals[]" ;;
+    esac
+  done <<EOF4
+$RH_ASSIGNED
+EOF4
+fi
 
 # ===========================================================================
 # 3. SENTINELS — the declared sentinel strings are really emittable, AND
