@@ -1183,17 +1183,22 @@ CTIP=$(git -C "$REPO" rev-parse HEAD)
 mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
 # Only the TIP is ours, so the advance loop really traverses the whole range.
 printf '%s\n' "$CTIP" > "$(ledger_path "$SID")"
+# 150 lines per peer, not 10. The original fixture held 391 aggregate lines,
+# which pinned only the FILE-count axis — the axis the per-commit grep fix
+# addressed — and so stayed green when the loader itself regressed to O(n^2)
+# line appending. 5851 lines is where that regression measured 12.39s against
+# the Stop hook's 10s timeout, i.e. a BLOCK silently becoming no decision.
+# One awk per file rather than 5850 shell appends, so the FIXTURE does not
+# become the thing being timed.
 i=1
 while [ "$i" -le 39 ]; do
-  j=1
-  : > "$REPO/.claude/.harness/baselines/peer$i.own-commits"
-  while [ "$j" -le 10 ]; do
-    printf '%040d\n' "$((i * 100 + j))" >> "$REPO/.claude/.harness/baselines/peer$i.own-commits"
-    j=$((j + 1))
-  done
+  awk -v b="$((i * 1000))" 'BEGIN { for (j = 1; j <= 150; j++) printf "%040d\n", b + j }' \
+    > "$REPO/.claude/.harness/baselines/peer$i.own-commits"
   i=$((i + 1))
 done
 eq "caseP fixture: 40 ledger files" "40" "$(ls "$REPO"/.claude/.harness/baselines/*.own-commits 2>/dev/null | grep -c .)"
+eq "caseP fixture: 5851 aggregate ledger lines" "5851" \
+  "$(cat "$REPO"/.claude/.harness/baselines/*.own-commits 2>/dev/null | grep -c .)"
 P_T0=$SECONDS
 resolve_inproc "$SID"
 P_EL=$((SECONDS - P_T0))

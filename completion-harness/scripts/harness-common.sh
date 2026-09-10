@@ -797,28 +797,37 @@ HC__LEDGER_SET=""
 HC__LEDGER_SET_SCOPE=0
 
 # hc__ledger_set_load — rebuild HC__LEDGER_SET from $HARNESS_DIR/baselines.
-# Pure builtins, ZERO forks: `read` per line, and the files are tiny. An
-# unreadable file simply contributes nothing (see the failure semantics above).
-# Blank lines are dropped — they could never match a sha under `grep -qxF`
-# either. No other interpretation is applied: whatever a ledger holds is
-# compared verbatim.
+# ONE fork per ledger FILE. An unreadable file simply contributes nothing (see
+# the failure semantics above). No interpretation is applied: whatever a ledger
+# holds is compared verbatim.
+#
+# WHY PER-FILE AND NOT PER-LINE: the obvious pure-builtin form — `read` a line
+# and append it — is O(lines^2) in shell, because each append copies the whole
+# accumulated blob. Forks were traded for quadratic copying, which measured
+# WORSE than the per-commit grep it replaced: 5851 aggregate ledger lines took
+# done-gate.sh 12.39s against its own Stop "timeout": 10, where a cancelled
+# hook emits NO decision and a BLOCK silently becomes a pass. One `cat` per
+# file is 0.24s at 6000 lines. A ledger that big is one `git pull` away, since
+# a fast-forward window sweeps every commit it brings in.
+#
+# WHY NOT ONE `cat` OVER THE WHOLE GLOB: command substitution strips trailing
+# newlines, so a file whose last line has no newline would be spliced onto the
+# next file's first line and LOSE both memberships — the silent-skip direction.
+# Substituting per file and re-framing with HC__NL restores the delimiter that
+# the splice would have eaten. Blank interior lines survive here where the old
+# loop dropped them; harmless, since a match needs HC__NL<sha>HC__NL and
+# hc__commit_in_any_ledger rejects an empty sha before looking.
 hc__ledger_set_load() {
   HC__LEDGER_SET=""
   [ -z "${HARNESS_DIR:-}" ] && return 0
   local dir="$HARNESS_DIR/baselines"
   [ -d "$dir" ] || return 0
-  local f line blob=""
+  local f chunk blob=""
   for f in "$dir"/*.own-commits; do
     # No-glob-match leaves the literal pattern; -f filters it out.
     [ -f "$f" ] || continue
-    # `|| [ -n "$line" ]` so a final line with no trailing newline still counts
-    # — per FILE, which is why this is not one `cat` of the whole glob: cat
-    # would splice such a tail onto the next file's first line and LOSE both
-    # memberships (the silent-skip direction).
-    while IFS= read -r line || [ -n "$line" ]; do
-      [ -z "$line" ] && continue
-      blob="$blob$line$HC__NL"
-    done < "$f"
+    chunk=$(cat "$f" 2>/dev/null)
+    [ -n "$chunk" ] && blob="$blob$chunk$HC__NL"
   done
   [ -n "$blob" ] && HC__LEDGER_SET="$HC__NL$blob"
   return 0
