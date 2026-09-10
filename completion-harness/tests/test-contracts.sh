@@ -129,6 +129,47 @@ if vok "$CONTRACTS/base-dod.schema.json" "$TMP/base-dod.json"; then
   ok "base-dod minimal valid → 0"
 else bad "base-dod minimal valid → 0"; fi
 
+# --- task-dod schema (walking skeleton, issue #11 / ADR-0001) --------------
+# Minimal VALID: one requirement, created_at, blast_radius.
+cat > "$TMP/task-dod.json" <<'JSON'
+{"task_key":"br-foo","created_at":"2026-01-01T00:00:00Z","blast_radius":{"tier":"low","reason":"one-line copy fix"},"requirements":[{"text":"the banner reads 'hello'","origin":"prompt","added_at":"2026-01-01T00:00:00Z"}]}
+JSON
+if vok "$CONTRACTS/task-dod.schema.json" "$TMP/task-dod.json"; then
+  ok "task-dod minimal valid → 0"
+else bad "task-dod minimal valid → 0"; fi
+
+# INVALID: bad tier enum.
+cat > "$TMP/task-dod-badtier.json" <<'JSON'
+{"task_key":"br-foo","created_at":"t","blast_radius":{"tier":"catastrophic","reason":"r"},"requirements":[{"text":"x","origin":"prompt","added_at":"t"}]}
+JSON
+if ! vok "$CONTRACTS/task-dod.schema.json" "$TMP/task-dod-badtier.json"; then
+  ok "task-dod bad blast_radius.tier enum → nonzero"
+else bad "task-dod bad blast_radius.tier enum → nonzero"; fi
+
+# INVALID: bad origin enum on a requirement.
+cat > "$TMP/task-dod-badorigin.json" <<'JSON'
+{"task_key":"br-foo","created_at":"t","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"x","origin":"guess","added_at":"t"}]}
+JSON
+if ! vok "$CONTRACTS/task-dod.schema.json" "$TMP/task-dod-badorigin.json"; then
+  ok "task-dod bad requirement.origin enum → nonzero"
+else bad "task-dod bad requirement.origin enum → nonzero"; fi
+
+# INVALID: stray top-level key (additionalProperties:false).
+cat > "$TMP/task-dod-stray.json" <<'JSON'
+{"task_key":"br-foo","created_at":"t","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"x","origin":"prompt","added_at":"t"}],"verified_sha":"deadbeef"}
+JSON
+if ! vok "$CONTRACTS/task-dod.schema.json" "$TMP/task-dod-stray.json"; then
+  ok "task-dod stray top-level key → nonzero"
+else bad "task-dod stray top-level key → nonzero"; fi
+
+# INVALID: missing required blast_radius.
+cat > "$TMP/task-dod-nobr.json" <<'JSON'
+{"task_key":"br-foo","created_at":"t","requirements":[{"text":"x","origin":"prompt","added_at":"t"}]}
+JSON
+if ! vok "$CONTRACTS/task-dod.schema.json" "$TMP/task-dod-nobr.json"; then
+  ok "task-dod missing blast_radius → nonzero"
+else bad "task-dod missing blast_radius → nonzero"; fi
+
 # --- shipped data files -----------------------------------------------------
 # base-dod.json ships and MUST validate against its schema.
 if vok "$CONTRACTS/base-dod.schema.json" "$CONTRACTS/base-dod.json"; then
