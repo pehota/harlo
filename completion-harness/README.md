@@ -81,7 +81,15 @@ This is idempotent. It:
 - wires the Stop + SessionStart hooks into `.claude/settings.local.json`
   (machine-local; merged with `jq`, existing hooks preserved),
 - seeds a starter `.claude/done-config.json` if absent,
-- adds `.claude/.harness/` to the project's `.gitignore`.
+- adds `.claude/.harness/` to the project's `.gitignore`,
+- on an upgrade, **prunes retired harness artifacts**: scripts under
+  `.claude/scripts/` and hook entries in `.claude/settings.local.json` that the
+  bundle no longer ships. Ownership always needs two signals, never location
+  alone, so a script you dropped in `.claude/scripts/` yourself, or a hook you
+  wired yourself, is left alone. Pruning is best-effort — a failure warns and
+  the install continues. It does **not** prune stale keys from an existing
+  `.claude/done-config.json` (your config is never rewritten), and it doesn't
+  touch retired `.claude/skills/`, `agents/`, or `contracts/` files.
 
 Requires `jq` and `git`.
 

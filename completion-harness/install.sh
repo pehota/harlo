@@ -120,6 +120,88 @@ fi
 SETTINGS_FILE="$CLAUDE_DIR/settings.local.json"
 [ -f "$SETTINGS_FILE" ] || echo '{}' > "$SETTINGS_FILE"
 
+# --- prune retired harness artifacts (upgrade path) -------------------------
+# This installer only ever copied and appended, so a feature the bundle STOPPED
+# shipping stayed LIVE in every existing non-plugin install: its script file
+# remained under .claude/scripts/ (+x) and its hook entry remained in
+# settings.local.json. The removed auto-branch PreToolUse(Write|Edit) hook is
+# the case that surfaced it — it kept branching users' trunk after the bundle
+# had dropped the feature. Plugin installs were never affected (hooks.json
+# ships wholesale, so a dropped entry disappears on its own).
+#
+# Strategy: DERIVE what the bundle ships now (the same EXEC_SCRIPTS list used
+# to copy, plus the sourced harness-common.sh) and remove harness-OWNED
+# leftovers that are not in it. No hand-maintained list of retired artifacts:
+# the NEXT feature removal needs no edit here. Ownership is never inferred
+# from location alone — two independent signals are required, so a script a
+# project dropped into .claude/scripts/ itself, or a hook it wired itself, is
+# never touched:
+#   file — lives in the harness's own .claude/scripts/ install target AND
+#          carries the bundle's header marker ("Completion Harness —") in its
+#          first 5 lines. Every shipped script has it; so did auto-branch.sh.
+#   hook — EVERY command in the entry references
+#          $CLAUDE_PROJECT_DIR/.claude/scripts/<name>.sh (that same target)
+#          AND no <name>.sh it references is still shipped. Requiring ALL
+#          commands to be ours keeps a mixed entry (ours + a hook the user
+#          added beside it) intact; nothing else is removed, reordered, or
+#          rewritten, and non-hook keys are carried through untouched.
+# Pruning is best-effort: any failure warns and the install continues (a
+# stale leftover is a wart, a half-installed harness is worse).
+SHIPPED_SCRIPTS=("${EXEC_SCRIPTS[@]}" harness-common.sh)
+
+is_shipped() {
+  local n
+  for n in "${SHIPPED_SCRIPTS[@]}"; do
+    [ "$n" = "$1" ] && return 0
+  done
+  return 1
+}
+
+for f in "$CLAUDE_DIR/scripts/"*.sh; do
+  [ -f "$f" ] || continue                     # no-glob-match guard
+  b="$(basename "$f")"
+  is_shipped "$b" && continue                 # still part of the bundle
+  head -5 "$f" 2>/dev/null | grep -q 'Completion Harness —' || continue  # not ours
+  if rm -f "$f" 2>/dev/null; then
+    echo "  pruned retired scripts/$b (no longer shipped)"
+  else
+    echo "  warning: could not remove retired scripts/$b — delete it by hand" >&2
+  fi
+done
+
+SHIPPED_JSON=$(printf '%s\n' "${SHIPPED_SCRIPTS[@]}" \
+  | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null)
+if [ -z "$SHIPPED_JSON" ]; then
+  echo "  warning: could not build the shipped-script list — skipped pruning" \
+       "retired hooks from settings.local.json" >&2
+else
+  PRUNED=$(jq --argjson shipped "$SHIPPED_JSON" '
+    # Commands carried by one hook entry.
+    def cmds: [ .hooks[]?.command? // empty ];
+    # Script basenames those commands reference under the harness install
+    # target. scan() with one capture group yields arrays, hence flatten.
+    def refs: [ cmds[] | scan("/\\.claude/scripts/([A-Za-z0-9._-]+\\.sh)") ] | flatten;
+    # A retired harness entry: entirely ours, and naming nothing still shipped.
+    def retired: (cmds | length) > 0
+      and (cmds | all(contains("/.claude/scripts/")))
+      and (refs | length) > 0
+      and (refs | all(IN($shipped[]) | not));
+    if (.hooks | type) == "object" then
+      .hooks |= with_entries(
+        if (.value | type) == "array"
+        then .value = [ .value[]
+               | if type == "object" then select(retired | not) else . end ]
+        else . end)
+    else . end
+  ' "$SETTINGS_FILE" 2>/dev/null)
+  if [ -z "$PRUNED" ]; then
+    echo "  warning: could not prune retired hooks from $SETTINGS_FILE" \
+         "(invalid JSON?) — left untouched" >&2
+  else
+    printf '%s\n' "$PRUNED" > "$SETTINGS_FILE"
+  fi
+fi
+
 STOP_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/done-gate.sh"'
 START_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/baseline-snapshot.sh"'
 POST_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh"'

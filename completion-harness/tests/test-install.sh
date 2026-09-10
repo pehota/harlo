@@ -228,13 +228,17 @@ if [ -f "$SET" ] && jq empty "$SET" >/dev/null 2>&1; then
   else
     bad "PostToolUse commit-ledger matcher is '$LEDGER_MATCHER'" "got '$POST_M'"
   fi
-  # Exactly ONE PreToolUse entry ships: the ledger pin. A second entry would
-  # mean a stale hook (e.g. the removed auto-branch) survived an upgrade.
+  # A FRESH install wires exactly ONE PreToolUse entry: the ledger pin. This
+  # says nothing about upgrades — this target never had a previous install, so
+  # there is nothing stale to survive. Stale-hook survival is proved by the
+  # "UPGRADE from 60826f9" fixture near the end of this file, which installs a
+  # real older bundle first; this assertion only pins the fresh-install shape
+  # (a second entry here would mean the installer wired something extra).
   PRE_N=$(jq '[.hooks.PreToolUse[]?] | length' "$SET" 2>/dev/null)
   if [ "$PRE_N" = "1" ]; then
-    ok "exactly one PreToolUse entry is wired (the ledger pin)"
+    ok "fresh install wires exactly one PreToolUse entry (the ledger pin)"
   else
-    bad "exactly one PreToolUse entry is wired" "got $PRE_N"
+    bad "fresh install wires exactly one PreToolUse entry" "got $PRE_N"
   fi
 
   # The installer's matcher must equal the plugin manifest's, or the two
@@ -356,6 +360,126 @@ else
   bad "re-install over the upgraded settings file is byte-identical" "settings.local.json changed"
 fi
 rm -rf "$UPG" 2>/dev/null
+
+# --- UPGRADE from a REAL older bundle: retired artifacts must be pruned ------
+# Everything above installs only the CURRENT bundle, so nothing above can see
+# what the installer does to an install made by an OLDER one. That is how the
+# auto-branch removal shipped broken: install.sh only copied and appended, so
+# .claude/scripts/auto-branch.sh stayed on disk (+x) and its
+# PreToolUse(Write|Edit) hook entry stayed in settings.local.json — the feature
+# stayed LIVE for the entire existing non-plugin population while this suite
+# was green.
+#
+# So install the bundle AS IT EXISTED at 60826f9 (the last commit that shipped
+# auto-branching) into a throwaway target via `git archive` — no worktree, no
+# checkout, nothing touched in the developer's tree — then install the current
+# bundle over it and assert BOTH directions:
+#   pruned    : the retired script file and hook entry are gone.
+#   preserved : a user-owned hook entry, a user-owned unrelated top-level key,
+#               and a user-owned script sitting in .claude/scripts/ all survive
+#               untouched. This half is what stops a future "prune" from eating
+#               somebody's config.
+OLD_SHA=60826f9
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
+  OLDB=$(hc__test_mktemp_d)   # extracted old bundle
+  OT=$(hc__test_mktemp_d)     # upgrade target
+  if git -C "$REPO" archive "$OLD_SHA" completion-harness 2>/dev/null \
+       | tar -x -C "$OLDB" 2>/dev/null && [ -f "$OLDB/completion-harness/install.sh" ]; then
+    ok "extracted the $OLD_SHA bundle for the upgrade fixture"
+
+    if bash "$OLDB/completion-harness/install.sh" "$OT" >/dev/null 2>&1; then
+      ok "the $OLD_SHA installer exited 0 into the upgrade target"
+    else
+      bad "the $OLD_SHA installer exited 0 into the upgrade target" "non-zero"
+    fi
+
+    OS="$OT/.claude/settings.local.json"
+    STALE_SCRIPT="$OT/.claude/scripts/auto-branch.sh"
+    # Fixture precondition — if the OLD install did not leave the stale
+    # artifacts, the post-upgrade assertions below would pass vacuously.
+    if [ -f "$STALE_SCRIPT" ]; then
+      ok "fixture precondition: $OLD_SHA left scripts/auto-branch.sh behind"
+    else
+      bad "fixture precondition: $OLD_SHA left scripts/auto-branch.sh behind" "absent"
+    fi
+    if jq -e '[.. | objects | .command? // empty] | any(contains("auto-branch.sh"))' \
+         "$OS" >/dev/null 2>&1; then
+      ok "fixture precondition: $OLD_SHA wired the auto-branch hook entry"
+    else
+      bad "fixture precondition: $OLD_SHA wired the auto-branch hook entry" "absent"
+    fi
+
+    # Seed USER-OWNED state before the upgrade: a hook entry of their own (on a
+    # PreToolUse matcher, i.e. the very event being pruned), an unrelated
+    # top-level key, and a script of their own inside .claude/scripts/ that
+    # carries no harness header marker.
+    USER_CMD='bash "$CLAUDE_PROJECT_DIR/scripts/my-own-hook.sh"'
+    SEEDED=$(jq --arg u "$USER_CMD" '
+      .hooks.PreToolUse += [ {"matcher":"Write","hooks":[{"type":"command","command":$u}]} ]
+      | .permissions = {"allow":["Bash(ls:*)"]}
+    ' "$OS" 2>/dev/null)
+    printf '%s\n' "$SEEDED" > "$OS"
+    USER_SCRIPT="$OT/.claude/scripts/my-project-helper.sh"
+    printf '#!/bin/bash\n# a script this project put here itself\n' > "$USER_SCRIPT"
+
+    if bash "$INSTALL" "$OT" >/dev/null 2>&1; then
+      ok "current install.sh exited 0 over the $OLD_SHA install"
+    else
+      bad "current install.sh exited 0 over the $OLD_SHA install" "non-zero"
+    fi
+
+    # --- pruned ---
+    if [ -e "$STALE_SCRIPT" ]; then
+      bad "upgrade pruned the retired scripts/auto-branch.sh" "still present"
+    else
+      ok "upgrade pruned the retired scripts/auto-branch.sh"
+    fi
+    if jq -e '[.. | objects | .command? // empty] | any(contains("auto-branch.sh"))' \
+         "$OS" >/dev/null 2>&1; then
+      bad "upgrade pruned the retired auto-branch hook entry" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    else
+      ok "upgrade pruned the retired auto-branch hook entry"
+    fi
+
+    # --- preserved ---
+    if [ "$(jq --arg u "$USER_CMD" \
+              '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the user-owned PreToolUse hook entry"
+    else
+      bad "upgrade preserved the user-owned PreToolUse hook entry" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    if [ "$(jq -c '.permissions' "$OS" 2>/dev/null)" = '{"allow":["Bash(ls:*)"]}' ]; then
+      ok "upgrade preserved the user-owned unrelated settings key"
+    else
+      bad "upgrade preserved the user-owned unrelated settings key" \
+        "$(jq -c '.permissions' "$OS" 2>/dev/null)"
+    fi
+    if [ -f "$USER_SCRIPT" ]; then
+      ok "upgrade preserved a user-owned script inside .claude/scripts/"
+    else
+      bad "upgrade preserved a user-owned script inside .claude/scripts/" "deleted"
+    fi
+
+    # Pruning must be idempotent too: nothing left to prune, nothing changes.
+    OT_SNAP=$(cat "$OS" 2>/dev/null)
+    bash "$INSTALL" "$OT" >/dev/null 2>&1
+    if [ "$OT_SNAP" = "$(cat "$OS" 2>/dev/null)" ]; then
+      ok "re-install after the prune is byte-identical (idempotent)"
+    else
+      bad "re-install after the prune is byte-identical" "settings.local.json changed"
+    fi
+  else
+    bad "extracted the $OLD_SHA bundle for the upgrade fixture" "git archive failed"
+  fi
+  rm -rf "$OLDB" "$OT" 2>/dev/null
+else
+  bad "upgrade fixture can reach commit $OLD_SHA" \
+    "object unavailable — the upgrade-prune assertions did not run"
+fi
 
 # ---------------------------------------------------------------------------
 echo
