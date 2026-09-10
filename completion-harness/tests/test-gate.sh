@@ -687,18 +687,19 @@ parity_assert "PARITY clean+no-done-state(HEAD>base): hc_state S2 == gate '/done
 rm -rf "$PDIR"
 
 # ============================================================================
-# Part B lock — PreToolUse no-deny invariant. auto-branch.sh must NEVER emit a
-# deny/decision and must ALWAYS exit 0, whether driven on trunk or off-trunk.
-# (Audit conclusion: no new PreToolUse-deny was added; this pins that.)
+# Part B lock — PreToolUse no-deny invariant. The PreToolUse hook
+# (commit-ledger.sh pre) must NEVER emit a deny/decision and must ALWAYS exit
+# 0, whether driven on trunk or off-trunk. A PreToolUse deny would abort the
+# agent's tool call; the harness only ever blocks at Stop.
 # ============================================================================
-AUTOBRANCH="$(cd "$(dirname "$0")/../scripts" && pwd)/auto-branch.sh"
+PRE_HOOK="$(cd "$(dirname "$0")/../scripts" && pwd)/commit-ledger.sh"
 
-# assert_no_deny <name> <dir>  → runs the hook with a Write tool_input; asserts
+# assert_no_deny <name> <dir>  → runs the hook with a Bash tool_input; asserts
 # exit 0 AND stdout carries no deny/decision key.
 assert_no_deny() {
   local name="$1" dir="$2" out code
-  out=$(printf '{"session_id":"pb","tool_name":"Write","tool_input":{"file_path":"x.js","content":"y"}}' \
-    | CLAUDE_PROJECT_DIR="$dir" bash "$AUTOBRANCH" 2>/dev/null)
+  out=$(printf '{"session_id":"pb","tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' \
+    | CLAUDE_PROJECT_DIR="$dir" bash "$PRE_HOOK" pre 2>/dev/null)
   code=$?
   local ok=1 detail=""
   [ "$code" -eq 0 ] || { ok=0; detail="exit $code (expected 0)"; }
@@ -709,7 +710,7 @@ assert_no_deny() {
   else printf 'FAIL  %s  [%s]\n' "$name" "$detail"; FAIL=$((FAIL+1)); fi
 }
 
-# PB1 — on trunk (main). The hook may auto-branch but must never deny.
+# PB1 — on trunk (main).
 PBDIR=$(mktemp_d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t
@@ -718,7 +719,7 @@ mkdir -p "$PBDIR/.claude"; printf '{"trunk":"main"}\n' > "$PBDIR/.claude/done-co
 assert_no_deny "PB1 PreToolUse on trunk -> exit 0, no deny/decision" "$PBDIR"
 rm -rf "$PBDIR"
 
-# PB2 — off trunk (feature branch). Fast-path no-op; still no deny, exit 0.
+# PB2 — off trunk (feature branch). Still no deny, exit 0.
 PBDIR=$(mktemp_d)
 git -C "$PBDIR" init -q -b main
 git -C "$PBDIR" config user.name t; git -C "$PBDIR" config user.email t@t

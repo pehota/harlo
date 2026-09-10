@@ -57,14 +57,13 @@ if jq -e '.max_fix_attempts == 3 and .baseline_snapshot == true and (.overrides 
 else
   bad "sticky defaults not seeded correctly"
 fi
-# identity keys seeded on a fresh file: trunk (null → resolver auto-detects),
-# auto_branch (FALSE — opt-in, so a fresh repo never silently moves off the
-# branch the user chose), branch_prefix ("task/"). has() proves the key is
-# present (== null alone would also be true for an ABSENT key, so use has()).
-if jq -e 'has("trunk") and .trunk == null and has("auto_branch") and .auto_branch == false and .branch_prefix == "task/"' "$CONFIG" >/dev/null 2>&1; then
-  ok "seeded identity keys (trunk=null, auto_branch=false, branch_prefix=task/)"
+# identity keys seeded on a fresh file: trunk (null → resolver auto-detects).
+# has() proves the key is present (== null alone would also be true for an
+# ABSENT key, so use has()).
+if jq -e 'has("trunk") and .trunk == null' "$CONFIG" >/dev/null 2>&1; then
+  ok "seeded identity keys (trunk=null)"
 else
-  bad "identity keys not seeded correctly; got: $(jq -c '{trunk,auto_branch,branch_prefix}' "$CONFIG" 2>/dev/null)"
+  bad "identity keys not seeded correctly; got: $(jq -c '{trunk}' "$CONFIG" 2>/dev/null)"
 fi
 # untracked_policy sticky key seeded with the baseline default.
 if jq -e 'has("untracked_policy") and .untracked_policy == "baseline"' "$CONFIG" >/dev/null 2>&1; then
@@ -135,11 +134,12 @@ fi
 # --- 3. set an override, then rename a script → fingerprint flips -----------
 # add an overrides entry that must survive the re-detect
 tmp=$(mktemp); jq '.overrides = {"start": "node server.js"}' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-# also mutate the identity keys away from their defaults to prove the rewrite
-# PRESERVES human-owned identity config (including a literal auto_branch=true,
-# which is now the NON-DEFAULT value — seeding the default would prove nothing,
-# and it is the back-compat promise the flip rests on).
-tmp=$(mktemp); jq '.trunk = "develop" | .auto_branch = true | .branch_prefix = "feature/" | .untracked_policy = "strict" | .max_review_rounds = 4 | .min_review_level = "critical" | .start_check_cmd = "curl -sf localhost:3000/health" | .start_timeout = 90' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+# also mutate the identity/sticky keys away from their defaults to prove the
+# rewrite PRESERVES human-owned config. baseline_snapshot is set to a literal
+# FALSE deliberately: the seed rule is has()-based, so a `//`-style default
+# would silently flip a false back to true — seeding the default value would
+# prove nothing.
+tmp=$(mktemp); jq '.trunk = "develop" | .baseline_snapshot = false | .untracked_policy = "strict" | .max_review_rounds = 4 | .min_review_level = "critical" | .start_check_cmd = "curl -sf localhost:3000/health" | .start_timeout = 90' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 
 # rename the "test" script to "check" in package.json
 cat > "$TMP/package.json" <<'JSON'
@@ -173,13 +173,13 @@ if jq -e '.overrides.start == "node server.js"' "$CONFIG" >/dev/null 2>&1; then
 else
   bad "overrides were clobbered by re-detect"
 fi
-# identity keys must be PRESERVED across the re-detect — including auto_branch=true,
-# the back-compat promise the default flip rests on: a repo seeded true by an
-# older install must keep branching until a human says otherwise.
-if jq -e '.trunk == "develop" and .auto_branch == true and .branch_prefix == "feature/"' "$CONFIG" >/dev/null 2>&1; then
-  ok "identity keys preserved across re-detect (trunk/auto_branch=true/branch_prefix)"
+# identity/sticky keys must be PRESERVED across the re-detect — including the
+# literal baseline_snapshot=false, which is the NON-default value: a human who
+# turned the snapshot off must stay off until they say otherwise.
+if jq -e '.trunk == "develop" and .baseline_snapshot == false' "$CONFIG" >/dev/null 2>&1; then
+  ok "identity/sticky keys preserved across re-detect (trunk/baseline_snapshot=false)"
 else
-  bad "identity keys clobbered by re-detect; got: $(jq -c '{trunk,auto_branch,branch_prefix}' "$CONFIG" 2>/dev/null)"
+  bad "identity keys clobbered by re-detect; got: $(jq -c '{trunk,baseline_snapshot}' "$CONFIG" 2>/dev/null)"
 fi
 # untracked_policy (a sticky non-identity key) must survive re-detect too —
 # including a non-default literal value.

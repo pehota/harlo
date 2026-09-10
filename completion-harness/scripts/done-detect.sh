@@ -272,7 +272,7 @@ else
         (if $refresh then (.detected = $detected | .source_fingerprint = $fp) else . end)
         | .contract_version = 1
         | reduce ["overrides","max_fix_attempts","baseline_snapshot","trunk",
-                  "auto_branch","branch_prefix","untracked_policy",
+                  "untracked_policy",
                   "max_review_rounds","min_review_level",
                   "start_check_cmd","start_timeout",
                   "headless_max_turns","headless_timeout_minutes"][] as $k

@@ -41,7 +41,7 @@
 #      session's commit is still agent work; scoped per-session it would look
 #      foreign to everyone and get skipped by every reviewer. Case 13 pins it.
 #
-# Same fixture idiom as test-identity.sh / test-autobranch.sh: throwaway mktemp
+# Same fixture idiom as test-identity.sh: throwaway mktemp
 # git repos via hc__test_mktemp_d, PASS/FAIL via ok/bad/eq, harness-common.sh
 # sourced in-process (for hc_resolve / hc__resolve_session_base) alongside
 # driving the real commit-ledger.sh script as a subprocess (for the hook's own
@@ -384,7 +384,7 @@ eq "case8 base advances past the never-observed commit" "$CF" "$HC_BASE"
 # ---------------------------------------------------------------------------
 printf '== Case 9: pre mode never denies and writes no stdout ==\n'
 # PreToolUse can BLOCK a tool call. This hook is pure bookkeeping and must
-# never do that — same invariant test-gate.sh pins for auto-branch.sh.
+# never do that — same invariant test-gate.sh Part B pins for this hook.
 new_repo; SID="L9"
 commit_file base.txt
 run_pre "$SID" "echo hi"
@@ -538,8 +538,8 @@ eq "caseD2 base still advances to HEAD" "$CH" "$HC_BASE"
 # ---------------------------------------------------------------------------
 printf '== Case E: rebase/merge in progress → both modes are inert ==\n'
 # During a rebase HEAD is detached and moves repeatedly over transient commits.
-# Pinning or sweeping those only dirties the ledger. Same GIT_DIR probe shape
-# auto-branch.sh uses, in the SHARED preamble so pre and post cannot diverge.
+# Pinning or sweeping those only dirties the ledger. The GIT_DIR probe lives in
+# the SHARED preamble so pre and post cannot diverge.
 new_repo; SID="LE"
 commit_file base.txt
 C0=$(git -C "$REPO" rev-parse HEAD)

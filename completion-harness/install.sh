@@ -53,7 +53,6 @@ EXEC_SCRIPTS=(
   finish-worktree.sh
   run-task.sh
   harness-resolve.sh
-  auto-branch.sh
   commit-ledger.sh
 )
 for s in "${EXEC_SCRIPTS[@]}"; do
@@ -123,7 +122,6 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.local.json"
 
 STOP_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/done-gate.sh"'
 START_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/baseline-snapshot.sh"'
-PRE_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
 POST_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh"'
 # PreToolUse(Bash) half of the commit ledger: pins HEAD so the PostToolUse half
 # can sweep exactly what moved during the call (see commit-ledger.sh).
@@ -139,7 +137,6 @@ LEDGER_MATCHER='Bash|SlashCommand|mcp__.*'
 MERGED=$(jq \
   --arg stop "$STOP_CMD" \
   --arg start "$START_CMD" \
-  --arg pre "$PRE_CMD" \
   --arg post "$POST_CMD" \
   --arg prel "$PREL_CMD" \
   --arg ledgerm "$LEDGER_MATCHER" '
@@ -162,13 +159,6 @@ MERGED=$(jq \
     else .hooks.SessionStart += [ {"hooks": [ {"type":"command","command":$start} ]} ]
     end
 
-  # append PreToolUse(Write|Edit) auto-branch hook only if not already wired.
-  # PreToolUse entries carry a "matcher" that Stop/SessionStart do not.
-  | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $pre)) as $hasPre
-  | if $hasPre then .
-    else .hooks.PreToolUse += [ {"matcher":"Write|Edit","hooks": [ {"type":"command","command":$pre} ]} ]
-    end
-
   # commit-ledger halves: UPDATE-IN-PLACE, then append-if-absent.
   #
   # The presence test keys on the COMMAND alone, so an entry wired by an OLDER
@@ -181,8 +171,8 @@ MERGED=$(jq \
   # idempotent: on an install that is already current the assignment is a no-op
   # and the append is skipped, so a second run is byte-identical.
   #
-  # Scoped to entries whose command is EXACTLY ours — the "Write|Edit" matcher
-  # on the auto-branch entry is deliberately left untouched.
+  # Scoped to entries whose command is EXACTLY ours, so any unrelated
+  # PreToolUse entry a project already wired is left untouched.
   | .hooks.PreToolUse = [ .hooks.PreToolUse[]?
       | if ([ .hooks[]?.command ] | any(. == $prel)) then .matcher = $ledgerm else . end ]
   | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $prel)) as $hasPreL

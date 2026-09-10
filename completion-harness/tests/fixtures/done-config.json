@@ -18,8 +18,6 @@
   "trunk": "main",
   "untracked_policy": "baseline",
   "min_review_level": "high",
-  "auto_branch": false,
-  "branch_prefix": "task/",
   "headless_max_turns": 60,
   "headless_timeout_minutes": 45
 }

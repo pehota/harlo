@@ -40,7 +40,7 @@ fi
 
 # --- read hook JSON from stdin ----------------------------------------------
 # jq missing -> cannot reason about state -> fail safe. This check stays
-# ahead of the read (unlike auto-branch.sh/baseline-snapshot.sh, which
+# ahead of the read (unlike baseline-snapshot.sh, which
 # degrade fields to "" instead of exiting) because the gate's stated fail-safe
 # posture is "no jq -> allow the stop", not "carry on with empty fields".
 hc_has_jq || exit 0

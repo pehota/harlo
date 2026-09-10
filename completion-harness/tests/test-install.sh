@@ -49,7 +49,8 @@ CL="$TMP/.claude"
 
 # --- scripts present + executable -------------------------------------------
 for s in done-gate.sh baseline-snapshot.sh done-detect.sh done-write-state.sh \
-         done-triage.sh done-preflight.sh harness-common.sh harness-resolve.sh auto-branch.sh; do
+         done-triage.sh done-preflight.sh harness-common.sh harness-resolve.sh \
+         commit-ledger.sh; do
   if [ -f "$CL/scripts/$s" ]; then
     ok "shipped scripts/$s"
   else
@@ -60,7 +61,7 @@ done
 # Executable bit — every shipped script EXCEPT harness-common.sh (SOURCED, stays
 # non-exec by install.sh's chmod list).
 for s in done-gate.sh baseline-snapshot.sh done-detect.sh done-write-state.sh \
-         done-triage.sh done-preflight.sh harness-resolve.sh auto-branch.sh; do
+         done-triage.sh done-preflight.sh harness-resolve.sh commit-ledger.sh; do
   if [ -x "$CL/scripts/$s" ]; then
     ok "scripts/$s is executable"
   else
@@ -207,8 +208,7 @@ if [ -f "$SET" ] && jq empty "$SET" >/dev/null 2>&1; then
       "$SET" 2>/dev/null
   }
 
-  # PreToolUse: BOTH halves must be present — auto-branch on Write|Edit and the
-  # commit-ledger `pre` pin on the widened matcher.
+  # PreToolUse: the commit-ledger `pre` pin, on the widened matcher.
   if jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(endswith("commit-ledger.sh\" pre"))' \
        "$SET" >/dev/null 2>&1; then
     ok "PreToolUse commit-ledger 'pre' hook is wired (HEAD pin)"
@@ -228,11 +228,13 @@ if [ -f "$SET" ] && jq empty "$SET" >/dev/null 2>&1; then
   else
     bad "PostToolUse commit-ledger matcher is '$LEDGER_MATCHER'" "got '$POST_M'"
   fi
-  AB_M=$(ev_matcher PreToolUse 'auto-branch.sh')
-  if [ "$AB_M" = "Write|Edit" ]; then
-    ok "PreToolUse auto-branch matcher is still 'Write|Edit' (not widened)"
+  # Exactly ONE PreToolUse entry ships: the ledger pin. A second entry would
+  # mean a stale hook (e.g. the removed auto-branch) survived an upgrade.
+  PRE_N=$(jq '[.hooks.PreToolUse[]?] | length' "$SET" 2>/dev/null)
+  if [ "$PRE_N" = "1" ]; then
+    ok "exactly one PreToolUse entry is wired (the ledger pin)"
   else
-    bad "PreToolUse auto-branch matcher is still 'Write|Edit'" "got '$AB_M'"
+    bad "exactly one PreToolUse entry is wired" "got $PRE_N"
   fi
 
   # The installer's matcher must equal the plugin manifest's, or the two

@@ -86,7 +86,7 @@ hc_require_jq() {
 # Reads the hook JSON payload from stdin ONCE and parses the fields hook
 # scripts actually consume out of it: session_id, tool_input.file_path,
 # tool_input.command, source, stop_hook_active. Was previously re-implemented
-# independently by auto-branch.sh, baseline-snapshot.sh and done-gate.sh (each
+# independently by baseline-snapshot.sh and done-gate.sh (each
 # its own `cat` + jq-guarded parse); this is the one canonical read.
 #
 # Degrades every field to its default ("" / stop_hook_active to "false") when
@@ -219,11 +219,11 @@ hc_is_block_category() {
 #   2. $HC_CONFIG_REL — the repo's persisted config.
 #   3. <default> — the built-in.
 #
-# Keys read through this: auto_branch, branch_prefix, untracked_policy. `trunk`
-# is deliberately NOT among them — see hc__detect_trunk.
+# Keys read through this: untracked_policy, baseline_snapshot. `trunk` is
+# deliberately NOT among them — see hc__detect_trunk.
 #
 # A `has()` probe, never a bare `//` default: jq's `//` treats a literal `false`
-# as empty and would flip an explicit auto_branch:false back to the default. A
+# as empty and would flip an explicit `false` back to the default. A
 # JSON `null` means "not set here" and falls through to the next layer. Arrays
 # are printed space-joined (the shape the glob-list readers want).
 #
@@ -565,7 +565,7 @@ hc__detect_trunk() {
 
   # Deliberately NOT hc_cfg: `trunk` is the ONE knob the session layer must not
   # reach. It selects task-vs-session mode, computes the task key, drives
-  # auto-branch, and feeds SessionStart's terminal reap, which DELETES the state
+  # task tree-base, and feeds SessionStart's terminal reap, which DELETES the state
   # of branches it judges merged. A wrong trunk there destroys state rather than
   # merely loosening a check — too much authority for an ephemeral,
   # agent-written file, and nothing asked for a per-task trunk.

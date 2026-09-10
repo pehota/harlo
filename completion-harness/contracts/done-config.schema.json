@@ -9,9 +9,7 @@
     "baseline_snapshot",
     "start_timeout",
     "untracked_policy",
-    "min_review_level",
-    "auto_branch",
-    "branch_prefix"
+    "min_review_level"
   ],
   "properties": {
     "contract_version": { "const": 1 },
@@ -37,8 +35,6 @@
     "trunk": { "type": ["string", "null"] },
     "untracked_policy": { "enum": ["baseline", "strict"] },
     "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
-    "auto_branch": { "type": "boolean" },
-    "branch_prefix": { "type": "string" },
     "headless_max_turns": { "type": "integer" },
     "headless_timeout_minutes": { "type": "integer" },
     "worktree": {

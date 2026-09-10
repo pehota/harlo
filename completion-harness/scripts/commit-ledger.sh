@@ -95,7 +95,7 @@
 #       call for nothing. ACCEPTED RESIDUAL: a HEAD-moving tool outside that
 #       matcher set is still missed.
 #
-# Style/guard discipline matches auto-branch.sh: small, guarded everywhere, no
+# Style/guard discipline matches the other hooks: small, guarded everywhere, no
 # `set -e`, sources harness-common.sh, uses hc_read_hook_input / hc_resolve,
 # and NEVER fails the tool — always exit 0, no stdout, and in `pre` mode never
 # any deny/block decision.
@@ -125,9 +125,8 @@ fi
 
 # Rebase / merge in progress → HEAD is detached and moves repeatedly over
 # transient commits; pinning or sweeping them would only dirty the ledger with
-# SHAs that vanish when the operation finishes. Same probe shape as
-# auto-branch.sh (kept in the SHARED preamble so pre and post cannot diverge on
-# it). After the operation completes, the next Bash call pins the cursor at the
+# SHAs that vanish when the operation finishes. Kept in the SHARED preamble so
+# pre and post cannot diverge on it. After the operation completes, the next Bash call pins the cursor at the
 # NEW HEAD, so the rewritten commits never enter the ledger at all — and
 # hc__resolve_session_base's reachability tripwire then fires on the now-
 # unreachable PRE-rebase sha and refuses to advance the base. Over-block,

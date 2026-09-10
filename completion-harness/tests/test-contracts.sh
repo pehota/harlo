@@ -77,7 +77,7 @@ if ! vok "$CONTRACTS/done-state.schema.json" "$TMP/ds-notrunbad.json"; then
 else bad "done-state tests not_run WITHOUT reason → nonzero"; fi
 
 cat > "$TMP/done-config.json" <<'JSON'
-{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/","headless_max_turns":60,"headless_timeout_minutes":45}
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":3,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","headless_max_turns":60,"headless_timeout_minutes":45}
 JSON
 if vok "$CONTRACTS/done-config.schema.json" "$TMP/done-config.json"; then
   ok "done-config minimal valid → 0"
@@ -246,7 +246,7 @@ else bad "findings line=3.5 (fractional integer) → nonzero"; fi
 
 # done-config with max_fix_attempts=2.5 (fractional) → nonzero.
 cat > "$TMP/frac-cfg.json" <<'JSON'
-{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":2.5,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high","auto_branch":true,"branch_prefix":"task/"}
+{"contract_version":1,"detected":{},"overrides":{},"max_fix_attempts":2.5,"max_review_rounds":2,"baseline_snapshot":true,"start_timeout":30,"untracked_policy":"baseline","min_review_level":"high"}
 JSON
 if ! vok "$CONTRACTS/done-config.schema.json" "$TMP/frac-cfg.json"; then
   ok "max_fix_attempts=2.5 (fractional integer) → nonzero"

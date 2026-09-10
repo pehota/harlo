@@ -138,7 +138,7 @@ MAIN_DIR="$TOPLEVEL"
 
 # --- derive the branch name --------------------------------------------------
 # task/<sanitized slug of the first ~40 chars>, unless one was given. Uses the
-# SAME hc__sanitize new-worktree.sh/auto-branch.sh use — never a second
+# SAME hc__sanitize new-worktree.sh uses — never a second
 # sanitizer — so this stays predictable alongside branches made by hand.
 if [ -n "$BRANCH_ARG" ]; then
   BRANCH="$BRANCH_ARG"

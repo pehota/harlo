@@ -399,9 +399,7 @@ fi
 # ADDL_CTX carries the agent-visible proactive steering, injected via
 # hookSpecificOutput.additionalContext in the ACTIONABLE states (S1/S2/S4). The
 # first line is the D4 review-ownership directive; the second injects the FSM
-# next-action. Silent (empty) in S0/S5 — with ONE deliberate addition appended
-# below: the on-trunk auto-branch notice, which must reach the agent BEFORE its
-# first edit and is therefore emitted in S0 too.
+# next-action. Silent (empty) in S0/S5.
 ADDL_CTX=""
 case "$HC_STATE" in
   S1|S2|S4)
@@ -418,31 +416,7 @@ append_msg() { SYS_MSG="${SYS_MSG:+$SYS_MSG
 }$1"; }
 
 if [ -n "$HC_WARN" ]; then
-  # Effective auto_branch: session override first, then repo config, then the
-  # built-in FALSE (opt-in; see auto-branch.sh). hc_cfg probes with has(), so an
-  # explicit true or false both survive intact.
-  AUTO_BRANCH="false"
-  if hc_has_fn hc_cfg; then
-    AUTO_BRANCH=$(hc_cfg auto_branch "false")
-  fi
-
-  if [ "$AUTO_BRANCH" = "false" ]; then
-    append_msg "⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
-  else
-    append_msg "on trunk $HC_TRUNK; a task branch will be auto-created on first code edit (task continuity via branch)."
-    # AGENT-VISIBLE, and this is the whole point: hooks run as static commands
-    # with no argv the conversation can reach, so an instruction the user gives
-    # in chat ("work only on main") can only reach auto-branch.sh through a
-    # file. Tell the agent the file exists BEFORE the first edit — the
-    # systemMessage above is user-facing only, which is why the branch used to
-    # appear anyway despite a standing "stay on trunk" instruction.
-    #
-    # Emitted in EVERY state — including S0, the fresh pre-edit session where it
-    # is most useful. There is no state in which the harness stands down, so
-    # there is nothing to suppress it for.
-    ADDL_CTX="${ADDL_CTX:+$ADDL_CTX
-}[completion-harness] on trunk $HC_TRUNK with auto_branch ON: the first code edit moves this session to a task/ branch. If the user asked to stay on trunk (or to change any harness knob for THIS task only), write it to $(hc__harness_dir)/session-config.json — e.g. {\"auto_branch\": false} — BEFORE editing. That file overrides .claude/done-config.json for this task and is dropped at the next fresh session."
-  fi
+  append_msg "⚠ on trunk $HC_TRUNK; completion harness in session fallback — cross-session task continuity OFF. Use a feature branch."
 fi
 
 # --- optional background test snapshot --------------------------------------
