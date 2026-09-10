@@ -882,12 +882,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-printf '== Case K: the hook is wired for every tool that can move HEAD ==\n'
+printf '== Case K: the PLUGIN manifest matcher admits every HEAD-moving tool, and the hook is payload-agnostic ==\n'
 # A non-Bash tool can move HEAD too (an MCP git server; a SlashCommand that
 # commits), and no Bash window exists to observe it. Both matchers are widened
 # to `Bash|SlashCommand|mcp__.*` — deliberately NOT every tool, because
 # Read/Edit/Glob cannot move HEAD and pinning on them would add two process
 # spawns to every single tool call for nothing.
+#
+# SCOPE, precisely, because the name used to overclaim "the hook is wired":
+#   - the FIRST half reads hooks/hooks.json — the PLUGIN distribution path — and
+#     asserts its matcher regex really admits/rejects each tool name;
+#   - the SECOND half feeds the hook script differently-shaped payloads and
+#     asserts it pins and sweeps regardless of .tool_name. That is
+#     PAYLOAD-AGNOSTICISM, not wiring: the script never reads a matcher.
+# The OTHER distribution path — install.sh merging into settings.local.json,
+# including widening a stale matcher on an existing install — is asserted in
+# test-install.sh, which is the only suite that runs the installer.
 HOOKS_JSON="$BUNDLE_DIR/../hooks/hooks.json"
 if [ -f "$HOOKS_JSON" ] && command -v jq >/dev/null 2>&1; then
   # The matcher is a regex Claude Code applies to tool_name. Assert the SHIPPED

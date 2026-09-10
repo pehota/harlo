@@ -1324,6 +1324,99 @@ cl_eq "L8 hc__resolve_session_base breaks at first ledgered commit (A) -> HC_BAS
 rm -rf "$CLD"
 
 # ============================================================================
+# Chunk M — the ledger SET is only admissible while the ledger is KNOWN
+# COMPLETE. It NARROWS the coverage demand, so taking it on an incomplete
+# ledger exempts files from review: the reviewer attests the ledgered ones, the
+# gap comes back empty and the rest ship unverified. Two states say "incomplete"
+# and must fall back to the RANGE DIFF (over-block, the safe direction).
+# ============================================================================
+
+# cl_gap_mode <dir> <log> <base> <head> <sid|""> <orig_base> <mode>
+# cl_gap with HC_MODE forced — task mode is one of the two incompleteness
+# signals, and hc_resolve is what normally sets that global.
+cl_gap_mode() {
+  ( export CLAUDE_PROJECT_DIR="$1"; unset PROJECT_DIR; . "$LIBL"
+    HARNESS_DIR="$1/.claude/.harness"
+    [ -n "$5" ] && HC_SESSION_ID="$5"
+    HC_MODE="$7"
+    hc_review_coverage_gap "$2" "$3" "$4" "$1" "" "" "$6" )
+}
+
+# --- M1: TASK mode — a populated ledger must NOT narrow the demand ----------
+# Task mode's anchor IS the pinned fork point and it deliberately never drops a
+# foreign commit; hc__resolve_task_base mirrors that base into HC_BASE_ORIG, so
+# orig_base is NON-EMPTY and the ledger path engaged as soon as task mode began
+# writing the ledger. F -> A(agent, a.txt) -> H(human, h.txt) on the branch: the
+# demand must be BOTH files, not just the ledgered one.
+CLD=$(cl_repo); SID=csM1
+F=$(cl_commit "$CLD" f.txt)
+git -C "$CLD" checkout -q -b feat/m1
+A=$(cl_commit "$CLD" a.txt)
+H=$(cl_commit "$CLD" h.txt)          # the human hand-commits on the branch
+cl_ledger "$CLD" "$SID" "$A"         # only the agent's own commit is ledgered
+cl_write_log "$CLD" "$H" other.txt   # attests nothing in the changeset
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${H}.json" "$F" "$H" "$SID" "$F" task)
+cl_eq "M1 task mode: demand is the RANGE diff (a.txt+h.txt), ledger set does not narrow it" \
+  "$GOT" "$(printf 'a.txt\nh.txt')"
+rm -rf "$CLD"
+
+# --- M2: .sweep-failed — the marker must widen COVERAGE too -----------------
+# The marker already suppresses the base advance (hc__resolve_session_base). It
+# did NOT widen coverage, so the file whose attribution was LOST (z.txt, from
+# the window the hook could not sweep) was exempted from the very review the
+# marker forces. C0 -> A(ledgered, a.txt) -> Z(lost, z.txt), marker present.
+CLD=$(cl_repo); SID=csM2
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+Z=$(cl_commit "$CLD" z.txt)          # lost to the failed sweep → in no ledger
+cl_ledger "$CLD" "$SID" "$A"
+: > "$CLD/.claude/.harness/baselines/${SID}.sweep-failed"
+printf '%s\n' "$C0" > "$CLD/.claude/.harness/baselines/${SID}.sha"
+# The base really does stay at C0 (the marker's first job, pinned by L8's shape).
+RES=$( export CLAUDE_PROJECT_DIR="$CLD"; unset PROJECT_DIR; . "$LIBL"
+       hc_resolve "$SID" 2>/dev/null; printf '%s' "$HC_BASE" )
+cl_eq "M2 .sweep-failed suppresses the base advance (HC_BASE stays C0)" "$RES" "$C0"
+cl_write_log "$CLD" "$Z" other.txt
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${Z}.json" "$C0" "$Z" "$SID" "$C0" session)
+cl_eq "M2 .sweep-failed widens the demand to the range diff (a.txt+z.txt, incl. the lost window's file)" \
+  "$GOT" "$(printf 'a.txt\nz.txt')"
+rm -rf "$CLD"
+
+# --- M3: CASE A SHAPE is untouched ------------------------------------------
+# The load-bearing guard on both fixes above: session mode, NO marker, ledger
+# present-and-EMPTY, a foreign commit in range. Nothing was authored, so the
+# base advances to HEAD and the demand is empty — the pure Q&A session that must
+# still Stop cleanly. (The end-to-end verdict for this shape is
+# test-commit-ledger.sh Case A; this pins the coverage half.)
+CLD=$(cl_repo); SID=csM3
+C0=$(cl_commit "$CLD" c0.txt)
+HU=$(cl_commit "$CLD" human.txt)     # the human commits, outside every window
+: > "$CLD/.claude/.harness/baselines/${SID}.own-commits"   # present and EMPTY
+printf '%s\n' "$C0" > "$CLD/.claude/.harness/baselines/${SID}.sha"
+RES=$( export CLAUDE_PROJECT_DIR="$CLD"; unset PROJECT_DIR; . "$LIBL"
+       hc_resolve "$SID" 2>/dev/null; printf '%s' "$HC_BASE" )
+cl_eq "M3 case-A shape: empty ledger, no marker -> base advances to HEAD" "$RES" "$HU"
+cl_write_log "$CLD" "$HU" other.txt
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${HU}.json" "$HU" "$HU" "$SID" "$C0" session)
+cl_eq "M3 case-A shape: coverage demand EMPTY (allow), unchanged by the completeness gate" "$GOT" ""
+rm -rf "$CLD"
+
+# --- M4: .sweep-failed is EXPLAINED in the gate's block reason --------------
+# N2: the marker is never cleared and used to be invisible, so a session that
+# hit it once got an unexplained whole-range /done demand for the rest of its
+# life. The verdict stays a block; the reason must now say what happened, why
+# the demand widened, and which file to remove.
+SID=n2sf; clear_state "$SID"; set_baseline "$SID" "$BASELINE_SHA"; ensure_clean
+: > "$HDIR/baselines/${SID}.sweep-failed"
+N2_REASON=$(gate_reason "{\"session_id\":\"$SID\",\"stop_hook_active\":false}")
+case "$N2_REASON" in
+  *"sweep could not be completed"*".sweep-failed"*)
+    printf 'PASS  %s\n' "M4 .sweep-failed is named and explained in the block reason"; PASS=$((PASS+1)) ;;
+  *) printf 'FAIL  %s  [reason: %s]\n' "M4 .sweep-failed explained" "${N2_REASON:-<empty>}"; FAIL=$((FAIL+1)) ;;
+esac
+rm -f "$HDIR/baselines/${SID}.sweep-failed"
+
+# ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1402,9 +1402,12 @@ hc_review_coverage_gap() {
   # orig_base: the UNADVANCED session baseline. When the ledger is engaged, the
   # changed-set and the chain-walk filter both key off this (not the advanced
   # <base>), so an interior own-commit below <base> is still scoped in and its
-  # own review-log is not filtered out of the chain. Empty (task mode / the
-  # hc_done_state_blocked call site) → the range-diff path, i.e. today's
-  # behaviour, unchanged.
+  # own review-log is not filtered out of the chain. Empty → the range-diff
+  # path. Only ONE call site passes it empty: hc_done_state_blocked (which takes
+  # six args). TASK MODE DOES NOT — hc__resolve_task_base mirrors the pinned
+  # fork point into HC_BASE_ORIG, so orig_base is non-empty there too and the
+  # ledger path would engage; the ledger_complete gate below is what keeps task
+  # mode on the range diff.
   local orig_base="${7:-}"
 
   # No changeset base → coverage is not computable. SKIP (no-block degrade).
@@ -1421,7 +1424,45 @@ hc_review_coverage_gap() {
   # foreign files, so we distinguish the two).
   local changed=""
   local ledger_engaged=0
-  if hc_has_fn hc_session_changeset_files && [ -n "${HC_SESSION_ID:-}" ] && [ -n "$orig_base" ]; then
+
+  # THE LEDGER SET NARROWS THE DEMAND, so it is admissible ONLY while the ledger
+  # is KNOWN COMPLETE. Two states say it is not, and in both we stay on the
+  # RANGE DIFF (not a union with the ledger set):
+  #
+  #   TASK MODE. The pinned fork point IS the changeset anchor — task mode never
+  #   drops a foreign commit, by design. Before the ledger write path was
+  #   extended to task mode the ledger there was always EMPTY, so the range diff
+  #   ran and that guarantee held; a populated ledger silently removed it and
+  #   exempted the human's hand-commits on the branch.
+  #
+  #   .sweep-failed. The hook could not complete a sweep, so commits in that
+  #   window may be the agent's own and simply never reached the ledger. The
+  #   marker already suppresses the base advance (hc__resolve_session_base); it
+  #   must widen COVERAGE too, or the reviewer attests only the ledgered files,
+  #   the gap comes back empty and the lost window's files ship unreviewed —
+  #   exactly the attribution the marker exists to distrust.
+  #
+  # WHY THE RANGE DIFF RATHER THAN A UNION: in BOTH cases <base> equals
+  # <orig_base> — task mode mirrors it (hc__resolve_task_base), and the
+  # .sweep-failed tripwire returns before the advance loop — so the two-dot diff
+  # already spans the entire window in question. It is also the single path this
+  # code had before the ledger set existed, so there is one behaviour to reason
+  # about instead of a third hybrid set.
+  #
+  # The marker is read under $HARNESS_DIR, the same global hc__commit_in_any_
+  # ledger resolves the ledger under: the guard cannot end up looking at a
+  # different session's state than the ledger does. An unset HARNESS_DIR makes
+  # hc__commit_in_any_ledger return 1 for everything → empty ledger set →
+  # range diff anyway, so the degrade already points the safe way.
+  local ledger_complete=1
+  [ "${HC_MODE:-}" = "task" ] && ledger_complete=0
+  if [ -n "${HARNESS_DIR:-}" ] && [ -n "${HC_SESSION_ID:-}" ] \
+     && [ -f "$HARNESS_DIR/baselines/${HC_SESSION_ID}.sweep-failed" ]; then
+    ledger_complete=0
+  fi
+
+  if [ "$ledger_complete" -eq 1 ] \
+     && hc_has_fn hc_session_changeset_files && [ -n "${HC_SESSION_ID:-}" ] && [ -n "$orig_base" ]; then
     local _ledger_commits
     _ledger_commits=$(hc_session_changeset_commits "$orig_base" "$head" "$HC_SESSION_ID" "$proj")
     if [ -n "$_ledger_commits" ]; then

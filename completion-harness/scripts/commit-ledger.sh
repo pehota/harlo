@@ -160,8 +160,16 @@ if [ "$MODE" = "pre" ]; then
   # Backgrounded call → the inference in hole (a) is dead from here on. Sticky:
   # once created it is never removed, because a job backgrounded at call 3 can
   # still commit during call 30.
+  #
+  # TRUNCATED UNCONDITIONALLY, not created-if-absent: the file's CONTENT is
+  # irrelevant (its existence is the signal), but its MTIME is not. Created
+  # once and never touched again, it froze at creation time while the state it
+  # qualifies (.cursor/.watermark/.own-commits) stayed fresh — so an age reap
+  # deleted the marker and spared the ledger, and `pre` silently reverted to
+  # pinning HEAD. baseline-snapshot.sh's grouped per-session reap is the real
+  # fix; keeping the mtime honest here is defence in depth.
   case "$HC_HOOK_TOOL_BACKGROUND" in
-    true|True|TRUE|1) [ -f "$BG_SEEN_FILE" ] || : > "$BG_SEEN_FILE" 2>/dev/null ;;
+    true|True|TRUE|1) : > "$BG_SEEN_FILE" 2>/dev/null ;;
   esac
 
   # Pin the window's lower bound. Whole-file overwrite: the LAST pin wins, so

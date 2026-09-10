@@ -289,6 +289,72 @@ else
     "$(grep -cxF '.claude/.harness/' "$TMP/.gitignore") occurrences"
 fi
 
+# --- UPGRADE: an existing install's STALE matcher must be widened in place ---
+# The two cases above only cover a FRESH install and a re-install of the current
+# version, so they both pass with a merge that keys its presence test on the
+# COMMAND ALONE. That is what shipped: every already-installed project — the
+# whole upgrade population — kept the narrow "Bash" matcher when the matcher
+# widened, so a SlashCommand- or MCP-driven commit was never pinned or swept
+# (empty ledger ⇒ base advances ⇒ Stop allowed with no DoD run). This is the
+# genuine WIRING assertion; test-commit-ledger.sh's payload cases cannot make it,
+# because the hook script never reads a matcher.
+UPG=$(hc__test_mktemp_d)
+mkdir -p "$UPG/.claude"
+# Pre-seed exactly what the previous installer wrote: our commands, verbatim,
+# under the OLD narrow matcher.
+cat > "$UPG/.claude/settings.local.json" <<'EOJ'
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh\" pre" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/commit-ledger.sh\"" } ] }
+    ]
+  }
+}
+EOJ
+if bash "$INSTALL" "$UPG" >/dev/null 2>&1; then
+  ok "install.sh exited 0 over a pre-seeded old-matcher settings file"
+else
+  bad "install.sh exited 0 over a pre-seeded old-matcher settings file" "non-zero"
+fi
+US="$UPG/.claude/settings.local.json"
+upg_matcher() {
+  jq -r --arg e "$1" --arg c "$2" \
+    '.hooks[$e][]? | select((.hooks[]?.command // "") | contains($c)) | .matcher // ""' \
+    "$US" 2>/dev/null
+}
+upg_count() {
+  jq --arg e "$1" --arg c "$2" \
+    '[.hooks[$e][]? | select((.hooks[]?.command // "") | contains($c))] | length' \
+    "$US" 2>/dev/null
+}
+for pair in "PreToolUse|commit-ledger.sh\" pre" "PostToolUse|commit-ledger.sh"; do
+  EV="${pair%%|*}"; CMD="${pair#*|}"
+  M=$(upg_matcher "$EV" "$CMD")
+  if [ "$M" = "$LEDGER_MATCHER" ]; then
+    ok "$EV stale 'Bash' matcher WIDENED in place to '$LEDGER_MATCHER'"
+  else
+    bad "$EV stale matcher widened to '$LEDGER_MATCHER'" "got '$M'"
+  fi
+  N=$(upg_count "$EV" "$CMD")
+  if [ "$N" = "1" ]; then
+    ok "$EV commit-ledger entry not duplicated by the upgrade"
+  else
+    bad "$EV commit-ledger entry not duplicated" "$N entries"
+  fi
+done
+# Still idempotent over the upgraded file: a second run must change nothing.
+UPG_SNAP=$(cat "$US" 2>/dev/null)
+bash "$INSTALL" "$UPG" >/dev/null 2>&1
+if [ "$UPG_SNAP" = "$(cat "$US" 2>/dev/null)" ]; then
+  ok "re-install over the upgraded settings file is byte-identical (idempotent)"
+else
+  bad "re-install over the upgraded settings file is byte-identical" "settings.local.json changed"
+fi
+rm -rf "$UPG" 2>/dev/null
+
 # ---------------------------------------------------------------------------
 echo
 echo "test-install: $PASS passed, $FAIL failed"

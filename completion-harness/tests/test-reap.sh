@@ -6,6 +6,12 @@
 # harness state dir older than 14 days while keeping fresh files (this
 # session's just-written baseline, active parallel sessions, recent state).
 #
+# TWO GRANULARITIES, and the difference is load-bearing. Everything outside
+# baselines/ is aged PER FILE. baselines/ is aged PER SESSION ID, all-or-nothing:
+# a session's files are one unit of state whose mtimes are asymmetric (write-once
+# markers freeze while the ledger they qualify stays fresh), so the group is
+# reaped only when its NEWEST member is stale.
+#
 # Scripts under test: the BUNDLE copy (source of truth). The installed copy is
 # verified byte-identical to it by the caller's diff check.
 
@@ -76,6 +82,41 @@ for f in "$STALE_SHA" "$STALE_DONE" "$STALE_REVIEW" "$STALE_PIN" "$STALE_TREE_PI
   age_20d "$f"
 done
 
+# --- baselines/ is reaped PER SESSION ID, all-or-nothing --------------------
+# A session's files under baselines/ are one unit of state, and their mtimes are
+# ASYMMETRIC: .watermark/.own-commits are rewritten constantly, while .bg-seen
+# and .sweep-failed are written ONCE and never touched again. Under a per-FILE
+# age reap the frozen markers aged out while the state they qualify stayed
+# fresh — so the reap deleted the safety marker and spared the ledger. Two
+# silent skips followed: no .bg-seen ⇒ `pre` reverts to pinning HEAD and the
+# next backgrounded commit is missed; no .sweep-failed ⇒ the base advance is
+# re-enabled over a ledger the hook itself recorded as incomplete.
+#
+# (a) LIVE session, ONLY the frozen marker backdated → the WHOLE set survives.
+LIVE_SID="live-sess"
+LIVE_BG="$HARNESS/baselines/$LIVE_SID.bg-seen"
+LIVE_SET=(
+  "$LIVE_BG"
+  "$HARNESS/baselines/$LIVE_SID.sha"
+  "$HARNESS/baselines/$LIVE_SID.cursor"
+  "$HARNESS/baselines/$LIVE_SID.own-commits"
+  "$HARNESS/baselines/$LIVE_SID.watermark"
+)
+for f in "${LIVE_SET[@]}"; do echo "live" > "$f"; done   # mtime = now
+age_20d "$LIVE_BG"                                        # …except the marker
+#
+# (b) GENUINELY stale session — every file old → the whole set goes together.
+# (old-sess.sha above is that session's .sha; give it a full file set so the
+# assertion proves group deletion, not a single-file coincidence.)
+DEAD_SET=(
+  "$HARNESS/baselines/old-sess.own-commits"
+  "$HARNESS/baselines/old-sess.cursor"
+  "$HARNESS/baselines/old-sess.watermark"
+  "$HARNESS/baselines/old-sess.bg-seen"
+  "$HARNESS/baselines/old-sess.sweep-failed"
+)
+for f in "${DEAD_SET[@]}"; do echo "stale" > "$f"; age_20d "$f"; done
+
 # --- seed FRESH file (mtime now) --------------------------------------------
 FRESH_DONE="$HARNESS/done-state/recent.json"
 echo "fresh" > "$FRESH_DONE"   # mtime = now
@@ -117,6 +158,28 @@ printf '{"session_id":"%s"}' "$SID" | CLAUDE_PROJECT_DIR="$REPO" bash "$BASELINE
 # unreachable sidecar pruned by the keep-set hygiene.
 [ -e "$ESC_LIVE" ] && ok "escalation-accept for reachable HEAD KEPT (stale but age-exempt)" || bad "escalation-accept for reachable HEAD was reaped"
 [ ! -e "$ESC_DEAD" ] && ok "escalation-accept for unreachable sha PRUNED (keep-set)" || bad "escalation-accept for unreachable sha still present"
+
+# Grouped reap (a): one fresh member keeps the whole session set, marker first.
+LIVE_KEPT=1
+for f in "${LIVE_SET[@]}"; do [ -e "$f" ] || LIVE_KEPT=0; done
+if [ "$LIVE_KEPT" -eq 1 ]; then
+  ok "live session set KEPT ENTIRELY though its frozen .bg-seen is 20 days old"
+else
+  MISSING=""
+  for f in "${LIVE_SET[@]}"; do [ -e "$f" ] || MISSING="$MISSING $(basename "$f")"; done
+  bad "live session set kept entirely (frozen marker aged)" "deleted:$MISSING"
+fi
+
+# Grouped reap (b): a session with NOTHING fresh is reaped whole.
+DEAD_GONE=1
+for f in "${DEAD_SET[@]}"; do [ -e "$f" ] && DEAD_GONE=0; done
+if [ "$DEAD_GONE" -eq 1 ]; then
+  ok "genuinely stale session's whole file set REAPED together"
+else
+  REMAIN=""
+  for f in "${DEAD_SET[@]}"; do [ -e "$f" ] && REMAIN="$REMAIN $(basename "$f")"; done
+  bad "genuinely stale session reaped whole" "still present:$REMAIN"
+fi
 
 # Current session's baseline written fresh.
 CUR_SHA="$HARNESS/baselines/${SID}.sha"

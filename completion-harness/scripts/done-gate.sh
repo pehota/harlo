@@ -473,12 +473,35 @@ fi
 # is an empty range against an empty rev, not an empty changeset — so it is
 # suppressed and S2_REASON stays the bare instruction.
 S2_REASON="run /done to verify the changeset (owns the Step-5 review)"
+# Hoisted out of the summary branch below: hc_review_coverage_gap's ledger-set
+# path and its .sweep-failed guard both key off HC_SESSION_ID, and neither has
+# anything to do with whether a changeset summary could be rendered.
+HC_SESSION_ID="$SESSION_ID"
 if [ -n "$COVER_BASE" ] \
    && { hc_has_fn hc_changeset_summary; }; then
-  HC_SESSION_ID="$SESSION_ID"
   CS_SUMMARY=$(hc_changeset_summary "${HC_BASE_ORIG:-$COVER_BASE}" "$HEAD_SHA" "$PROJECT_DIR" 2>/dev/null)
   [ -n "$CS_SUMMARY" ] && S2_REASON="$CS_SUMMARY
 $S2_REASON"
+fi
+
+# --- .sweep-failed: say WHY the demand is the whole range --------------------
+# The marker means commit-ledger.sh could not complete a sweep, so attribution
+# for that window is UNKNOWN. Two things follow silently from it: the session
+# base never advances (hc__resolve_session_base) and review coverage stays on the
+# whole range diff instead of the ledger set (hc_review_coverage_gap). Nothing
+# ever cleared the marker and nothing ever mentioned it, so a session that hit it
+# once got an unexplained whole-range /done demand for the rest of its life.
+#
+# The fix is a REASON STRING, not a new mechanism: the verdict is unchanged (the
+# over-block is deliberate), only the message says what happened, why the demand
+# widened, and which file to remove once the user is satisfied nothing was
+# missed. Appended to the reasons that carry that widened demand — the generic
+# "/done the changeset" reason and the coverage gap at Step 8.
+SWEEP_NOTE=""
+if [ -f "$HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed" ]; then
+  SWEEP_NOTE="note: a commit-ledger sweep could not be completed in this session ($HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed), so which commits the agent authored is UNKNOWN. The harness therefore stops trusting the ledger: the changeset base does not advance and the review must cover the whole range, not just the ledgered commits. Delete that marker only once you are satisfied no agent commit went unrecorded."
+  S2_REASON="$S2_REASON
+$SWEEP_NOTE"
 fi
 
 # NO-ANCHOR REASON — used at Step 4 ONLY, i.e. when the done-state is ALSO
@@ -722,7 +745,10 @@ fi
 GAP=$(hc_review_coverage_gap "$REVIEW_LOG" "$COVER_BASE" "$HEAD_SHA" "$PROJECT_DIR" "$EXTRA_ADMIT" "$CHAIN_ADMIT" "$HC_BASE_ORIG")
 if [ -n "$GAP" ] && [ "$GAP" != "SKIP" ]; then
   GAP_LIST=$(printf '%s' "$GAP" | tr '\n' ' ')
-  block "review the uncovered files (${GAP_LIST}), then re-run /done" "$HC_BLOCK_REVIEW_COVERAGE"
+  COVER_REASON="review the uncovered files (${GAP_LIST}), then re-run /done"
+  [ -n "$SWEEP_NOTE" ] && COVER_REASON="$COVER_REASON
+$SWEEP_NOTE"
+  block "$COVER_REASON" "$HC_BLOCK_REVIEW_COVERAGE"
 fi
 
 # task_checks: every entry must be status "passed". Count the non-passed ones;

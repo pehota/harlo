@@ -169,13 +169,29 @@ MERGED=$(jq \
     else .hooks.PreToolUse += [ {"matcher":"Write|Edit","hooks": [ {"type":"command","command":$pre} ]} ]
     end
 
-  # append PreToolUse(Bash) commit-ledger `pre` hook only if not already wired.
+  # commit-ledger halves: UPDATE-IN-PLACE, then append-if-absent.
+  #
+  # The presence test keys on the COMMAND alone, so an entry wired by an OLDER
+  # installer — identical command, the narrow "Bash" matcher — counted as
+  # already wired and was skipped. Every existing install therefore kept the
+  # narrow matcher when the matcher widened, and a SlashCommand- or MCP-driven
+  # commit was never pinned or swept: empty ledger, base advances to HEAD, Stop
+  # allowed with no DoD run. So first REWRITE the matcher of any entry carrying
+  # our command, then append only if no such entry exists. Both halves stay
+  # idempotent: on an install that is already current the assignment is a no-op
+  # and the append is skipped, so a second run is byte-identical.
+  #
+  # Scoped to entries whose command is EXACTLY ours — the "Write|Edit" matcher
+  # on the auto-branch entry is deliberately left untouched.
+  | .hooks.PreToolUse = [ .hooks.PreToolUse[]?
+      | if ([ .hooks[]?.command ] | any(. == $prel)) then .matcher = $ledgerm else . end ]
   | ([ .hooks.PreToolUse[]?.hooks[]?.command ] | any(. == $prel)) as $hasPreL
   | if $hasPreL then .
     else .hooks.PreToolUse += [ {"matcher":$ledgerm,"hooks": [ {"type":"command","command":$prel} ]} ]
     end
 
-  # append PostToolUse(Bash) commit-ledger hook only if not already wired.
+  | .hooks.PostToolUse = [ .hooks.PostToolUse[]?
+      | if ([ .hooks[]?.command ] | any(. == $post)) then .matcher = $ledgerm else . end ]
   | ([ .hooks.PostToolUse[]?.hooks[]?.command ] | any(. == $post)) as $hasPost
   | if $hasPost then .
     else .hooks.PostToolUse += [ {"matcher":$ledgerm,"hooks": [ {"type":"command","command":$post} ]} ]

@@ -95,11 +95,69 @@ esac
 # state is ephemeral (the changeset is the session).
 # last-block/ is NOT excluded: it is transient loop-guard memory, already
 # dropped on a fresh context above, and a 14-day-old marker is certainly stale.
+#
+# baselines/ IS excluded from this per-file sweep and reaped PER SESSION ID
+# instead — see the grouped reap below. A per-file age test there deleted the
+# SAFETY MARKERS while sparing the state they qualify, because the mtimes of a
+# session's files are ASYMMETRIC:
+#   <sid>.watermark    rewritten on every completed sweep → always fresh
+#   <sid>.own-commits  appended on every claimed commit   → fresh
+#   <sid>.bg-seen      created once, never touched again  → FROZEN
+#   <sid>.sweep-failed created once, never touched again  → FROZEN
+# So a long-lived session's two markers age past the threshold while its ledger
+# and cursor stay young. Losing .bg-seen makes `pre` revert to pinning HEAD, and
+# the next backgrounded commit is missed; losing .sweep-failed re-enables the
+# base advance over a ledger the hook itself recorded as INCOMPLETE. Both are
+# SILENT SKIPS — the one direction this harness must never fail in.
 if [ -d "$HARNESS_DIR" ]; then
   find "$HARNESS_DIR" -type f \
     -not -path '*/task-base/*' -not -path '*/tree-base/*' -not -path '*/review-log/*' \
-    -not -path '*/escalation-accept/*' \
+    -not -path '*/escalation-accept/*' -not -path '*/baselines/*' \
     -mtime +14 -delete 2>/dev/null || true
+fi
+
+# --- grouped reap: baselines/ is aged PER SESSION ID, all-or-nothing --------
+# A session's files under baselines/ are ONE unit of state: <sid>.sha, .dirty,
+# .cursor, .own-commits, .watermark, .bg-seen, .sweep-failed. The group is
+# reaped only when its NEWEST member is older than the threshold — i.e. when
+# nothing about that session has been touched in 14 days — and then entirely.
+# Any single fresh member keeps all of them.
+#
+# This removes the whole class rather than exempting two filenames: any future
+# per-session file inherits the rule for free, including a write-once marker.
+# The group key is the basename up to the FIRST dot (session ids are uuids and
+# contain no dot); files are deleted by ENUMERATION, never by re-globbing the
+# key, so an unexpected key shape can never widen the deletion.
+if [ -d "$HARNESS_DIR/baselines" ]; then
+  # TWO find calls, whatever the file count: the FRESH members (the keep-set's
+  # source) and the STALE ones (the only deletion candidates). Asking find for
+  # freshness directly is what keeps this off a per-file stat.
+  BL_FRESH=$(find "$HARNESS_DIR/baselines" -maxdepth 1 -type f \! -mtime +14 2>/dev/null)
+  BL_STALE=$(find "$HARNESS_DIR/baselines" -maxdepth 1 -type f -mtime +14 2>/dev/null)
+  if [ -n "$BL_STALE" ]; then
+    # Keep-set: the session key of every fresh member. One fresh member is
+    # enough — the whole group is then load-bearing.
+    BL_KEEP=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      b=${f##*/}
+      BL_KEEP="${BL_KEEP:+$BL_KEEP
+}${b%%.*}"
+    done <<EOF
+$BL_FRESH
+EOF
+    # Delete every stale member whose key is NOT in the keep-set. Membership is
+    # by exact whole-line match; deletion is by the enumerated path, never by
+    # re-globbing the key, so an unexpected key shape cannot widen the rm.
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      b=${f##*/}
+      printf '%s\n' "$BL_KEEP" | grep -qxF -- "${b%%.*}" 2>/dev/null && continue
+      rm -f "$f" 2>/dev/null || true
+    done <<EOF
+$BL_STALE
+EOF
+  fi
 fi
 
 # --- record the AUTHORITATIVE current-session marker ------------------------
