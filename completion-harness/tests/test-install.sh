@@ -434,13 +434,41 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
     # (c) mixed: the retired harness command beside a user command.
     MIX_HARNESS_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
     MIX_USER_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my-own-fmt.sh"'
+    # (d) mixed, but the user script's FILENAME CONTAINS A SPACE. A character
+    #     class ([A-Za-z0-9._-]+\.sh) extracts NO ref from this command at all,
+    #     so the entry's only ref was the harness one, the all-commands
+    #     ownership test was satisfied by it alone, and the whole entry — user
+    #     command included — was pruned. The script is seeded present and
+    #     unmarked below, exactly as (b)/(c).
+    SP_HARNESS_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
+    SP_USER_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my own fmt.sh"'
+    # (e) the same space filename, alone in its own entry.
+    SP_ONLY_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my own lint.sh"'
+    # (f) an UNQUOTED path with a space in it: shell-ambiguous, so the name
+    #     cannot be read off unambiguously. Must fail toward KEEP even though
+    #     the words look like a retired harness script.
+    AMBIG_CMD='bash $CLAUDE_PROJECT_DIR/.claude/scripts/auto branch.sh'
+    # (g) present-map poisoning. A user script whose filename contains a TAB
+    #     corrupted the tab-separated present-map: "poison.sh<TAB>true<TAB>false"
+    #     parsed as the key "poison.sh" with the value true, i.e. HARNESS-OWNED,
+    #     overwriting the genuine unmarked poison.sh entry — so this hook of
+    #     theirs was pruned. Both files are seeded present and unmarked.
+    POISON_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/poison.sh"'
     SEEDED=$(jq --arg o "$OUT_CMD" --arg i "$IN_CMD" \
-                --arg mh "$MIX_HARNESS_CMD" --arg mu "$MIX_USER_CMD" '
+                --arg mh "$MIX_HARNESS_CMD" --arg mu "$MIX_USER_CMD" \
+                --arg sh "$SP_HARNESS_CMD" --arg su "$SP_USER_CMD" \
+                --arg so "$SP_ONLY_CMD" --arg am "$AMBIG_CMD" \
+                --arg po "$POISON_CMD" '
       .hooks.PreToolUse += [
           {"matcher":"Write","hooks":[{"type":"command","command":$o}]},
           {"matcher":"Write","hooks":[{"type":"command","command":$i}]},
           {"matcher":"Edit","hooks":[{"type":"command","command":$mh},
-                                     {"type":"command","command":$mu}]}
+                                     {"type":"command","command":$mu}]},
+          {"matcher":"Edit","hooks":[{"type":"command","command":$sh},
+                                     {"type":"command","command":$su}]},
+          {"matcher":"Write","hooks":[{"type":"command","command":$so}]},
+          {"matcher":"Write","hooks":[{"type":"command","command":$am}]},
+          {"matcher":"Write","hooks":[{"type":"command","command":$po}]}
         ]
       | .permissions = {"allow":["Bash(ls:*)"]}
     ' "$OS" 2>/dev/null)
@@ -454,6 +482,15 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
     MIX_USER_SCRIPT="$OT/.claude/scripts/my-own-fmt.sh"
     printf '#!/bin/bash\n# the user half of the mixed hook entry\n' \
       > "$MIX_USER_SCRIPT"
+    # (d)/(e) filenames with a SPACE; (g) a genuine poison.sh plus one whose
+    # filename embeds a TAB and the literal text "true". All present, unmarked.
+    SP_USER_SCRIPT="$OT/.claude/scripts/my own fmt.sh"
+    SP_ONLY_SCRIPT="$OT/.claude/scripts/my own lint.sh"
+    POISON_SCRIPT="$OT/.claude/scripts/poison.sh"
+    POISON_TWIN="$OT/.claude/scripts/$(printf 'poison.sh\ttrue\tz.sh')"
+    for uf in "$SP_USER_SCRIPT" "$SP_ONLY_SCRIPT" "$POISON_SCRIPT" "$POISON_TWIN"; do
+      printf '#!/bin/bash\n# a user script with an awkward filename\n' > "$uf"
+    done
 
     UPG_OUT="$OT/.install-output.txt"
     if bash "$INSTALL" "$OT" >"$UPG_OUT" 2>&1; then
@@ -468,14 +505,15 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
     else
       ok "upgrade pruned the retired scripts/auto-branch.sh"
     fi
-    # The MIXED entry (c) keeps a command naming auto-branch.sh on purpose, so
-    # this asserts the retired ALL-OURS entry is gone: exactly one entry still
-    # names auto-branch.sh, and it is the two-command mixed one.
+    # The MIXED entries (c)/(d) each keep a command naming auto-branch.sh on
+    # purpose, and (f) names an ambiguous "auto branch.sh", so this asserts the
+    # retired ALL-OURS entry is gone: every surviving entry that references
+    # auto-branch.sh is one of the two two-command mixed ones.
     AB_ENTRIES=$(jq '[.hooks.PreToolUse[]?
                       | select([.hooks[]?.command // ""] | any(contains("auto-branch.sh")))]' \
                    "$OS" 2>/dev/null)
-    if [ "$(printf '%s' "$AB_ENTRIES" | jq 'length' 2>/dev/null)" = "1" ] \
-       && [ "$(printf '%s' "$AB_ENTRIES" | jq '.[0].hooks | length' 2>/dev/null)" = "2" ]; then
+    if [ "$(printf '%s' "$AB_ENTRIES" | jq 'length' 2>/dev/null)" = "2" ] \
+       && [ "$(printf '%s' "$AB_ENTRIES" | jq 'all(.hooks | length == 2)' 2>/dev/null)" = "true" ]; then
       ok "upgrade pruned the retired auto-branch hook entry"
     else
       bad "upgrade pruned the retired auto-branch hook entry" \
@@ -519,6 +557,54 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
     else
       bad "upgrade preserved the MIXED hook entry intact (harness + user command)" \
         "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (d) the same mixed shape, but the user command's script filename contains
+    #     a SPACE. THE finding-1 guard: a ref extractor built on a character
+    #     class pruned this entry whole and lost the user's command.
+    if [ "$(jq --arg h "$SP_HARNESS_CMD" --arg u "$SP_USER_CMD" \
+              '[.hooks.PreToolUse[]?
+                | select([.hooks[]?.command // ""] == [$h, $u])] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the MIXED entry whose user script filename has a SPACE"
+    else
+      bad "upgrade preserved the MIXED entry whose user script filename has a SPACE" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (e) that space filename alone in its own entry, present and unmarked.
+    if [ "$(jq --arg u "$SP_ONLY_CMD" \
+              '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the user hook entry naming a SPACE filename (present, unmarked)"
+    else
+      bad "upgrade preserved the user hook entry naming a SPACE filename (present, unmarked)" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (f) unquoted path with a space: unresolvable, so it must fail toward KEEP.
+    if [ "$(jq --arg u "$AMBIG_CMD" \
+              '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the entry whose UNQUOTED path is shell-ambiguous"
+    else
+      bad "upgrade preserved the entry whose UNQUOTED path is shell-ambiguous" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (g) THE finding-2 guard: a sibling filename carrying a TAB must not be
+    #     able to poison the present-map and mark poison.sh harness-owned.
+    #     The twin ends in .sh so it is globbed like any other script, and its
+    #     tab-separated rendering read as the pair ("poison.sh", "true").
+    if [ "$(jq --arg u "$POISON_CMD" \
+              '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the user hook entry a TAB-bearing sibling filename could poison"
+    else
+      bad "upgrade preserved the user hook entry a TAB-bearing sibling filename could poison" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    if [ -f "$SP_USER_SCRIPT" ] && [ -f "$SP_ONLY_SCRIPT" ] \
+       && [ -f "$POISON_SCRIPT" ] && [ -f "$POISON_TWIN" ]; then
+      ok "upgrade preserved the awkwardly-named user scripts inside .claude/scripts/"
+    else
+      bad "upgrade preserved the awkwardly-named user scripts inside .claude/scripts/" "deleted"
     fi
     if [ -f "$USER_HOOK_SCRIPT" ] && [ -f "$MIX_USER_SCRIPT" ]; then
       ok "upgrade preserved the user hook SCRIPTS inside .claude/scripts/"

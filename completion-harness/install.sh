@@ -191,17 +191,28 @@ SHIPPED_JSON=$(printf '%s\n' "${SHIPPED_SCRIPTS[@]}" \
 # The ownership half of the hook test, read off the install target AFTER the
 # file prune above: {"<name>.sh": <carries the header marker>} for every script
 # still present. A name absent from this map is absent from disk.
-PRESENT_JSON=$(
-  for f in "$CLAUDE_DIR/scripts/"*.sh; do
-    [ -f "$f" ] || continue
-    if head -5 "$f" 2>/dev/null | grep -q 'Completion Harness —'; then
-      printf '%s\t%s\n' "$(basename "$f")" true
-    else
-      printf '%s\t%s\n' "$(basename "$f")" false
-    fi
-  done | jq -R -s 'split("\n") | map(select(length > 0) | split("\t"))
-                   | map({ (.[0]): (.[1] == "true") }) | add // {}' 2>/dev/null
-)
+#
+# Names reach jq as POSITIONAL ARGUMENTS, never as delimited text: a filename
+# may legally contain a tab or a newline, and any in-band separator would
+# either corrupt the pair or drop the name from the map — and a dropped name
+# reads as "absent from disk" = harness-owned = prunable, i.e. it would fail
+# toward DELETING a user's hook entry. Arguments carry arbitrary filenames
+# verbatim, so there is nothing left to mis-parse. If jq fails anyway the
+# variable comes back empty and the whole hook prune is skipped (below).
+PRESENT_ARGS=()
+for f in "$CLAUDE_DIR/scripts/"*.sh; do
+  [ -f "$f" ] || continue
+  PRESENT_ARGS+=("$(basename "$f")")
+  if head -5 "$f" 2>/dev/null | grep -q 'Completion Harness —'; then
+    PRESENT_ARGS+=(true)
+  else
+    PRESENT_ARGS+=(false)
+  fi
+done
+PRESENT_JSON=$(jq -n '
+  $ARGS.positional as $a
+  | reduce range(0; ($a | length); 2) as $i ({}; .[$a[$i]] = ($a[$i + 1] == "true"))
+' --args ${PRESENT_ARGS[@]+"${PRESENT_ARGS[@]}"} 2>/dev/null)
 
 # Shared jq prelude: the ownership predicate, used once to REPORT what will go
 # and once to actually remove it, so the two can never drift.
@@ -209,16 +220,41 @@ PRUNE_DEFS='
   # Commands carried by one hook entry.
   def cmds: [ .hooks[]?.command? // empty ];
   # Script basenames those commands reference under the harness install
-  # target. scan() with one capture group yields arrays, hence flatten.
-  def refs: [ cmds[] | scan("/\\.claude/scripts/([A-Za-z0-9._-]+\\.sh)") ] | flatten;
+  # target. Read off ONE command as {refs, unresolved}: the command string is
+  # split on the literal install-target prefix and each tail is resolved to the
+  # name that follows it. A name may contain ANY character a filesystem allows
+  # (a space above all), so no character class enumerates it — the tail is cut
+  # at the first shell metacharacter instead, and the quote that closed it (if
+  # any) is what licenses an embedded space. Nothing is ever GUESSED: a tail we
+  # cannot resolve unambiguously sets .unresolved, which makes the whole entry
+  # not harness-owned and therefore un-prunable. (\u0027 is the single quote,
+  # spelled as an escape so this prelude can stay inside single quotes.)
+  def parse_cmd($c):
+    reduce ($c | split("/.claude/scripts/") | .[1:])[] as $t
+      ({refs: [], unresolved: false};
+        ($t | capture("^(?<cand>[^\"\u0027\n;|&<>()]*)(?<term>[\"\u0027])?")) as $m
+      | ($m.term != null) as $quoted
+      | ($m.cand | capture("^(?<w>\\S*)").w) as $word
+      | if ($m.cand | endswith(".sh"))
+             and ($quoted or ($m.cand | test("\\s") | not))
+        then .refs += [$m.cand]            # quoted name, or one with no space
+        elif ($quoted | not) and ($word | endswith(".sh"))
+        then .refs += [$word]              # bare name followed by arguments
+        else .unresolved = true            # anything else: fail toward KEEP
+        end);
+  def parsed: [ cmds[] | parse_cmd(.) ];
+  def refs: [ parsed[].refs[] ];
+  def unresolved: (parsed | any(.unresolved));
   # Second ownership signal (see the comment block above): absent from the
   # install target, or present carrying the bundle header marker. A file that
   # is present WITHOUT the marker is a user script and is never owned.
   def harness_owned($n): if ($present | has($n)) then $present[$n] else true end;
-  # A retired harness entry: entirely ours by location, naming at least one
-  # script, and every script it names both unshipped AND harness-owned.
+  # A retired harness entry: entirely ours by location, every reference in it
+  # resolved, naming at least one script, and every script it names both
+  # unshipped AND harness-owned.
   def retired: (cmds | length) > 0
     and (cmds | all(contains("/.claude/scripts/")))
+    and (unresolved | not)
     and (refs | length) > 0
     and (refs | all(. as $n | (IN($shipped[]) | not) and harness_owned($n)));
 '

@@ -99,7 +99,11 @@ This is idempotent. It:
   hook you wired yourself at `.claude/scripts/<your>.sh` — your script is
   present and unmarked, which can never read as harness-owned. A *mixed* entry
   (one of ours plus one of yours) survives intact, because all commands must be
-  ours. Whatever is removed is printed. Nothing else is removed, reordered or
+  ours — including when your script's filename contains spaces, tabs or
+  newlines. Ambiguity always resolves toward keeping the entry: if a command's
+  script path cannot be read off unambiguously (an unquoted path with a space
+  in it, say), the entry is treated as not ours and left alone. Whatever is
+  removed is printed. Nothing else is removed, reordered or
   rewritten; unknown hook events and unrelated top-level settings keys are
   carried through untouched; the pass is idempotent. Pruning is best-effort — a
   failure warns and the install continues.
