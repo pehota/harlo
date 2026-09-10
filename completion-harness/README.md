@@ -82,14 +82,33 @@ This is idempotent. It:
   (machine-local; merged with `jq`, existing hooks preserved),
 - seeds a starter `.claude/done-config.json` if absent,
 - adds `.claude/.harness/` to the project's `.gitignore`,
-- on an upgrade, **prunes retired harness artifacts**: scripts under
-  `.claude/scripts/` and hook entries in `.claude/settings.local.json` that the
-  bundle no longer ships. Ownership always needs two signals, never location
-  alone, so a script you dropped in `.claude/scripts/` yourself, or a hook you
-  wired yourself, is left alone. Pruning is best-effort — a failure warns and
-  the install continues. It does **not** prune stale keys from an existing
-  `.claude/done-config.json` (your config is never rewritten), and it doesn't
-  touch retired `.claude/skills/`, `agents/`, or `contracts/` files.
+- **prunes retired harness artifacts** — on every run, so a first install into
+  a project that already wired hooks of its own goes through the same test.
+  Exactly two kinds of artifact are covered, nothing else:
+  - `*.sh` files directly under `.claude/scripts/` that the bundle no longer
+    ships **and** that carry the bundle's `Completion Harness —` header marker
+    in their first 5 lines,
+  - hook entries in `.claude/settings.local.json` in which **every** command
+    references a `.claude/scripts/<name>.sh` that is no longer shipped **and**
+    is provably harness-owned — i.e. that file is now gone from
+    `.claude/scripts/` (the file prune above removed it, this run or an earlier
+    one), or is still there carrying the marker.
+
+  Ownership always needs those two signals, never location alone. A script you
+  dropped in `.claude/scripts/` yourself is left alone (no marker), and so is a
+  hook you wired yourself at `.claude/scripts/<your>.sh` — your script is
+  present and unmarked, which can never read as harness-owned. A *mixed* entry
+  (one of ours plus one of yours) survives intact, because all commands must be
+  ours. Whatever is removed is printed. Nothing else is removed, reordered or
+  rewritten; unknown hook events and unrelated top-level settings keys are
+  carried through untouched; the pass is idempotent. Pruning is best-effort — a
+  failure warns and the install continues.
+
+  Not covered: stale keys in an existing `.claude/done-config.json` (your
+  config is never rewritten), retired files under `.claude/skills/`,
+  `.claude/agents/`, `.claude/contracts/` or `.claude/dod/`, and any
+  non-`.sh` file or subdirectory under `.claude/scripts/` — all of those are
+  left in place and must be deleted by hand.
 
 Requires `jq` and `git`.
 

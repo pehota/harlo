@@ -374,11 +374,23 @@ rm -rf "$UPG" 2>/dev/null
 # auto-branching) into a throwaway target via `git archive` — no worktree, no
 # checkout, nothing touched in the developer's tree — then install the current
 # bundle over it and assert BOTH directions:
-#   pruned    : the retired script file and hook entry are gone.
-#   preserved : a user-owned hook entry, a user-owned unrelated top-level key,
-#               and a user-owned script sitting in .claude/scripts/ all survive
-#               untouched. This half is what stops a future "prune" from eating
-#               somebody's config.
+#   pruned    : the retired script file and hook entry are gone, and the
+#               removal is REPORTED on stdout (a destructive step must not be
+#               silent).
+#   preserved : user-owned state survives untouched — an unrelated top-level
+#               key, a script of theirs sitting in .claude/scripts/, and three
+#               hook entries that the prune must not touch:
+#                 (a) one pointing OUTSIDE .claude/scripts/ (fails the location
+#                     test — the weakest of the three, it would survive even a
+#                     location-only prune),
+#                 (b) one pointing INSIDE .claude/scripts/ at a script of
+#                     theirs that is present and carries no harness marker
+#                     (this is the one that needs real two-signal ownership; a
+#                     location-only prune DELETES it), and
+#                 (c) a MIXED entry — one retired-harness command plus one
+#                     user command — which the all-commands rule keeps intact.
+#               This half is what stops a future "prune" from eating somebody's
+#               config.
 OLD_SHA=60826f9
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
@@ -410,20 +422,41 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
       bad "fixture precondition: $OLD_SHA wired the auto-branch hook entry" "absent"
     fi
 
-    # Seed USER-OWNED state before the upgrade: a hook entry of their own (on a
-    # PreToolUse matcher, i.e. the very event being pruned), an unrelated
-    # top-level key, and a script of their own inside .claude/scripts/ that
-    # carries no harness header marker.
-    USER_CMD='bash "$CLAUDE_PROJECT_DIR/scripts/my-own-hook.sh"'
-    SEEDED=$(jq --arg u "$USER_CMD" '
-      .hooks.PreToolUse += [ {"matcher":"Write","hooks":[{"type":"command","command":$u}]} ]
+    # Seed USER-OWNED state before the upgrade, all on PreToolUse — the very
+    # event being pruned: the three hook entries (a)/(b)/(c) described above,
+    # an unrelated top-level key, and scripts of their own inside
+    # .claude/scripts/ that carry no harness header marker.
+    # (a) outside .claude/scripts/ entirely.
+    OUT_CMD='bash "$CLAUDE_PROJECT_DIR/scripts/my-own-hook.sh"'
+    # (b) INSIDE .claude/scripts/ — the case a location-only ownership test
+    #     destroys. The script it names is seeded present and UNMARKED below.
+    IN_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my-own-lint.sh"'
+    # (c) mixed: the retired harness command beside a user command.
+    MIX_HARNESS_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/auto-branch.sh"'
+    MIX_USER_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my-own-fmt.sh"'
+    SEEDED=$(jq --arg o "$OUT_CMD" --arg i "$IN_CMD" \
+                --arg mh "$MIX_HARNESS_CMD" --arg mu "$MIX_USER_CMD" '
+      .hooks.PreToolUse += [
+          {"matcher":"Write","hooks":[{"type":"command","command":$o}]},
+          {"matcher":"Write","hooks":[{"type":"command","command":$i}]},
+          {"matcher":"Edit","hooks":[{"type":"command","command":$mh},
+                                     {"type":"command","command":$mu}]}
+        ]
       | .permissions = {"allow":["Bash(ls:*)"]}
     ' "$OS" 2>/dev/null)
     printf '%s\n' "$SEEDED" > "$OS"
     USER_SCRIPT="$OT/.claude/scripts/my-project-helper.sh"
     printf '#!/bin/bash\n# a script this project put here itself\n' > "$USER_SCRIPT"
+    # The script hook (b)/(c) reference: present, no harness header marker.
+    USER_HOOK_SCRIPT="$OT/.claude/scripts/my-own-lint.sh"
+    printf '#!/bin/bash\n# this project wired its own hook at this path\n' \
+      > "$USER_HOOK_SCRIPT"
+    MIX_USER_SCRIPT="$OT/.claude/scripts/my-own-fmt.sh"
+    printf '#!/bin/bash\n# the user half of the mixed hook entry\n' \
+      > "$MIX_USER_SCRIPT"
 
-    if bash "$INSTALL" "$OT" >/dev/null 2>&1; then
+    UPG_OUT="$OT/.install-output.txt"
+    if bash "$INSTALL" "$OT" >"$UPG_OUT" 2>&1; then
       ok "current install.sh exited 0 over the $OLD_SHA install"
     else
       bad "current install.sh exited 0 over the $OLD_SHA install" "non-zero"
@@ -435,22 +468,62 @@ if git -C "$REPO" cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
     else
       ok "upgrade pruned the retired scripts/auto-branch.sh"
     fi
-    if jq -e '[.. | objects | .command? // empty] | any(contains("auto-branch.sh"))' \
-         "$OS" >/dev/null 2>&1; then
+    # The MIXED entry (c) keeps a command naming auto-branch.sh on purpose, so
+    # this asserts the retired ALL-OURS entry is gone: exactly one entry still
+    # names auto-branch.sh, and it is the two-command mixed one.
+    AB_ENTRIES=$(jq '[.hooks.PreToolUse[]?
+                      | select([.hooks[]?.command // ""] | any(contains("auto-branch.sh")))]' \
+                   "$OS" 2>/dev/null)
+    if [ "$(printf '%s' "$AB_ENTRIES" | jq 'length' 2>/dev/null)" = "1" ] \
+       && [ "$(printf '%s' "$AB_ENTRIES" | jq '.[0].hooks | length' 2>/dev/null)" = "2" ]; then
+      ok "upgrade pruned the retired auto-branch hook entry"
+    else
       bad "upgrade pruned the retired auto-branch hook entry" \
         "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # Part 2: a destructive step must say what it removed.
+    if grep -q 'pruned retired hook entry.*auto-branch\.sh' "$UPG_OUT" 2>/dev/null; then
+      ok "upgrade REPORTED the pruned hook entry on stdout"
     else
-      ok "upgrade pruned the retired auto-branch hook entry"
+      bad "upgrade REPORTED the pruned hook entry on stdout" \
+        "$(grep -c . "$UPG_OUT" 2>/dev/null) lines, no prune report"
     fi
 
     # --- preserved ---
-    if [ "$(jq --arg u "$USER_CMD" \
+    # (a) points outside .claude/scripts/ — proves only that the location test
+    #     is required, NOT that ownership is checked.
+    if [ "$(jq --arg u "$OUT_CMD" \
               '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
               "$OS" 2>/dev/null)" = "1" ]; then
-      ok "upgrade preserved the user-owned PreToolUse hook entry"
+      ok "upgrade preserved the user hook entry pointing OUTSIDE .claude/scripts/"
     else
-      bad "upgrade preserved the user-owned PreToolUse hook entry" \
+      bad "upgrade preserved the user hook entry pointing OUTSIDE .claude/scripts/" \
         "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (b) THE regression guard: inside .claude/scripts/, script present and
+    #     unmarked. A location-only ownership test deletes this.
+    if [ "$(jq --arg u "$IN_CMD" \
+              '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the user hook entry INSIDE .claude/scripts/ (present, unmarked)"
+    else
+      bad "upgrade preserved the user hook entry INSIDE .claude/scripts/ (present, unmarked)" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    # (c) mixed entry survives INTACT — both commands, per the all-commands rule.
+    if [ "$(jq --arg h "$MIX_HARNESS_CMD" --arg u "$MIX_USER_CMD" \
+              '[.hooks.PreToolUse[]?
+                | select([.hooks[]?.command // ""] == [$h, $u])] | length' \
+              "$OS" 2>/dev/null)" = "1" ]; then
+      ok "upgrade preserved the MIXED hook entry intact (harness + user command)"
+    else
+      bad "upgrade preserved the MIXED hook entry intact (harness + user command)" \
+        "$(jq -c '.hooks.PreToolUse' "$OS" 2>/dev/null)"
+    fi
+    if [ -f "$USER_HOOK_SCRIPT" ] && [ -f "$MIX_USER_SCRIPT" ]; then
+      ok "upgrade preserved the user hook SCRIPTS inside .claude/scripts/"
+    else
+      bad "upgrade preserved the user hook SCRIPTS inside .claude/scripts/" "deleted"
     fi
     if [ "$(jq -c '.permissions' "$OS" 2>/dev/null)" = '{"allow":["Bash(ls:*)"]}' ]; then
       ok "upgrade preserved the user-owned unrelated settings key"
@@ -480,6 +553,42 @@ else
   bad "upgrade fixture can reach commit $OLD_SHA" \
     "object unavailable — the upgrade-prune assertions did not run"
 fi
+
+# --- FRESH install: a user's own in-.claude/scripts hook must survive --------
+# The prune runs on EVERY install, not only upgrades, so the destructive path is
+# reachable on a first install into a project that already wired hooks of its
+# own. No prior harness install here, so no earlier prune pass can have removed
+# anything: the only ownership signal available is "present and unmarked", and
+# it must be enough to protect the entry.
+FR=$(hc__test_mktemp_d)
+mkdir -p "$FR/.claude/scripts"
+FR_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/scripts/my-own-lint.sh"'
+printf '#!/bin/bash\n# a hook this project wired before the harness existed\n' \
+  > "$FR/.claude/scripts/my-own-lint.sh"
+jq -n --arg u "$FR_CMD" \
+  '{hooks:{PreToolUse:[{matcher:"Write",hooks:[{type:"command",command:$u}]}]}}' \
+  > "$FR/.claude/settings.local.json"
+
+if bash "$INSTALL" "$FR" >/dev/null 2>&1; then
+  ok "install.sh exited 0 on a fresh install over pre-existing user hooks"
+else
+  bad "install.sh exited 0 on a fresh install over pre-existing user hooks" "non-zero"
+fi
+FRS="$FR/.claude/settings.local.json"
+if [ "$(jq --arg u "$FR_CMD" \
+          '[.hooks.PreToolUse[]? | select((.hooks[]?.command // "") == $u)] | length' \
+          "$FRS" 2>/dev/null)" = "1" ]; then
+  ok "FRESH install preserved the user hook INSIDE .claude/scripts/ (present, unmarked)"
+else
+  bad "FRESH install preserved the user hook INSIDE .claude/scripts/ (present, unmarked)" \
+    "$(jq -c '.hooks.PreToolUse' "$FRS" 2>/dev/null)"
+fi
+if [ -f "$FR/.claude/scripts/my-own-lint.sh" ]; then
+  ok "FRESH install preserved the user's script inside .claude/scripts/"
+else
+  bad "FRESH install preserved the user's script inside .claude/scripts/" "deleted"
+fi
+rm -rf "$FR" 2>/dev/null
 
 # ---------------------------------------------------------------------------
 echo

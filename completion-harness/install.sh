@@ -141,10 +141,26 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.local.json"
 #          first 5 lines. Every shipped script has it; so did auto-branch.sh.
 #   hook — EVERY command in the entry references
 #          $CLAUDE_PROJECT_DIR/.claude/scripts/<name>.sh (that same target)
-#          AND no <name>.sh it references is still shipped. Requiring ALL
-#          commands to be ours keeps a mixed entry (ours + a hook the user
-#          added beside it) intact; nothing else is removed, reordered, or
-#          rewritten, and non-hook keys are carried through untouched.
+#          AND every <name>.sh it references is BOTH no longer shipped AND
+#          provably harness-owned. Location alone is NOT ownership: a project
+#          that wired its own hook at .claude/scripts/my-own-lint.sh has an
+#          entry that satisfies the location test, so the second signal is the
+#          same marker signal the file prune uses, read through the install
+#          target:
+#            absent from .claude/scripts/  -> harness-owned. The file prune
+#              above runs FIRST, so a genuinely retired harness script is
+#              already deleted (as marker-carrying) by the time we look; an
+#              earlier install whose file prune succeeded and whose hook prune
+#              warned out leaves the same state, and it must stay prunable.
+#            present WITH the marker       -> harness-owned (belt-and-braces:
+#              the file prune would normally have taken it already).
+#            present WITHOUT the marker    -> the signature of a USER's script.
+#              Never prunable. This is the case that protects the project's own
+#              hook, and it holds on a FRESH install too, where no prune has
+#              ever run: the user's script is present and unmarked.
+#          Requiring ALL commands to be ours keeps a mixed entry (ours + a hook
+#          the user added beside it) intact; nothing else is removed, reordered,
+#          or rewritten, and non-hook keys are carried through untouched.
 # Pruning is best-effort: any failure warns and the install continues (a
 # stale leftover is a wart, a half-installed harness is worse).
 SHIPPED_SCRIPTS=("${EXEC_SCRIPTS[@]}" harness-common.sh)
@@ -171,21 +187,61 @@ done
 
 SHIPPED_JSON=$(printf '%s\n' "${SHIPPED_SCRIPTS[@]}" \
   | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null)
-if [ -z "$SHIPPED_JSON" ]; then
-  echo "  warning: could not build the shipped-script list — skipped pruning" \
-       "retired hooks from settings.local.json" >&2
+
+# The ownership half of the hook test, read off the install target AFTER the
+# file prune above: {"<name>.sh": <carries the header marker>} for every script
+# still present. A name absent from this map is absent from disk.
+PRESENT_JSON=$(
+  for f in "$CLAUDE_DIR/scripts/"*.sh; do
+    [ -f "$f" ] || continue
+    if head -5 "$f" 2>/dev/null | grep -q 'Completion Harness —'; then
+      printf '%s\t%s\n' "$(basename "$f")" true
+    else
+      printf '%s\t%s\n' "$(basename "$f")" false
+    fi
+  done | jq -R -s 'split("\n") | map(select(length > 0) | split("\t"))
+                   | map({ (.[0]): (.[1] == "true") }) | add // {}' 2>/dev/null
+)
+
+# Shared jq prelude: the ownership predicate, used once to REPORT what will go
+# and once to actually remove it, so the two can never drift.
+PRUNE_DEFS='
+  # Commands carried by one hook entry.
+  def cmds: [ .hooks[]?.command? // empty ];
+  # Script basenames those commands reference under the harness install
+  # target. scan() with one capture group yields arrays, hence flatten.
+  def refs: [ cmds[] | scan("/\\.claude/scripts/([A-Za-z0-9._-]+\\.sh)") ] | flatten;
+  # Second ownership signal (see the comment block above): absent from the
+  # install target, or present carrying the bundle header marker. A file that
+  # is present WITHOUT the marker is a user script and is never owned.
+  def harness_owned($n): if ($present | has($n)) then $present[$n] else true end;
+  # A retired harness entry: entirely ours by location, naming at least one
+  # script, and every script it names both unshipped AND harness-owned.
+  def retired: (cmds | length) > 0
+    and (cmds | all(contains("/.claude/scripts/")))
+    and (refs | length) > 0
+    and (refs | all(. as $n | (IN($shipped[]) | not) and harness_owned($n)));
+'
+
+if [ -z "$SHIPPED_JSON" ] || [ -z "$PRESENT_JSON" ]; then
+  echo "  warning: could not build the shipped/present script lists — skipped" \
+       "pruning retired hooks from settings.local.json" >&2
 else
-  PRUNED=$(jq --argjson shipped "$SHIPPED_JSON" '
-    # Commands carried by one hook entry.
-    def cmds: [ .hooks[]?.command? // empty ];
-    # Script basenames those commands reference under the harness install
-    # target. scan() with one capture group yields arrays, hence flatten.
-    def refs: [ cmds[] | scan("/\\.claude/scripts/([A-Za-z0-9._-]+\\.sh)") ] | flatten;
-    # A retired harness entry: entirely ours, and naming nothing still shipped.
-    def retired: (cmds | length) > 0
-      and (cmds | all(contains("/.claude/scripts/")))
-      and (refs | length) > 0
-      and (refs | all(IN($shipped[]) | not));
+  # What is about to go, one line per entry, so a destructive step is never
+  # silent. Reported only after the write below actually lands.
+  DOOMED=$(jq -r --argjson shipped "$SHIPPED_JSON" --argjson present "$PRESENT_JSON" \
+    "$PRUNE_DEFS"'
+    if (.hooks | type) == "object" then
+      .hooks | to_entries[] | .key as $ev | .value
+      | if type == "array"
+        then .[] | select(type == "object") | select(retired)
+             | "\($ev) → \(refs | unique | join(", "))"
+        else empty end
+    else empty end
+  ' "$SETTINGS_FILE" 2>/dev/null)
+
+  PRUNED=$(jq --argjson shipped "$SHIPPED_JSON" --argjson present "$PRESENT_JSON" \
+    "$PRUNE_DEFS"'
     if (.hooks | type) == "object" then
       .hooks |= with_entries(
         if (.value | type) == "array"
@@ -199,6 +255,11 @@ else
          "(invalid JSON?) — left untouched" >&2
   else
     printf '%s\n' "$PRUNED" > "$SETTINGS_FILE"
+    if [ -n "$DOOMED" ]; then
+      while IFS= read -r entry; do
+        [ -n "$entry" ] && echo "  pruned retired hook entry: $entry (no longer shipped)"
+      done <<< "$DOOMED"
+    fi
   fi
 fi
 
