@@ -1,0 +1,11 @@
+{
+  "_comment": "Task-DoD walking-skeleton hook manifest (issue #11 / ADR-0001). NOT merged into the live completion-harness/hooks.json by install.sh or anything else. It exists so the headless trial (tests/test-dod-headless.sh) can build a MERGED temp bundle — live hooks.json + these entries — for `claude -p --plugin-dir`, since the headless child loads hooks from one plugin dir and a skeleton in dod/ is otherwise invisible to it. Wiring the skeleton live is a separate, informed decision (issue: 'Not wired live').",
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "Bash|Write|Edit", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/dod/dod-nudge.sh\"" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/dod/dod-gate.sh\"", "timeout": 10 } ] }
+    ]
+  }
+}
