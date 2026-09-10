@@ -169,13 +169,36 @@ is out of scope by choice — the limit is stated rather than assumed away.
   **STOPS** at the first commit that is not, and keeps that commit and everything after
   it in the changeset. Attribution has exactly **one** source of truth:
 
-  - **Ledger membership**, via `commit-ledger.sh`, which is wired **twice on the `Bash`
-    matcher**. `PreToolUse` pins HEAD to `baselines/<session_id>.cursor`; `PostToolUse`
-    sweeps `CURSOR..HEAD` unconditionally (with dedupe) into
-    `baselines/<session_id>.own-commits`. The pair brackets each tool call into a
-    **window**, and HEAD moving inside that window is *direct observation* that an agent
-    produced the commit — not an inference from what the command looked like or who
-    signed it. `hc__commit_in_any_ledger` answers membership across **all** sessions'
+  - **Ledger membership**, via `commit-ledger.sh`, which is wired **twice on the
+    `Bash|SlashCommand|mcp__.*` matcher** and runs in **both modes** (task mode writes the
+    ledger too — a task-mode commit the human later merges to trunk must not read as
+    foreign). `PreToolUse` pins HEAD to `baselines/<session_id>.cursor.<tool_use_id>`
+    (`baselines/<session_id>.cursor` when the payload carries no per-call id);
+    `PostToolUse` sweeps `CURSOR..HEAD` (deduped, and **filtered by committer date** — see
+    below) into `baselines/<session_id>.own-commits`. The pair brackets each tool call
+    into a **window**, and HEAD moving inside that window is *direct observation* that an
+    agent produced the commit — not an inference from what the command looked like or who
+    signed it. The cursor is **per tool call**, because one shared cursor cannot serve two
+    concurrent windows: `pre(A) → commit → pre(B) → post → post` used to leave the
+    agent's own commit in no ledger at all.
+
+    Four further per-session files qualify that record, all under `baselines/<sid>.`:
+    `.watermark` (the last HEAD a sweep reached), `.bg-seen` (this session backgrounded a
+    Bash call, so `pre` pins the watermark instead of HEAD), `.sweep-failed` (a sweep
+    could not be completed ⇒ attribution unknown ⇒ no base advance and no narrowed
+    coverage) and `.started` (the SessionStart epoch, the committer-date floor).
+
+    **A FAST-FORWARD IS NOT AUTHORSHIP.** `git pull --ff-only` moves HEAD *inside* a
+    window over commits authored elsewhere and earlier, and receiving a commit is
+    indistinguishable from creating one at the window level — so the window model alone
+    cannot separate them; only a property of the commit can. The sweep therefore appends a
+    sha only when its **committer** date (`%ct`; committer, not author, because rebase and
+    amend rewrite the committer date to now, so the session's own work never trips it) is
+    at or after the epoch in `baselines/<sid>.started`. Absent, empty or unparseable
+    `.started` ⇒ **no filtering** (over-block is the safe direction at the append layer).
+    Observed before the filter: a session that authored nothing but ran one
+    `git pull --ff-only` reported "5 commits, 5 authored this session" and demanded review
+    of 18 files, 15 of them never touched by the session. `hc__commit_in_any_ledger` answers membership across **all** sessions'
     ledgers, not just the querying one: a concurrent agent session's commit is still
     agent work, and a per-session check would have each session read the other's commits
     as foreign and advance past work nobody then reviews. Cross-session scope needs no
@@ -228,9 +251,15 @@ is out of scope by choice — the limit is stated rather than assumed away.
   **Accepted residual, stated rather than hidden.** A foreign commit that lands *during*
   the agent's own long Bash call (a 3-minute test run, say) is inside that window and gets
   swept in — misattributed as agent work, costing a spurious `/done` demand. The ceiling
-  on the damage is what makes it acceptable: every race outcome here is an **over**-block,
-  never a skipped review, because going unrecorded requires HEAD to move *outside* every
-  call window — which is exactly the genuine human/foreign case. Concurrent same-tree
+  on the damage is what makes it acceptable: this particular race is an **over**-block,
+  never a skipped review. That ceiling is a property of THIS race, not of the window model
+  in general — **"HEAD moving outside every window ⇒ foreign" is FALSE**, and
+  `commit-ledger.sh` enumerates the four counter-examples: a backgrounded Bash call that
+  commits after the tool returns (closed by `.watermark`/`.bg-seen`), a task-mode commit
+  the human later merges (closed by writing the ledger in task mode too), a non-Bash tool
+  that moves HEAD (closed by the widened matcher), and — the reverse leak — a
+  **fast-forward**, which moves HEAD *inside* a window and is still foreign (closed by the
+  committer-date filter). Concurrent same-tree
   sessions are already documented as unsupported-racy. Upgrade path if it ever bites:
   correlate `git reflog HEAD` against the window instead of a bare two-point HEAD diff, or
   have the agent's own commit path stamp the sha directly.
@@ -291,7 +320,11 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 | Task tree-base (pinned) | `.claude/.harness/tree-base/<task_key>.dirty` | task (branch) — pinned ONCE at the fork; classifier's "pre-existing" set |
 | Session baseline | `.claude/.harness/baselines/<session_id>.sha` | session (fallback + test-snapshot anchor) |
 | Session commit ledger | `.claude/.harness/baselines/<session_id>.own-commits` | session — append-only + deduped, one SHA per line; **the** base-advance signal, read across all sessions' ledgers. Absent and empty are equivalent: "no agent commit observed" |
-| Bash-window cursor | `.claude/.harness/baselines/<session_id>.cursor` | session — HEAD as pinned by `commit-ledger.sh pre`; whole-file overwrite per Bash call (last pin wins, so nested calls narrow the window). The sweep's lower bound; missing → falls back to `<session_id>.sha`, deliberately over-including |
+| Tool-call cursor | `.claude/.harness/baselines/<session_id>.cursor.<tool_use_id>` (`.cursor` with no per-call id) | session — HEAD as pinned by `commit-ledger.sh pre`, **one file per tool call**, read and removed by that call's own `post`. The sweep's lower bound; a concurrent call's pin lands in its own file and cannot narrow this window. Missing → falls back to the shared `.cursor`, then to `<session_id>.sha`, deliberately over-including |
+| Session start epoch | `.claude/.harness/baselines/<session_id>.started` | session — epoch seconds in the **content** (never mtime, which is mutable and already a known false-PASS risk). The committer-date floor for the sweep: a fast-forwarded upstream commit is older and is not claimed. Written once, when absent — a re-stamp on resume could filter out an unswept commit the session really authored. Absent/unparseable → no filtering |
+| Sweep watermark | `.claude/.harness/baselines/<session_id>.watermark` | session — the last HEAD a sweep reached, rewritten after every completed sweep including a zero-length one |
+| Backgrounding marker | `.claude/.harness/baselines/<session_id>.bg-seen` | session — sticky: this session backgrounded a Bash call, so `pre` pins `.watermark` instead of HEAD |
+| Sweep-failure marker | `.claude/.harness/baselines/<session_id>.sweep-failed` | session — a sweep could not be completed: attribution UNKNOWN, so the base does not advance and review coverage stays on the whole range diff |
 | Current-session marker | `.claude/.harness/current-session` | authoritative session id (written each SessionStart from hook stdin; the id source for the skill/writer) |
 | Session tree-base | `.claude/.harness/baselines/<session_id>.dirty` | session — rewritten each SessionStart; classifier's "pre-existing" set |
 | Test snapshot | `.claude/.harness/baselines/<sha>.tests.json` | SHA (shared) |
@@ -1433,7 +1466,7 @@ global use.
 | `completion-harness/contracts/*.json` | Hard-contract schema store: 6 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod, done-plan) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
 | `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
 | `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
-| `completion-harness/scripts/commit-ledger.sh` | The commit ledger, wired **twice** on the `Bash` matcher: PreToolUse(`pre`) pins HEAD to `baselines/<sid>.cursor`, PostToolUse sweeps `CURSOR..HEAD` into `baselines/<sid>.own-commits`. Session mode only; no-ops mid-rebase/merge; never fails the tool. The single authorship signal base-advance reads |
+| `completion-harness/scripts/commit-ledger.sh` | The commit ledger, wired **twice** on the `Bash\|SlashCommand\|mcp__.*` matcher: PreToolUse(`pre`) pins HEAD to `baselines/<sid>.cursor.<tool_use_id>`, PostToolUse sweeps `CURSOR..HEAD` into `baselines/<sid>.own-commits`, filtered to commits whose committer date is at or after `baselines/<sid>.started` (so a fast-forward is not read as authorship). **Both modes**; no-ops mid-rebase/merge; never fails the tool. The single authorship signal base-advance reads |
 | `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
 | `completion-harness/scripts/done-detect.sh` | `/done` config: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
 | `completion-harness/scripts/worktree-detect.sh` | Worktree provisioning probe (Step-0-shaped): `install_cmd`, filtered `link` set, `setup_candidates`; writes the `worktree` block of done-config.json, `worktree.overrides` sticky |

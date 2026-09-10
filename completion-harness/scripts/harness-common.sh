@@ -110,6 +110,14 @@ hc_require_jq() {
 #                            shell exits — so a session that backgrounded a job
 #                            can commit BETWEEN call windows and the
 #                            "outside every window ⇒ foreign" inference dies.
+#   HC_HOOK_TOOL_USE_ID      .tool_use_id — the id of the ONE tool call this
+#                            event belongs to. Both PreToolUse and PostToolUse
+#                            carry it (verified against the Claude Code 2.1.267
+#                            payload builder); older CLIs may not, so every
+#                            consumer must degrade when it is empty.
+#                            commit-ledger.sh keys its per-call cursor on it, so
+#                            parallel tool calls in one session cannot narrow
+#                            each other's sweep window.
 #   HC_HOOK_SOURCE           .source
 #   HC_HOOK_STOP_ACTIVE      .stop_hook_active (text "true"/"false")
 hc_read_hook_input() {
@@ -118,6 +126,7 @@ hc_read_hook_input() {
   HC_HOOK_TOOL_FILE_PATH=""
   HC_HOOK_TOOL_COMMAND=""
   HC_HOOK_TOOL_BACKGROUND="false"
+  HC_HOOK_TOOL_USE_ID=""
   HC_HOOK_SOURCE=""
   HC_HOOK_STOP_ACTIVE="false"
   if hc_has_jq; then
@@ -125,6 +134,7 @@ hc_read_hook_input() {
     HC_HOOK_TOOL_FILE_PATH=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
     HC_HOOK_TOOL_COMMAND=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.command // ""' 2>/dev/null)
     HC_HOOK_TOOL_BACKGROUND=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)
+    HC_HOOK_TOOL_USE_ID=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.tool_use_id // ""' 2>/dev/null)
     HC_HOOK_SOURCE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.source // ""' 2>/dev/null)
     HC_HOOK_STOP_ACTIVE=$(printf '%s' "$HC_HOOK_RAW" | jq -r '.stop_hook_active // false' 2>/dev/null)
   fi
@@ -735,8 +745,102 @@ hc__resolve_task_base() {
 # own baseline), and session baselines are age-reaped at 14 days.
 #
 # Returns 1 on ANY other outcome: empty sha, no baselines dir, no ledger files,
-# or the sha simply absent from all of them. A grep FAILURE is never read as a
-# positive — only an explicit match sets the success rc.
+# or the sha simply absent from all of them. A READ FAILURE is never read as a
+# positive — a file we could not read contributes no lines, so it can only make
+# the answer negative (exactly the old grep-failure semantics).
+#
+# COST. This used to fork one `grep -qxF` PER LEDGER FILE PER COMMIT. The old
+# single-ledger predicate was one grep per commit; widening membership to the
+# whole peer set multiplied that by the file count, so a 30-commit range against
+# 40 peer ledgers cost ~1200 forks per range walk — and the populated-ledger
+# path walks the range up to four times per Stop (base advance, changeset set,
+# summary, coverage), against done-gate.sh's 10s hook timeout. A killed Stop
+# hook emits no decision, i.e. a BLOCK silently becomes an allow.
+#
+# So the union of every ledger's SHAs is built ONCE per range walk
+# (hc__ledger_set_load) into a newline-FRAMED blob and membership is an
+# in-process `case` match — ZERO forks, whatever the file or commit count.
+#
+# WHY A BLOB AND NOT AN ASSOCIATIVE ARRAY: `declare -A` needs bash 4, and macOS
+# still ships bash 3.2 as /bin/bash — the interpreter of every hook here. The
+# blob also gives the two semantics that must not drift for free:
+#   - WHOLE-LINE matching: the searched pattern is "\n<sha>\n", so a sha that is
+#     a prefix/substring of a ledgered one cannot match.
+#   - NO PATTERN INTERPRETATION: the needle is QUOTED inside the case pattern,
+#     so glob metacharacters in it are literal (the -F half of `grep -qxF`).
+hc__commit_in_any_ledger() {
+  local sha="$1"
+  [ -z "$sha" ] && return 1
+  [ -z "$HARNESS_DIR" ] && return 1
+  # Outside a walker's scope the cache is REBUILT on every call: a caller that
+  # mutates a ledger and re-queries in the same process (the test suites, a
+  # writer resolving twice) must never read a stale set, and a stale MISS is the
+  # silent-skip direction. Inside a scope the ledger cannot change under us
+  # (single-threaded walk), so the loop pays nothing.
+  if [ "${HC__LEDGER_SET_SCOPE:-0}" -le 0 ]; then
+    hc__ledger_set_load
+  fi
+  case "$HC__LEDGER_SET" in
+    *"$HC__NL$sha$HC__NL"*) return 0 ;;
+  esac
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# The ledger membership cache. HC__LEDGER_SET holds the union of every
+# baselines/*.own-commits line, newline-FRAMED (a leading and a trailing
+# newline) so every entry is delimited on both sides and a whole-line `case`
+# match needs no extra bookkeeping.
+HC__NL='
+'
+HC__LEDGER_SET=""
+HC__LEDGER_SET_SCOPE=0
+
+# hc__ledger_set_load — rebuild HC__LEDGER_SET from $HARNESS_DIR/baselines.
+# Pure builtins, ZERO forks: `read` per line, and the files are tiny. An
+# unreadable file simply contributes nothing (see the failure semantics above).
+# Blank lines are dropped — they could never match a sha under `grep -qxF`
+# either. No other interpretation is applied: whatever a ledger holds is
+# compared verbatim.
+hc__ledger_set_load() {
+  HC__LEDGER_SET=""
+  [ -z "${HARNESS_DIR:-}" ] && return 0
+  local dir="$HARNESS_DIR/baselines"
+  [ -d "$dir" ] || return 0
+  local f line blob=""
+  for f in "$dir"/*.own-commits; do
+    # No-glob-match leaves the literal pattern; -f filters it out.
+    [ -f "$f" ] || continue
+    # `|| [ -n "$line" ]` so a final line with no trailing newline still counts
+    # — per FILE, which is why this is not one `cat` of the whole glob: cat
+    # would splice such a tail onto the next file's first line and LOSE both
+    # memberships (the silent-skip direction).
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -z "$line" ] && continue
+      blob="$blob$line$HC__NL"
+    done < "$f"
+  done
+  [ -n "$blob" ] && HC__LEDGER_SET="$HC__NL$blob"
+  return 0
+}
+
+# hc__ledger_set_open / _close — hold the cache across ONE range walk. Every
+# function that loops hc__commit_in_any_ledger over a rev range brackets its
+# loop with these, so the union is read once per walk instead of once per
+# commit. The counter makes nesting safe (hc_session_changeset_files walks via
+# hc_session_changeset_commits); both are placed around the tight loop only, so
+# no early return can leak a scope.
+hc__ledger_set_open() {
+  HC__LEDGER_SET_SCOPE=$(( ${HC__LEDGER_SET_SCOPE:-0} + 1 ))
+  hc__ledger_set_load
+  return 0
+}
+hc__ledger_set_close() {
+  if [ "${HC__LEDGER_SET_SCOPE:-0}" -gt 0 ]; then
+    HC__LEDGER_SET_SCOPE=$(( HC__LEDGER_SET_SCOPE - 1 ))
+  fi
+  return 0
+}
 #
 # There is no email fallback and no "ledger absent → unknown" tier. Committer
 # email cannot distinguish agent from human: they share one git identity (there
@@ -748,21 +852,38 @@ hc__resolve_task_base() {
 # a session that committed nothing has nothing to review. Uncommitted work is
 # unaffected — hc_tree_status gates it against the tree baseline, which never
 # consults the ledger.
-hc__commit_in_any_ledger() {
-  local sha="$1"
-  [ -z "$sha" ] && return 1
-  [ -z "$HARNESS_DIR" ] && return 1
-  local dir="$HARNESS_DIR/baselines"
-  [ -d "$dir" ] || return 1
-  local f
-  for f in "$dir"/*.own-commits; do
-    # No-glob-match leaves the literal pattern; -f filters it out.
-    [ -f "$f" ] || continue
-    if grep -qxF -- "$sha" "$f" 2>/dev/null; then
-      return 0
-    fi
-  done
-  return 1
+# ---------------------------------------------------------------------------
+# hc__guard_session_ids
+#
+# Prints every id that could name THIS session's ledger state, one per line,
+# deduped: HC_SESSION_ID (whatever the caller read from its own hook stdin) and
+# the id in $HARNESS_DIR/current-session (what SessionStart saw, the
+# authoritative marker). Prints NOTHING when neither resolves.
+#
+# WHY BOTH RATHER THAN A FALLBACK CHAIN: the two ids disagree in practice (the
+# gate documents an observed case — marker da3cea26…, gate stdin 28222a43…), and
+# the hook that writes .sweep-failed keys it by ITS stdin id while the gate reads
+# by ITS own. A first-match-wins resolution therefore misses a real marker on the
+# exact path where they differ. Session-id-keyed GUARDS must fail toward "not
+# clean", so any candidate carrying a marker disarms the narrowing.
+#
+# The marker value is validated to the same shape done-gate.sh's read_marker_id
+# accepts (no path separators, no dot-dot) — these ids are pasted into a
+# filename.
+hc__guard_session_ids() {
+  local out="" raw=""
+  [ -n "${HC_SESSION_ID:-}" ] && out="$HC_SESSION_ID"
+  if [ -n "${HARNESS_DIR:-}" ] && [ -f "$HARNESS_DIR/current-session" ]; then
+    raw=$(cat "$HARNESS_DIR/current-session" 2>/dev/null | tr -d '\r\n')
+    case "$raw" in
+      ''|'.'|'..'|*[!A-Za-z0-9._-]*) raw="" ;;
+    esac
+  fi
+  if [ -n "$raw" ] && [ "$raw" != "$out" ]; then
+    out="${out:+$out$HC__NL}$raw"
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -869,6 +990,7 @@ hc__session_authored_count() {
   local revs n=0 c
   revs=$(git -C "$proj" rev-list --reverse "$orig_base..$head" 2>/dev/null) || { printf '0'; return 0; }
   [ -z "$revs" ] && { printf '0'; return 0; }
+  hc__ledger_set_open
   while IFS= read -r c; do
     [ -z "$c" ] && continue
     if hc__commit_session_authored "$c" "$session_id"; then
@@ -877,6 +999,7 @@ hc__session_authored_count() {
   done <<EOF
 $revs
 EOF
+  hc__ledger_set_close
   printf '%s' "$n"
   return 0
 }
@@ -902,12 +1025,14 @@ hc_session_changeset_commits() {
   local revs c
   revs=$(git -C "$proj" rev-list --reverse "$orig_base..$head" 2>/dev/null) || return 0
   [ -z "$revs" ] && return 0
+  hc__ledger_set_open
   while IFS= read -r c; do
     [ -z "$c" ] && continue
     hc__commit_session_authored "$c" "$session_id" && printf '%s\n' "$c"
   done <<EOF
 $revs
 EOF
+  hc__ledger_set_close
   return 0
 }
 
@@ -1042,6 +1167,7 @@ hc__resolve_session_base() {
     return 0
   fi
 
+  hc__ledger_set_open
   while IFS= read -r c; do
     [ -z "$c" ] && continue
     if hc__commit_in_any_ledger "$c"; then
@@ -1055,6 +1181,7 @@ hc__resolve_session_base() {
   done <<EOF
 $revs
 EOF
+  hc__ledger_set_close
   return 0
 }
 
@@ -1426,8 +1553,8 @@ hc_review_coverage_gap() {
   local ledger_engaged=0
 
   # THE LEDGER SET NARROWS THE DEMAND, so it is admissible ONLY while the ledger
-  # is KNOWN COMPLETE. Two states say it is not, and in both we stay on the
-  # RANGE DIFF (not a union with the ledger set):
+  # is KNOWN COMPLETE. Four states say it is not, and in all of them we stay on
+  # the RANGE DIFF (not a union with the ledger set):
   #
   #   TASK MODE. The pinned fork point IS the changeset anchor — task mode never
   #   drops a foreign commit, by design. Before the ledger write path was
@@ -1441,6 +1568,31 @@ hc_review_coverage_gap() {
   #   must widen COVERAGE too, or the reviewer attests only the ledgered files,
   #   the gap comes back empty and the lost window's files ship unreviewed —
   #   exactly the attribution the marker exists to distrust.
+  #
+  #   OUR OWN LEDGERED HISTORY REWRITTEN (hc__ledger_history_rewritten). Same
+  #   statement as the marker, from the other tripwire: a mid-session rebase
+  #   turned our A into an A' that is in no ledger, so the ledger no longer
+  #   describes what this session authored. It already suppresses the base
+  #   advance; it must widen coverage for the same reason .sweep-failed does.
+  #
+  #   NO RESOLVABLE SESSION ID. Ledger MEMBERSHIP is id-free (any session's
+  #   ledger counts — hc__commit_in_any_ledger), but both tripwires above are
+  #   keyed by session id. With no id there is nothing to check them against, so
+  #   the narrowing path would engage with its own safety guards switched off.
+  #   Ledger unknown ⇒ ledger incomplete.
+  #
+  # THE ID IS RESOLVED THE WAY THE GATE RESOLVES IT — HC_SESSION_ID (the hook's
+  # own stdin id) AND the current-session marker SessionStart wrote — and BOTH
+  # are checked, not the first one that exists. On the gate's documented
+  # Step-2a-0 id-DISAGREEMENT path (its stdin id differs from the marker's, and
+  # it adopts baselines/<marker id>.sha as the anchor) HC_SESSION_ID is
+  # non-empty, so a first-match-wins fallback would never look at the marker —
+  # and baselines/<marker id>.sweep-failed, written by the hook under the id
+  # SessionStart saw, would go unseen while the demand narrowed on a session
+  # whose attribution is known incomplete. Two candidate ids, both plausibly
+  # THIS session, never a peer's: that keeps the rewrite tripwire's
+  # this-session-only scope (peer ledgers routinely hold shas unreachable from
+  # our HEAD; tripping on those would block every session forever).
   #
   # WHY THE RANGE DIFF RATHER THAN A UNION: in BOTH cases <base> equals
   # <orig_base> — task mode mirrors it (hc__resolve_task_base), and the
@@ -1456,9 +1608,17 @@ hc_review_coverage_gap() {
   # range diff anyway, so the degrade already points the safe way.
   local ledger_complete=1
   [ "${HC_MODE:-}" = "task" ] && ledger_complete=0
-  if [ -n "${HARNESS_DIR:-}" ] && [ -n "${HC_SESSION_ID:-}" ] \
-     && [ -f "$HARNESS_DIR/baselines/${HC_SESSION_ID}.sweep-failed" ]; then
-    ledger_complete=0
+  local guard_ids _gid
+  guard_ids=$(hc__guard_session_ids)
+  [ -z "$guard_ids" ] && ledger_complete=0
+  if [ -n "${HARNESS_DIR:-}" ] && [ -n "$guard_ids" ]; then
+    while IFS= read -r _gid; do
+      [ -z "$_gid" ] && continue
+      [ -f "$HARNESS_DIR/baselines/${_gid}.sweep-failed" ] && ledger_complete=0
+      hc__ledger_history_rewritten "$_gid" "$proj" && ledger_complete=0
+    done <<EOF
+$guard_ids
+EOF
   fi
 
   if [ "$ledger_complete" -eq 1 ] \
@@ -1792,6 +1952,7 @@ hc_changeset_summary() {
       # Tally committer names for the author list (all commits in range).
       local names_raw
       names_raw=$(git -C "$proj" log --format='%cn' "$base_orig..$head" 2>/dev/null | sort | uniq -c | sort -rn)
+      hc__ledger_set_open
       while IFS= read -r c; do
         [ -z "$c" ] && continue
         total=$((total + 1))
@@ -1801,6 +1962,7 @@ hc_changeset_summary() {
       done <<EOF
 $revs
 EOF
+      hc__ledger_set_close
       # Compact "Name n, ..." list from the tally.
       local cnt nm
       while IFS= read -r line; do

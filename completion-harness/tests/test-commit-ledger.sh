@@ -955,6 +955,278 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Helpers for the committer-date filter (cases L-O).
+# ---------------------------------------------------------------------------
+# seed_started <sid> [epoch] — the SessionStart epoch, in the file's CONTENT
+# (baseline-snapshot.sh writes it; mtime is deliberately not a signal).
+seed_started() {
+  mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+  printf '%s\n' "${2:-$(date +%s)}" > "$REPO/.claude/.harness/baselines/${1}.started"
+}
+started_path() { printf '%s/.claude/.harness/baselines/%s.started' "$REPO" "$1"; }
+
+# mk_upstream — a second repo that is a clone of $REPO, with ONE commit whose
+# COMMITTER date is far in the past. Echoes nothing; sets $UPSTREAM and $CUP.
+# GIT_COMMITTER_DATE is what matters: `--date` moves only the AUTHOR date, and
+# the filter reads %ct.
+mk_upstream() {
+  UPSTREAM=$(hc__test_mktemp_d)
+  CLEANUP+=("$UPSTREAM")
+  git clone -q "$REPO" "$UPSTREAM" >/dev/null 2>&1
+  git -C "$UPSTREAM" config user.email "peer@example.com" >/dev/null 2>&1
+  git -C "$UPSTREAM" config user.name  "Peer" >/dev/null 2>&1
+  printf 'upstream\n' > "$UPSTREAM/upstream.txt"
+  git -C "$UPSTREAM" add upstream.txt >/dev/null 2>&1
+  GIT_COMMITTER_DATE="2020-01-01T00:00:00 +0000" GIT_AUTHOR_DATE="2020-01-01T00:00:00 +0000" \
+    git -C "$UPSTREAM" commit -qm "upstream work" >/dev/null 2>&1
+  CUP=$(git -C "$UPSTREAM" rev-parse HEAD)
+  git -C "$REPO" remote add origin "$UPSTREAM" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+printf '== Case L (DIRECTIONAL): a pure `git pull --ff-only` session authors NOTHING ==\n'
+# REAL PRODUCTION FAILURE. A session that authored nothing and ran only
+# `git pull --ff-only` had every fast-forwarded upstream commit swept into its
+# ledger: HEAD moved INSIDE the call window, and the window model cannot tell
+# creating a commit from receiving one. The gate then reported "5 commits, 5
+# authored this session", the coverage demand grew to 18 files of which 15 the
+# session never touched, and a pre-existing bug in one of those foreign files
+# blocked an unrelated changeset. An over-broad ledger is harmful, not generous.
+# THE FIX: the sweep appends a sha only when its COMMITTER date is >= the epoch
+# in baselines/<sid>.started.
+new_repo; SID="LL"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+seed_started "$SID"
+mk_upstream
+window "$SID" "git pull --ff-only origin main" \
+  'git -C "$REPO" pull -q --ff-only origin main >/dev/null 2>&1'
+CH=$(git -C "$REPO" rev-parse HEAD)
+eq "caseL fixture: the pull really fast-forwarded HEAD onto the upstream commit" "$CUP" "$CH"
+CUP_CT=$(git -C "$REPO" show -s --format=%ct "$CUP" 2>/dev/null)
+if [ -n "$CUP_CT" ] && [ "$CUP_CT" -lt "$(cat "$(started_path "$SID")")" ]; then
+  ok "caseL fixture: the upstream commit's committer date really predates the session"
+else
+  bad "caseL fixture: upstream %ct predates the session" "%ct=$CUP_CT started=$(cat "$(started_path "$SID")")"
+fi
+if [ -f "$(ledger_path "$SID")" ] && [ ! -s "$(ledger_path "$SID")" ]; then
+  ok "caseL ledger present and EMPTY (a fast-forward is not authorship)"
+else
+  bad "caseL ledger present and EMPTY" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+resolve_inproc "$SID"
+eq "caseL base advances to HEAD (nothing this session authored)" "$CH" "$HC_BASE"
+eq "caseL gate ALLOWS the Stop (empty changeset, clean tree)" "allow" "$(gate_verdict "$SID")"
+
+# ---------------------------------------------------------------------------
+printf '== Case M: a fast-forward alongside a REAL session commit ledgers only ours ==\n'
+# The filter must not throw the baby out: the session's OWN commit is made now,
+# so its committer date is at or after the session epoch and it is still
+# claimed — while the OLD upstream commit the same window fast-forwarded over
+# is not.
+new_repo; SID="LM"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+seed_started "$SID"
+mk_upstream
+window "$SID" "git pull --ff-only origin main && git commit" \
+  'git -C "$REPO" pull -q --ff-only origin main >/dev/null 2>&1; commit_file mine.txt'
+CMINE=$(git -C "$REPO" rev-parse HEAD)
+LEDGER=$(ledger_path "$SID")
+if grep -Fxq -- "$CMINE" "$LEDGER" 2>/dev/null; then
+  ok "caseM the session's own commit IS ledgered"
+else
+  bad "caseM the session's own commit IS ledgered" "$(cat "$LEDGER" 2>/dev/null)"
+fi
+if grep -Fxq -- "$CUP" "$LEDGER" 2>/dev/null; then
+  bad "caseM the fast-forwarded upstream commit is NOT ledgered" "$(cat "$LEDGER" 2>/dev/null)"
+else
+  ok "caseM the fast-forwarded upstream commit is NOT ledgered"
+fi
+eq "caseM the ledger holds exactly ONE sha" "1" "$(grep -c . "$LEDGER" | tr -d ' ')"
+resolve_inproc "$SID"
+eq "caseM base advances past the upstream commit, stops at ours" "$CUP" "$HC_BASE"
+
+# ---------------------------------------------------------------------------
+printf '== Case N: NO .started file ⇒ NO filtering (fail-safe direction) ==\n'
+# At the APPEND layer a missing ledger entry is a SILENT SKIP and a spurious one
+# is only an over-block, so when the session epoch is unknowable we sweep
+# everything, exactly as before the filter existed. Same for a corrupt epoch.
+new_repo; SID="LN"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+mk_upstream
+if [ ! -f "$(started_path "$SID")" ]; then ok "caseN fixture: no .started file"; else bad "caseN fixture: no .started file" "present"; fi
+window "$SID" "git pull --ff-only origin main" \
+  'git -C "$REPO" pull -q --ff-only origin main >/dev/null 2>&1'
+if grep -Fxq -- "$CUP" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseN absent .started: the old upstream commit IS swept (over-block, not a skip)"
+else
+  bad "caseN absent .started: the old upstream commit IS swept" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+# …and an UNPARSEABLE epoch degrades the same way.
+new_repo; SID="LN2"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+seed_started "$SID" "not-an-epoch"
+mk_upstream
+window "$SID" "git pull --ff-only origin main" \
+  'git -C "$REPO" pull -q --ff-only origin main >/dev/null 2>&1'
+if grep -Fxq -- "$CUP" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseN2 unparseable .started: the old upstream commit IS swept (no filtering)"
+else
+  bad "caseN2 unparseable .started: the old upstream commit IS swept" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+
+# ---------------------------------------------------------------------------
+printf '== Case O (DIRECTIONAL): INTERLEAVED windows must not narrow past a commit ==\n'
+# Parallel tool calls in one session are normal Claude Code behaviour, and one
+# SHARED cursor cannot serve two windows: pre(A) → commit → pre(B) → post → post
+# left the agent's own commit in NO ledger, because B's `pre` overwrote the
+# shared cursor ABOVE the commit and the watermark then advanced past it.
+# THE FIX: the payload carries tool_use_id (both PreToolUse and PostToolUse), so
+# each call pins its OWN baselines/<sid>.cursor.<tool_use_id>.
+_fire_tuid() {
+  local mode="$1" sid="$2" tuid="$3"
+  HOOK_RC_OUT=$(printf '{"session_id":"%s","tool_name":"Bash","tool_use_id":"%s","tool_input":{"command":"echo hi"}}' "$sid" "$tuid" \
+    | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" ${mode:+$mode} 2>/dev/null)
+  HOOK_RC=$?
+}
+percall_cursor_path() { printf '%s/.claude/.harness/baselines/%s.cursor.%s' "$REPO" "$1" "$2"; }
+new_repo; SID="LO"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+seed_started "$SID"
+_fire_tuid pre "$SID" toolu_A                   # call A opens
+eq "caseO A pinned its OWN cursor" "$C0" "$(cat "$(percall_cursor_path "$SID" toolu_A)" 2>/dev/null)"
+commit_file agent-work.txt                      # A's command commits
+CX=$(git -C "$REPO" rev-parse HEAD)
+_fire_tuid pre "$SID" toolu_B                   # call B opens while A is still open
+eq "caseO B pinned a SEPARATE cursor at the new HEAD" "$CX" "$(cat "$(percall_cursor_path "$SID" toolu_B)" 2>/dev/null)"
+eq "caseO A's cursor is untouched by B" "$C0" "$(cat "$(percall_cursor_path "$SID" toolu_A)" 2>/dev/null)"
+_fire_tuid "" "$SID" toolu_B                    # B returns first
+_fire_tuid "" "$SID" toolu_A                    # then A
+if grep -Fxq -- "$CX" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseO the interleaved agent commit IS ledgered"
+else
+  bad "caseO the interleaved agent commit IS ledgered" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+if [ ! -f "$(percall_cursor_path "$SID" toolu_A)" ] && [ ! -f "$(percall_cursor_path "$SID" toolu_B)" ]; then
+  ok "caseO each post consumed and removed its own cursor"
+else
+  bad "caseO each post consumed and removed its own cursor" "$(ls "$REPO/.claude/.harness/baselines" 2>/dev/null | tr '\n' ' ')"
+fi
+resolve_inproc "$SID"
+eq "caseO base does NOT advance past it" "$C0" "$HC_BASE"
+eq "caseO gate BLOCKS (real agent work, no /done run)" "block" "$(gate_verdict "$SID")"
+# GUARD: with no per-call id in the payload the shared cursor path is unchanged.
+new_repo; SID="LO2"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+run_pre "$SID"
+eq "caseO2 no tool_use_id ⇒ the SHARED cursor is still pinned" "$C0" "$(cat "$(cursor_path "$SID")" 2>/dev/null)"
+
+printf -- '-- N-c (GUARD): the filter reads the COMMITTER date, not the AUTHOR date --\n'
+# The load-bearing half of the filter's contract: an amend/rebase/cherry-pick
+# rewrites the COMMITTER date to now while PRESERVING the author date, so the
+# session's own rewritten work must still be claimed. An implementation reading
+# %at instead of %ct would pass every other case in this file and silently drop
+# rebased agent work — the one direction the harness must never fail in. Passes
+# before the fix too (no filter existed); it guards the FIELD, not the feature.
+new_repo; SID="LN3"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+printf 'old\n' > "$REPO/old.txt"
+git -C "$REPO" add old.txt >/dev/null 2>&1
+GIT_COMMITTER_DATE="2020-01-01T00:00:00 +0000" GIT_AUTHOR_DATE="2020-01-01T00:00:00 +0000" \
+  git -C "$REPO" commit -qm "written long ago" >/dev/null 2>&1
+seed_started "$SID"
+window "$SID" "git commit --amend" \
+  'git -C "$REPO" commit -q --amend --no-edit >/dev/null 2>&1'
+CAMEND=$(git -C "$REPO" rev-parse HEAD)
+A_AT=$(git -C "$REPO" show -s --format=%at "$CAMEND" 2>/dev/null)
+A_CT=$(git -C "$REPO" show -s --format=%ct "$CAMEND" 2>/dev/null)
+STARTED=$(cat "$(started_path "$SID")")
+if [ "$A_AT" -lt "$STARTED" ] && [ "$A_CT" -ge "$STARTED" ]; then
+  ok "caseN3 fixture: the amended commit's AUTHOR date is old while its COMMITTER date is new"
+else
+  bad "caseN3 fixture: %at old, %ct new" "%at=$A_AT %ct=$A_CT started=$STARTED"
+fi
+if grep -Fxq -- "$CAMEND" "$(ledger_path "$SID")" 2>/dev/null; then
+  ok "caseN3 the amended (own) commit IS ledgered — the filter keys on %ct"
+else
+  bad "caseN3 the amended (own) commit IS ledgered" "$(cat "$(ledger_path "$SID")" 2>/dev/null)"
+fi
+
+# ---------------------------------------------------------------------------
+printf '== Case P: membership is a CACHED, whole-line, fork-free lookup ==\n'
+# hc__commit_in_any_ledger used to fork one `grep` PER LEDGER FILE PER COMMIT.
+# Measured before the cache with 40 peer ledgers over a 30-commit range:
+# hc_session_changeset_commits 3.06s, hc__resolve_session_base 3.19s, and a full
+# done-gate.sh 8.46s against the Stop hook's 10s timeout — a killed Stop hook
+# emits no decision, so a BLOCK silently becomes an allow. The union of all
+# ledgers is now built ONCE per range walk and searched in-process.
+new_repo; SID="LP"
+commit_file base.txt
+C0=$(git -C "$REPO" rev-parse HEAD)
+seed_baseline "$SID" "$C0"
+i=1
+while [ "$i" -le 30 ]; do commit_file "p$i.txt"; i=$((i + 1)); done
+CTIP=$(git -C "$REPO" rev-parse HEAD)
+mkdir -p "$REPO/.claude/.harness/baselines" 2>/dev/null
+# Only the TIP is ours, so the advance loop really traverses the whole range.
+printf '%s\n' "$CTIP" > "$(ledger_path "$SID")"
+i=1
+while [ "$i" -le 39 ]; do
+  j=1
+  : > "$REPO/.claude/.harness/baselines/peer$i.own-commits"
+  while [ "$j" -le 10 ]; do
+    printf '%040d\n' "$((i * 100 + j))" >> "$REPO/.claude/.harness/baselines/peer$i.own-commits"
+    j=$((j + 1))
+  done
+  i=$((i + 1))
+done
+eq "caseP fixture: 40 ledger files" "40" "$(ls "$REPO"/.claude/.harness/baselines/*.own-commits 2>/dev/null | grep -c .)"
+P_T0=$SECONDS
+resolve_inproc "$SID"
+P_EL=$((SECONDS - P_T0))
+eq "caseP verdict unchanged: base advances to the last foreign commit" \
+  "$(git -C "$REPO" rev-parse "${CTIP}^")" "$HC_BASE"
+CS_OUT=$(CLAUDE_PROJECT_DIR="$REPO" HARNESS_DIR="$REPO/.claude/.harness" \
+  hc_session_changeset_commits "$C0" "$CTIP" "$SID" "$REPO")
+eq "caseP the changeset SET is exactly our one ledgered commit" "$CTIP" "$CS_OUT"
+G_T0=$SECONDS
+GV=$(gate_verdict "$SID")
+G_EL=$((SECONDS - G_T0))
+eq "caseP gate still BLOCKS (a ledgered commit, no /done run)" "block" "$GV"
+if [ "$G_EL" -lt 5 ]; then
+  ok "caseP done-gate.sh took ${G_EL}s (< 5s, well inside its 10s hooks.json timeout)"
+else
+  bad "caseP done-gate.sh took ${G_EL}s" "must be < 5s — the Stop hook is killed at 10s"
+fi
+printf -- '-- P-b: membership stays WHOLE-LINE and takes no patterns --\n'
+# The blob is searched with the needle framed by newlines, so a prefix or an
+# interior substring of a ledgered sha is not a member; and the needle is
+# QUOTED inside the case pattern, so glob metacharacters are literal (the -F
+# half of the old `grep -qxF`).
+mem() {
+  CLAUDE_PROJECT_DIR="$REPO" HARNESS_DIR="$REPO/.claude/.harness" \
+    hc__commit_in_any_ledger "$1" && printf 'member' || printf 'absent'
+}
+eq "caseP-b the ledgered sha itself is a member" "member" "$(mem "$CTIP")"
+eq "caseP-b a 39-char PREFIX of it is NOT a member" "absent" "$(mem "$(printf '%s' "$CTIP" | cut -c1-39)")"
+eq "caseP-b an interior SUBSTRING of it is NOT a member" "absent" "$(mem "$(printf '%s' "$CTIP" | cut -c5-24)")"
+eq "caseP-b a glob pattern matches nothing" "absent" "$(mem '*')"
+eq "caseP-b an empty sha is not a member" "absent" "$(mem '')"
+
+# ---------------------------------------------------------------------------
 printf '\n== Summary: %d passed, %d failed ==\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

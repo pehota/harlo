@@ -118,7 +118,8 @@ fi
 
 # --- grouped reap: baselines/ is aged PER SESSION ID, all-or-nothing --------
 # A session's files under baselines/ are ONE unit of state: <sid>.sha, .dirty,
-# .cursor, .own-commits, .watermark, .bg-seen, .sweep-failed. The group is
+# .cursor, .cursor.<tool_use_id>, .own-commits, .watermark, .bg-seen,
+# .sweep-failed, .started. The group is
 # reaped only when its NEWEST member is older than the threshold — i.e. when
 # nothing about that session has been touched in 14 days — and then entirely.
 # Any single fresh member keeps all of them.
@@ -173,6 +174,27 @@ fi
 # the marker is recorded even in a non-git dir (it is the session id, not a git
 # fact). Guarded; never fails the hook.
 printf '%s\n' "$SESSION_ID" > "$HARNESS_DIR/current-session" 2>/dev/null
+
+# --- record the session START TIME (epoch seconds, in the CONTENT) ----------
+# The floor for the commit ledger's committer-date filter: commit-ledger.sh
+# appends a swept sha only when its COMMITTER date is >= this epoch. That is
+# what stops a `git pull --ff-only` inside a tool-call window from being read as
+# authorship — a fast-forward moves HEAD over commits authored ELSEWHERE,
+# EARLIER, and "HEAD moved inside the window" cannot tell receiving a commit
+# from creating one.
+#
+# THE EPOCH IS THE FILE'S CONTENT, NEVER ITS MTIME. Baseline mtime is already
+# identified in this codebase as a mutable false-PASS risk (any later write, or
+# a `touch`, moves it), so it is not a signal anything may depend on.
+#
+# WRITTEN ONLY WHEN ABSENT — not refreshed on startup|resume|clear|fork the way
+# the .sha is. A resumed session keeps its id, and re-stamping the epoch forward
+# would filter out a commit the session really authored before the resume but
+# has not swept yet (the backgrounded-job shape: the commit lands between
+# windows and the NEXT sweep claims it). An epoch that is too EARLY only ever
+# filters LESS, which is the over-block direction.
+[ -f "$BASELINE_DIR/${SESSION_ID}.started" ] || \
+  date +%s > "$BASELINE_DIR/${SESSION_ID}.started" 2>/dev/null
 
 # --- record baseline SHA ----------------------------------------------------
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)

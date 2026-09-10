@@ -497,9 +497,29 @@ fi
 # widened, and which file to remove once the user is satisfied nothing was
 # missed. Appended to the reasons that carry that widened demand — the generic
 # "/done the changeset" reason and the coverage gap at Step 8.
+#
+# The marker is looked for under EVERY id that could name this session's state
+# (hc__guard_session_ids: our stdin id and the current-session marker), the same
+# id set hc_review_coverage_gap's completeness guard uses. On the Step-2a-0
+# id-disagreement path the hook wrote the marker under the OTHER id, and keying
+# this message on our stdin id alone left the widened demand unexplained.
 SWEEP_NOTE=""
-if [ -f "$HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed" ]; then
-  SWEEP_NOTE="note: a commit-ledger sweep could not be completed in this session ($HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed), so which commits the agent authored is UNKNOWN. The harness therefore stops trusting the ledger: the changeset base does not advance and the review must cover the whole range, not just the ledgered commits. Delete that marker only once you are satisfied no agent commit went unrecorded."
+SWEEP_MARKER=""
+if hc_has_fn hc__guard_session_ids; then
+  while IFS= read -r _sid; do
+    [ -z "$_sid" ] && continue
+    if [ -f "$HARNESS_DIR/baselines/${_sid}.sweep-failed" ]; then
+      SWEEP_MARKER="$HARNESS_DIR/baselines/${_sid}.sweep-failed"
+      break
+    fi
+  done <<EOF
+$(hc__guard_session_ids)
+EOF
+elif [ -f "$HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed" ]; then
+  SWEEP_MARKER="$HARNESS_DIR/baselines/${SESSION_ID}.sweep-failed"
+fi
+if [ -n "$SWEEP_MARKER" ]; then
+  SWEEP_NOTE="note: a commit-ledger sweep could not be completed in this session ($SWEEP_MARKER), so which commits the agent authored is UNKNOWN. The harness therefore stops trusting the ledger: the changeset base does not advance and the review must cover the whole range, not just the ledgered commits. Delete that marker only once you are satisfied no agent commit went unrecorded."
   S2_REASON="$S2_REASON
 $SWEEP_NOTE"
 fi

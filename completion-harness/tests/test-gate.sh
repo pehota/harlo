@@ -1416,6 +1416,63 @@ case "$N2_REASON" in
 esac
 rm -f "$HDIR/baselines/${SID}.sweep-failed"
 
+# --- M5: the guards must resolve the session id the way the GATE does -------
+# Membership went id-free (any session's ledger counts) while the guards stayed
+# keyed on ONE id. On the gate's documented Step-2a-0 id-DISAGREEMENT path (its
+# stdin id differs from the current-session marker's, and it adopts
+# baselines/<marker id>.sha as the anchor) the hook wrote .sweep-failed under
+# the MARKER id — so the guard, keyed on the gate's stdin id, saw nothing and
+# the demand NARROWED on a session whose attribution is known incomplete.
+# Both candidate ids are now checked, and either marker disarms the narrowing.
+CLD=$(cl_repo); SID=csM5; MK=csM5marker
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+Z=$(cl_commit "$CLD" z.txt)          # lost window → in no ledger
+cl_ledger "$CLD" "$MK" "$A"          # the ledger lives under the MARKER id
+printf '%s\n' "$MK" > "$CLD/.claude/.harness/current-session"
+: > "$CLD/.claude/.harness/baselines/${MK}.sweep-failed"
+cl_write_log "$CLD" "$Z" other.txt
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${Z}.json" "$C0" "$Z" "$SID" "$C0" session)
+cl_eq "M5 id disagreement: the MARKER's .sweep-failed widens the demand to the range diff" \
+  "$GOT" "$(printf 'a.txt\nz.txt')"
+# Without any marker the same shape narrows — i.e. M5 really turns on the guard.
+rm -f "$CLD/.claude/.harness/baselines/${MK}.sweep-failed"
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${Z}.json" "$C0" "$Z" "$SID" "$C0" session)
+cl_eq "M5 control: no marker file ⇒ the ledger set narrows to the ledgered file" "$GOT" "a.txt"
+rm -rf "$CLD"
+
+# --- M6: NO resolvable session id ⇒ range diff ------------------------------
+# GUARD (passes before and after). The tripwires are session-id-keyed, so with
+# no id at all they cannot be evaluated: ledger unknown ⇒ ledger incomplete ⇒
+# the whole range must be reviewed, never the narrowed set.
+CLD=$(cl_repo)
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+Z=$(cl_commit "$CLD" z.txt)
+cl_ledger "$CLD" nobody "$A"
+cl_write_log "$CLD" "$Z" other.txt
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${Z}.json" "$C0" "$Z" "" "$C0" session)
+cl_eq "M6 no session id (and no marker): demand is the RANGE diff" \
+  "$GOT" "$(printf 'a.txt\nz.txt')"
+rm -rf "$CLD"
+
+# --- M7: our own ledgered history REWRITTEN must widen coverage too ---------
+# The same statement as .sweep-failed from the other tripwire: after a
+# mid-session rebase our A is an A' that is in no ledger, so the ledger no
+# longer describes what this session authored. It already suppressed the base
+# advance; it did NOT widen coverage, so the narrowed demand exempted files on
+# an attribution the harness had already decided not to trust.
+CLD=$(cl_repo); SID=csM7
+C0=$(cl_commit "$CLD" c0.txt)
+A=$(cl_commit "$CLD" a.txt)
+Z=$(cl_commit "$CLD" z.txt)
+cl_ledger "$CLD" "$SID" "$A" deadbeefdeadbeefdeadbeefdeadbeefdeadbeef   # a sha that no longer exists
+cl_write_log "$CLD" "$Z" other.txt
+GOT=$(cl_gap_mode "$CLD" "$CLD/.claude/.harness/review-log/${Z}.json" "$C0" "$Z" "$SID" "$C0" session)
+cl_eq "M7 rewritten ledger history widens the demand to the range diff" \
+  "$GOT" "$(printf 'a.txt\nz.txt')"
+rm -rf "$CLD"
+
 # ============================================================================
 echo "----------------------------------------"
 printf 'Summary: %d passed, %d failed\n' "$PASS" "$FAIL"
