@@ -10,7 +10,8 @@ rediscover at the end: tests, lint, app startup, an independent review, and what
 `task_checks` the model happened to remember. DoD rule #1 is *"meets every stated
 requirement"*, and nothing on disk records what those requirements were.
 
-The protocol already names this failure itself (`dod-protocol.md:32-47`: capture
+The protocol already names this failure itself
+(`completion-harness/skills/done/dod-protocol.md:32-47`: capture
 `task_checks` at task start, "they drift out of focus by the end otherwise") — but no
 script stores them, so they only reach disk in Step 7, reconstructed from a faded memory
 of the prompt.
@@ -23,8 +24,9 @@ changeset touches the **product surface** — any path not matched by `artifact_
 (`docs/**`, `tasks/**`, `README*`, `CHANGELOG*`, `LICENSE*`) — so specs, plans and notes
 carry no DoD.
 
-Tracked in [#11](https://github.com/pehota/harlo/issues/11); a walking skeleton in `dod/`
-proves the flow before anything is wired into the live bundle.
+Tracked in [#11](https://github.com/pehota/harlo/issues/11); a walking skeleton in a
+planned `dod/` folder at the repo root — not yet built — proves the flow before anything
+is wired into the live `completion-harness/` bundle.
 
 ## Considered options
 

@@ -8,8 +8,9 @@
 > **Source of truth is the CODE.** Every diagram below was derived by reading the
 > scripts, not the prose design doc. The companion rationale/spec is
 > [`design.md`](design.md); the historical origin prompt is
-> [`design-brief.md`](design-brief.md). Design doc and code are in sync as of
-> 2026-07-28 (see §14); if they ever diverge, trust the code.
+> [`design-brief.md`](design-brief.md); standing design decisions are recorded as
+> ADRs, indexed at [`adr/README.md`](adr/README.md). Design doc and code are in
+> sync as of 2026-07-28 (see §14); if they ever diverge, trust the code.
 
 ---
 
@@ -721,8 +722,13 @@ flowchart TD
   must follow the *final* mode.
 - **`hc_resolve` is idempotent and re-pins nothing already pinned** — if the user
   branches or switches to a worktree mid-session, the very next call correctly
-  resolves TASK mode and pins the base/tree-base then; there is no longer an
-  automatic trunk→task flip mid-session (see [ADR 0002](adr/0002-remove-auto-branching.md)).
+  resolves TASK mode and pins the base then; there is no longer an automatic
+  trunk→task flip mid-session (see [ADR 0002](adr/0002-remove-auto-branching.md)).
+  The tree-base pin in that mid-session-branch case is **not** correctly seeded,
+  though: nothing pins it until the *next* session's first task-mode SessionStart,
+  which pins `tree-base/br-<branch>.dirty` from live porcelain that already holds
+  the previous session's uncommitted WIP — whitelisting it. See ADR 0002's
+  Consequences for the residual and its scope.
 - `HC_WARN` is set only when the fallback was *caused by trunk* (on trunk, or
   unconfident trunk) — SessionStart surfaces that as guidance; a plain detached
   HEAD produces no warning.

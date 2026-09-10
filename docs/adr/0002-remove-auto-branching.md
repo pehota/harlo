@@ -23,8 +23,21 @@ branch or a worktree — exactly as before. Only the automatic mid-session trunk
 flip is gone. The `tree-base/<task_key>.dirty` pin is not orphaned by this: it was
 already written by `baseline-snapshot.sh` (SessionStart) whenever a session starts off
 trunk; `auto-branch.sh` only ever pinned it for the one case SessionStart could not —
-a branch created *after* SessionStart had already run in SESSION mode. That case no
-longer exists.
+a branch created *after* SessionStart had already run in SESSION mode. That case still
+exists, and removing `auto-branch.sh` leaves it unhandled rather than closing it: a
+human who branches mid-session while on trunk moves HEAD off trunk without a fresh
+SessionStart in between, so the next session's first task-mode SessionStart is the one
+that pins `tree-base/br-<branch>.dirty` — from *live* porcelain, which by then already
+holds the previous session's uncommitted WIP. That WIP gets whitelisted into the tree
+baseline, and the gate stops blocking on the agent's own unfinished work. This hole
+predates this ADR — `auto-branch.sh` only masked it by pinning at checkout time from
+the session's clean pre-edit SessionStart snapshot — and removing the hook removes that
+masking, not the hole. It is now both unprotected and untested: the only end-to-end
+test of this shape, `AUTO-BRANCH INVARIANT 2` in `test-tree-status.sh`, was deleted in
+this same change as a duplicate of the surviving branch-at-SessionStart test. The
+correct fix belongs in `baseline-snapshot.sh`, not here. It fires only on a human
+branching mid-session while on trunk; `new-worktree.sh` and `run-task.sh` both start
+their sessions already off trunk, so neither path is affected.
 
 ## Considered options
 

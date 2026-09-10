@@ -1222,9 +1222,13 @@ the task.
 
 It probes with `has()` at each layer (never a bare `//`, which would treat a literal `false`
 as empty and silently fall through to a laxer layer); a JSON `null` means "unset here" and
-falls through; arrays are returned space-joined. The only key currently read through it —
-the one a per-task instruction can plausibly flip — is `untracked_policy`.
-**`trunk` is deliberately excluded:** it selects task-vs-session mode, computes the task
+falls through; arrays are returned space-joined. The keys currently read through it are
+`untracked_policy` (`harness-common.sh`) — the one a per-task instruction can plausibly
+flip — and `headless_max_turns` / `headless_timeout_minutes` (both `run-task.sh`).
+**`baseline_snapshot` is deliberately NOT among them**, despite sitting alongside
+`untracked_policy` in the human-owned/sticky list above: it is read by direct `jq` in
+`done-preflight.sh` and `baseline-snapshot.sh`, so it never participates in session-config
+override layering — a per-task instruction cannot flip it. **`trunk` is deliberately excluded:** it selects task-vs-session mode, computes the task
 key, and feeds SessionStart's terminal reap, which **deletes** the state of branches it
 judges merged — a wrong value there destroys state rather than merely loosening a check,
 which is too much authority for an ephemeral, agent-written file. `hc__detect_trunk` reads
