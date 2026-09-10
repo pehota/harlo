@@ -85,7 +85,7 @@ C4Context
   Rel(harness, runtime, "BLOCK (stdout JSON, exit 0) or ALLOW (exit 0, empty)")
   Rel(user, runtime, "Invokes /done")
   Rel(runtime, harness, "Runs /done skill steps")
-  Rel(harness, git, "Reads HEAD/branch/merge-base/porcelain; auto-branch writes a branch")
+  Rel(harness, git, "Reads HEAD/branch/merge-base/porcelain")
   Rel(harness, tool, "Runs test/lint/start; captures exit codes")
   Rel(harness, user, "Escalations route here (AskUserQuestion)")
 ```
@@ -100,10 +100,10 @@ git facts; everything the agent *says* is trust-but-falsifiable.
 
 ## 3. C4 Level 2 — Containers
 
-The harness is four hook *events* — wired five times, because `commit-ledger.sh`
-is wired **twice** on the same `Bash|SlashCommand|mcp__.*` matcher (PreToolUse
-pins, PostToolUse sweeps; §10, §12) — plus one skill, one sourced library, config and a state
-store. Each event fires at a different runtime moment. The **shared resolver
+The harness is four hook *events*, each wired once: SessionStart, Stop, and
+`commit-ledger.sh` wired on the same `Bash|SlashCommand|mcp__.*` matcher for
+both PreToolUse (pins) and PostToolUse (sweeps; §10, §12) — plus one skill, one
+sourced library, config and a state store. Each event fires at a different runtime moment. The **shared resolver
 library** (`harness-common.sh`) is *sourced* by every script that needs identity
 or tree classification — never reimplemented — so the gate, the writer, and the
 preflight can never disagree.
@@ -118,7 +118,6 @@ C4Container
   System_Boundary(h, "Completion Harness") {
     Container(gate, "Stop hook", "done-gate.sh", "Fires on turn exit. BLOCKS unless done-state green + matches live HEAD/tree")
     Container(start, "SessionStart hook", "baseline-snapshot.sh", "Pins baseline SHA + tree baseline (source-aware: compact preserves existing) + current-session marker; self-seeds config; background test snapshot; age reap + terminal reap (merged/gone tasks) + review-log hygiene")
-    Container(pre, "PreToolUse hook", "auto-branch.sh", "matcher Write|Edit — on trunk, checkout -b task branch; pin task tree-base")
     Container(post, "Pre+PostToolUse hook (wired twice)", "commit-ledger.sh", "matcher Bash|SlashCommand|mcp__.* — task mode too; PreToolUse pins HEAD to baselines/&lt;sid&gt;.cursor.&lt;tool_use_id&gt; (per tool call), PostToolUse sweeps CURSOR..HEAD (deduped, committer-date filtered against baselines/&lt;sid&gt;.started) into baselines/&lt;sid&gt;.own-commits. HEAD moving inside a tool-call window IS the attribution; no command-text parsing, no committer-email guess. No-ops mid-rebase/merge")
     Container(skill, "/done skill (thin)", "skills/done/SKILL.md + dod-protocol.md", "Thin entry point: runs triage, then reads each applicable step's section from dod-protocol.md on demand (progressive disclosure)")
     Container(lib, "Shared resolver", "harness-common.sh (sourced)", "hc_resolve (identity/base, authorship base-advance) + hc_tree_status/hc_tree_remediation (tree classifier) + hc_review_blocking/hc_review_coverage_gap (blob-keyed) + hc_validate (jq-only schema validator) + hc_state (S0/S1/S2/S4/S5)")
@@ -136,13 +135,11 @@ C4Container
 
   Rel(agent, gate, "turn exit → fires")
   Rel(agent, start, "session begins → fires")
-  Rel(agent, pre, "Write/Edit → fires")
   Rel(agent, post, "Bash/SlashCommand/mcp__* → fires TWICE (pre + post; both modes)")
   Rel(user, skill, "invokes /done")
 
   Rel(gate, lib, "sources → hc_resolve, hc_tree_status")
   Rel(start, lib, "sources → hc_resolve (pins base + tree-base)")
-  Rel(pre, lib, "sources → hc_resolve")
   Rel(post, lib, "sources → hc_resolve (session-mode gate)")
   Rel(write, lib, "sources → hc_resolve, hc_tree_status")
   Rel(pf, lib, "sources → hc_resolve, hc_tree_status")
@@ -156,7 +153,6 @@ C4Container
 
   Rel(gate, state, "reads done-state + review-log")
   Rel(start, state, "writes baselines/tree-base/task-base")
-  Rel(pre, state, "writes tree-base")
   Rel(post, state, "pins baselines/&lt;sid&gt;.cursor.&lt;tool_use_id&gt; → appends baselines/&lt;sid&gt;.own-commits")
   Rel(write, state, "writes done-state")
   Rel(detect, cfg, "seed/refresh + write-time validate")
@@ -172,8 +168,7 @@ C4Container
 **How to read this / key decisions.**
 - **Hook timing:** SessionStart runs once at session begin (before any edit) →
   it is the *only* reliable place to pin a clean tree baseline. PreToolUse fires
-  before *every* Write/Edit (cheap off-trunk fast-path). PreToolUse **also**
-  fires on *every* Bash call, and PostToolUse fires after it (both session mode
+  on *every* Bash call, and PostToolUse fires after it (both session mode
   only): the pair brackets the call into a **window**, pinning HEAD before and
   sweeping `CURSOR..HEAD` after, so every commit the window spans lands in the
   session's own-commits ledger — the single base-advance signal (§10, §12).
@@ -203,8 +198,7 @@ C4Container
     reads, and `agents/` → `.claude/agents/`, so Step 5's reviewer resolves bare as
     `dod-reviewer` instead of `completion-harness:dod-reviewer`), wires
     **all four events** into `settings.local.json` via a `jq` merge — Stop,
-    SessionStart, PreToolUse(`Write|Edit`, auto-branch),
-    PreToolUse(`Bash|SlashCommand|mcp__.*`, `commit-ledger.sh pre`) and
+    SessionStart, PreToolUse(`Bash|SlashCommand|mcp__.*`, `commit-ledger.sh pre`) and
     PostToolUse(`Bash|SlashCommand|mcp__.*`, `commit-ledger.sh`) — each
     appended only if that exact command string is not already present, so the
     merge is idempotent and the mirror is hook-for-hook equivalent to the plugin
@@ -323,7 +317,6 @@ sequenceDiagram
   RT->>ST: SessionStart (baseline-snapshot.sh)<br/>pin baselines/&lt;sid&gt;.sha + tree baseline (compact-preserving) + current-session marker<br/>reap +14d; terminal reap merged/gone br-* tasks (skip if trunk unconfident); review-log hygiene
   Note over RT,ST: hc_resolve; if task mode pin task-base/tree-base
   AG->>GIT: edits code (Write/Edit)
-  RT->>GIT: PreToolUse (auto-branch.sh)<br/>on trunk → checkout -b task/&lt;ts&gt;; pin tree-base
   RT->>ST: PreToolUse (commit-ledger.sh pre)<br/>pin HEAD to baselines/&lt;sid&gt;.cursor.&lt;tool_use_id&gt; (window opens)
   AG->>GIT: git commit (directly, or inside a script/alias/Makefile — indistinguishable here, by design)
   RT->>ST: PostToolUse (commit-ledger.sh)<br/>sweep CURSOR..HEAD, dedupe, drop commits whose committer date predates baselines/&lt;sid&gt;.started, append to baselines/&lt;sid&gt;.own-commits (window closes)
@@ -726,9 +719,10 @@ flowchart TD
 - `HC_TREE_BASE_FILE` is set **after** `hc__resolve_task_base` runs, because that
   function can degrade task→session on unrelated histories — the tree-base path
   must follow the *final* mode.
-- **Auto-branch flips trunk→task mid-session** (§12): a session that started on
-  trunk (SESSION mode) becomes TASK mode after the first edit. `hc_resolve` is
-  idempotent and re-pins nothing already pinned, so this flip is safe.
+- **`hc_resolve` is idempotent and re-pins nothing already pinned** — if the user
+  branches or switches to a worktree mid-session, the very next call correctly
+  resolves TASK mode and pins the base/tree-base then; there is no longer an
+  automatic trunk→task flip mid-session (see [ADR 0002](adr/0002-remove-auto-branching.md)).
 - `HC_WARN` is set only when the fallback was *caused by trunk* (on trunk, or
   unconfident trunk) — SessionStart surfaces that as guidance; a plain detached
   HEAD produces no warning.
@@ -919,7 +913,7 @@ flowchart LR
 | `baselines/<sid>.sweep-failed` | marker: a sweep could not be completed — the pinned cursor object was destroyed AND the `.sha`-baseline retry failed too | **session id** | `commit-ledger.sh` (post) | created once; never cleared. `hc__resolve_session_base` treats it as **uncertainty, not absence of work** and refuses to advance the base at all — the same over-block as the rewrite tripwire | age 14d, **per-session GROUP** (all `<sid>.*` files reaped together, only when the NEWEST is stale) |
 | `baselines/<sha>.tests.json` | background test snapshot (or `{status:inert}`) | **SHA** (shared across sessions) | baseline-snapshot (bg) | written once per SHA (atomic temp+mv) | age 14d |
 | `task-base/<task_key>.sha` | merge-base(trunk, HEAD) — the changeset anchor | **task_key** (branch) | hc_resolve (lazy) | **pinned once** at fork | age-**excluded**; **terminal reap** on merge/gone |
-| `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot / auto-branch | **pinned once**, never re-seeded; same atomic capture / no-file-on-failure rule | age-**excluded**; **terminal reap** on merge/gone |
+| `tree-base/<task_key>.dirty` | fork-point porcelain (task mode tree baseline) | **task_key** (branch) | baseline-snapshot | **pinned once**, never re-seeded; same atomic capture / no-file-on-failure rule | age-**excluded**; **terminal reap** on merge/gone |
 | `done-state/<task_key>.json` | tests, lint, task_checks, dod, escalation + the writer-injected facts `verified_sha`, `head_tree`, `review_anchor_sha`, `base_sha`, `tree_clean` (never agent-supplied) | **task_key** (branch) | done-write-state | rewritten each `/done` | age 14d; `br-*` keys also **terminal reap** on merge/gone |
 | `review-log/<HEAD>.json` | reviewed_sha, min_review_level, files_reviewed[], findings[{severity,…}], open_findings, advisory_findings | **HEAD SHA** | Step-5 subagent | one per reviewed SHA; the basename **must** be 40/64 lowercase hex to count in the coverage chain | age-**excluded**; **hygiene reap** when sha is outside the keep-set: current HEAD, every branch tip, every live task chain's commits, and every done-state's `verified_sha` + `review_anchor_sha` (the last keeps a carried anchor alive after its sha became unreachable) |
 | `done-plan/<task_key>.json` | audit plan: applicable + excluded /done steps (id/title/status/ref/reason), `contract_version` 1 | **task_key** (branch) | done-triage | rewritten each `/done` (best-effort; audit only, gate has NO precondition) | age 14d |
@@ -982,8 +976,8 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 
 | Case | What happens | Code path |
 |---|---|---|
-| **On trunk** | SESSION fallback + `HC_WARN`; SessionStart surfaces a systemMessage. Auto-branching is **opt-in** (`auto_branch`, default `false`): with it on, the first Write/Edit to a CODE path moves the session to task mode; off (the default), the session stays on trunk | `hc_resolve` (branch==trunk → session); `baseline-snapshot.sh` HC_WARN block; `auto-branch.sh` |
-| **Detached HEAD** | `HC_BRANCH` empty → SESSION mode, **no** warning; auto-branch no-ops (no `symbolic-ref`) | `hc_resolve`; `auto-branch.sh` detached guard |
+| **On trunk** | SESSION fallback + `HC_WARN`; SessionStart surfaces a systemMessage. The session stays in SESSION mode for its whole lifetime — there is no automatic trunk→task flip; task mode requires the user to branch or use a worktree deliberately (auto-branching was removed, see [ADR 0002](adr/0002-remove-auto-branching.md)) | `hc_resolve` (branch==trunk → session); `baseline-snapshot.sh` HC_WARN block |
+| **Detached HEAD** | `HC_BRANCH` empty → SESSION mode, **no** warning | `hc_resolve` |
 | **Unrelated histories** | `merge-base` empty → degrade task→session, `HC_WARN="unrelated histories"`, base **not** pinned | `hc__resolve_task_base` empty-mb branch |
 | **Pre-existing dirty tree** | Lines present at baseline → WARNING (ignored) → gate does NOT block on them (deadlock broken) | `hc_tree_status` in-baseline branch; gate Step 3b |
 | **Pre-existing untracked** | `?? x` in baseline → WARNING under `baseline` policy; BLOCKER under `strict` | `hc_tree_status` untracked handling |
@@ -992,8 +986,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Tree-identical HEAD move** | `commit --amend -m` / `reset --soft` + recommit / a `pull --rebase` that replays the same patches → Step 5 falls back from sha to **tree** equality and carries the verification; note this is the *gate*'s tolerance for a rewritten HEAD, orthogonal to the ledger's: the same rebase also trips `hc__ledger_history_rewritten`, which only refuses to advance the base (see "Mid-work rebase") — a wider changeset, still allowed by tree-carry if it was already verified; `hc_state` applies the same test so SessionStart does not steer "run /done" at a HEAD the gate just allowed. Any tree-entry change (one byte, a mode flip, a symlink target, a gitlink bump) still blocks | `done-gate.sh` Step 5 `CARRY`; `hc_state` S2-vs-S5 boundary; `hc_done_state_blocked` two-path candidate set |
 | **Orphaned review anchor** | After such an amend the reviewed sha is rewritten and drops out of the coverage chain. The done-state's `review_anchor_sha` is re-admitted by name — resolved at **its own sha** (`chain_admit`), so it cannot self-validate — and the reaper keeps its log alive. The next real commit only re-demands review of the files it actually touched | `done-gate.sh`/`done-write-state.sh` Step 8 admission split; `hc_review_coverage_gap` `chain_admit`; `hc_live_review_shas` |
 | **Session-id disagreement (gate id ≠ SessionStart id)** | Gate Step 2a-0 adopts `baselines/<marker_id>.sha` **as `HC_BASE`** — same producer (SessionStart, live HEAD, pre-edit) as the anchor it replaces, so it restores the Step-3 quiet exit for a session that changed nothing. Bounded: raw object id, live commit, **ancestor of HEAD**, session mode only, marker contents untrusted as a filename | `done-gate.sh` Step 2a-0; `tests/test-anchor-recovery.sh` I1–I3 |
-| **Prose-only edit on trunk** | The `PreToolUse` branch hook does not look at the edited path at all: every edit is in scope, so a docs-only task branches exactly like a code task and is then gated exactly like one | `auto-branch.sh`; `tests/test-autobranch.sh` cases 6–7 |
-| **User instruction that contradicts the config** ("work only on main") | Hooks run as static commands, so chat cannot reach them — the instruction is recorded in `.claude/.harness/session-config.json`, the top layer of `hc_cfg` (over `done-config.json`, over the built-in). SessionStart injects the file's existence into the **agent-visible** `additionalContext` when starting on trunk with `auto_branch` on, and drops the file on the next `startup`/`clear` so it governs one task only | `hc_cfg`; `baseline-snapshot.sh` (ADDL_CTX + fresh-context drop); `tests/test-autobranch.sh` cases 8–9 |
+| **User instruction that contradicts the config** (e.g. "treat untracked files strictly for this task") | Hooks run as static commands, so chat cannot reach them — the instruction is recorded in `.claude/.harness/session-config.json`, the top layer of `hc_cfg` (over `done-config.json`, over the built-in), and dropped on the next `startup`/`clear` so it governs one task only | `hc_cfg`; `baseline-snapshot.sh` (fresh-context drop) |
 | **Missing changeset anchor (`baselines/<sid>.sha`)** | Gate Step 2a recovers a base from the done-state's writer-stamped `base_sha`, or from the state the `current-session` marker names when our key has none. Recovered into `HC_BASE_RECOVERED` **only** — never `HC_BASE` — so it can feed coverage and the summary but never Step 3/3c's pass-granting exits. With no recovery the gate still BLOCKS, and at Step 4 (no anchor *and* no done-state) says so honestly instead of demanding an impossible `/done` | `done-gate.sh` Step 2a + `S2_NO_ANCHOR`; `hc__recover_base_from_state`; `done-write-state.sh` carries `base_sha` forward |
 | **Non-hex review-log basename** | A `review-log/HEAD.json` / `main.json` / `HEAD@{0}.json` is **skipped** by the coverage chain before the `merge-base` calls. Otherwise it resolved as a git rev, was trivially an ancestor of HEAD, and blob-checked against the *current* tree — a log that self-validates and never expires | `hc__is_object_id` guard in `hc_review_coverage_gap`'s chain loop |
 | **Dead session id (SESSION mode)** | `session_id` with no `baselines/<id>.sha` → writer **refuses** (exit nonzero, lists valid ids + `current-session` marker); otherwise the done-state keys `session-<id>` the gate never reads → silent forever-block | `done-write-state.sh` dead-id backstop; skill prefers the `current-session` marker |
@@ -1001,7 +994,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Parallel same-branch (same dir)** | Shares `task_key` — **unsupported**; use worktrees (different branch → different key) | keying by `task_key`; SKILL "parallel work must use worktrees" |
 | **No test command** | `baseline_snapshot` on but no cmd → self-run `done-detect.sh`; still none → write `{status:inert}` marker + systemMessage; preflight raises HARD problem | `baseline-snapshot.sh` inert branch; `done-preflight.sh` Check 4 |
 | **jq missing** | Gate exits 0 (allow — fails open); preflight warns; detect emits best-effort; writer errors (jq required) | `done-gate.sh` line 33; `done-preflight.sh` Check 2; `done-write-state.sh` guard |
-| **Non-git repo** | Gate Step 2 exit 0 (allow); SessionStart writes `no-git` baseline; preflight "harness inactive"; auto-branch no-ops | `done-gate.sh` Step 2; `baseline-snapshot.sh`; `done-preflight.sh` Check 1; `auto-branch.sh` `is-inside-work-tree` |
+| **Non-git repo** | Gate Step 2 exit 0 (allow); SessionStart writes `no-git` baseline; preflight "harness inactive"; `commit-ledger.sh` no-ops via its own `is-inside-work-tree` check | `done-gate.sh` Step 2; `baseline-snapshot.sh`; `done-preflight.sh` Check 1; `commit-ledger.sh` `is-inside-work-tree` |
 | **Stop-hook loop guard** | `stop_hook_active==true` → exit 0 immediately (a block never traps forever) | `done-gate.sh` Step 1 |
 | **HEAD==base & clean** | Quiet exit 0 (nothing happened this session); but HEAD==base & **dirty** falls through → Step 3b tree-check | `done-gate.sh` Step 3 |
 | **Empty committed changeset** | No introduced tree blockers AND `git diff --quiet HC_BASE HEAD` → exit 0 (nothing to verify). This is the **primary** exit for a session that committed nothing, not a corner case: with no commit in any ledger the base-advance walks all the way to HEAD, so the range is empty by construction (see "Ledger absent or empty"). It also still covers the older shape — base-advance leaving HEAD atop an identical tree | `done-gate.sh` Step 3c; `hc__resolve_session_base`; `git diff --quiet` |
@@ -1016,8 +1009,7 @@ lets a payload with a non-null `escalation` bypass its own green-outcome refusal
 | **Green tests without evidence** | A green `tests` object lacking a non-empty `command` or `output_tail` → BLOCK ("green tests must carry evidence"); un-forgeable green | `done-gate.sh` Step 8 evidence guard; `done-state.schema.json` tests `oneOf` |
 | **Triage unavailable / errors** | `done-triage.sh` exits non-zero or prints nothing → SKILL fallback runs ALL steps (a wrongly-excluded step is the one unacceptable outcome); the audit plan is best-effort and the gate has NO precondition on it | `done-triage.sh` fail-safe; thin `SKILL.md` fallback |
 | **Prose-only changeset** | No special case: the harness snapshots git state at SessionStart and reviews **everything** that changed at Stop. A docs-only changeset lands in S1/S2 and is gated like any other — there is no file classification anywhere in the harness, because every classify-and-skip feature historically ended up disarming the gate | `hc_state`; `done-gate.sh` Steps 3b/3c; `done-triage.sh` (no scope short-circuit) |
-| **Auto-branch fallback (empty pin)** | Branch created but no clean SessionStart `.dirty` snapshot → pin **empty** tree-base → everything blocks (safe) | `auto-branch.sh` `: > HC_TREE_BASE_FILE` |
-| **Mid-rebase/merge** | Auto-branch no-ops, and `commit-ledger.sh` no-ops in **both** modes (MERGE_HEAD / rebase-apply / rebase-merge present) — the same GIT_DIR probe, sited in the ledger hook's *shared* preamble so `pre` and `post` cannot diverge on it. Mid-operation HEAD is detached and steps over transient commits that vanish on completion; pinning or sweeping them would only dirty the ledger. Afterwards the next Bash call pins the cursor at the NEW HEAD, so the rewritten commits never enter the ledger — and the reachability tripwire then fires on the now-unreachable PRE-rebase sha and refuses to advance (see "Mid-work rebase") | `auto-branch.sh` git-dir guard; `commit-ledger.sh` shared preamble; `hc__ledger_history_rewritten` |
+| **Mid-rebase/merge** | `commit-ledger.sh` no-ops in **both** modes (MERGE_HEAD / rebase-apply / rebase-merge present) — its own GIT_DIR probe, sited in the ledger hook's *shared* preamble so `pre` and `post` cannot diverge on it. Mid-operation HEAD is detached and steps over transient commits that vanish on completion; pinning or sweeping them would only dirty the ledger. Afterwards the next Bash call pins the cursor at the NEW HEAD, so the rewritten commits never enter the ledger — and the reachability tripwire then fires on the now-unreachable PRE-rebase sha and refuses to advance (see "Mid-work rebase") | `commit-ledger.sh` shared preamble; `hc__ledger_history_rewritten` |
 | **14-day reap** | SessionStart deletes `.harness/*` files older than 14d, **excluding** `task-base/*`, `tree-base/*`, `review-log/*`, `escalation-accept/*` — and `baselines/*`, which is reaped **per session id, all-or-nothing** (a group survives while ANY member is fresh, so a frozen write-once marker can never be deleted out from under the live ledger it qualifies) | `baseline-snapshot.sh` `find -mtime +14 -delete -not -path` + the grouped `baselines/` reap |
 | **Mid-task compact** | `source=="compact"` (manual `/compact` or auto-compaction) fires mid-task with a dirty tree. SessionStart **preserves** an existing `baselines/<sid>.{sha,dirty}` (writes only if absent) so the agent's own WIP is not captured as "pre-existing"; `current-session` marker still written. Other sources (startup/resume/clear/fork/empty) refresh as before | `baseline-snapshot.sh` `IS_COMPACT` guard on the `.sha` write and the session-mode `.dirty` write |
 | **Merged/gone task (terminal reap)** | A `br-*` task whose branch is merged into trunk or gone → its `task-base`/`tree-base`/`done-state` reaped; an **unmerged (in-progress)** branch's state is KEPT; the **current branch is always kept**; **skipped entirely when trunk is unconfident** (never guess "merged") | `baseline-snapshot.sh` terminal-reap block; `hc_live_task_keys` keep-set + `hc__detect_trunk` |
@@ -1244,7 +1236,8 @@ flowchart and bullets, §10's state store and §12's matrix were re-synced, and
   Content identity (`git patch-id` beside each sha) is the real fix and is
   explicitly deferred: it is a ledger **format** change with its own migration.
 - **Change 4 — rebase/merge-in-progress guard** in `commit-ledger.sh`'s shared
-  preamble (reusing `auto-branch.sh`'s GIT_DIR probe), so transient
+  preamble (now its own GIT_DIR probe — previously shared with the since-deleted
+  `auto-branch.sh`, see the 2026-09-10 entry below), so transient
   detached-HEAD SHAs never enter the ledger and `pre`/`post` cannot diverge on
   the condition.
 - **Accepted residual, documented not hidden.** A foreign commit landing during
@@ -1259,6 +1252,23 @@ flowchart and bullets, §10's state store and §12's matrix were re-synced, and
   three places it had propagated to (§3's distribution-modes bullet, §12's
   matrix row, `design.md`'s predicate description) are fixed.
 
+**Auto-branch removed (2026-09-10).** `auto-branch.sh` — the `PreToolUse(Write|Edit)`
+hook that moved a trunk session into TASK mode on the first edit — is deleted, along
+with the `auto_branch`/`branch_prefix` config keys. Rationale and alternatives
+considered: [ADR 0002](adr/0002-remove-auto-branching.md). Both anchor modes survive
+unchanged — TASK mode still engages whenever HEAD is off trunk (a branch or a
+worktree) — only the automatic mid-session trunk→branch flip is gone. This also
+retires the second `PreToolUse` hook entry: the harness now wires exactly one
+hook per event (§2/§3), and `hooks/hooks.json` has a single PreToolUse entry
+(`commit-ledger.sh pre`) instead of two. **Not orphaned:** the `tree-base/<task_key>.dirty`
+pin is unaffected — `baseline-snapshot.sh` (SessionStart) already writes it whenever a
+session starts off trunk; only auto-branch's *mid-session* pin (for a branch created
+after SessionStart already ran in SESSION mode) is gone, and that pin is exactly the
+one auto-branch itself created the need for. §2, §3, §5, §10's tree-base row, and
+§12's edge-case matrix were updated; `commit-ledger.sh`'s rebase/merge-in-progress
+GIT_DIR probe (Change 4, 2026-09-09 above) is now self-contained rather than shared
+with the deleted script.
+
 ---
 
 ## Appendix — file → responsibility index
@@ -1270,7 +1280,6 @@ flowchart and bullets, §10's state store and §12's matrix were re-synced, and
 | `contracts/*.json` | Hard-contract schema store: `done-state.schema.json`, `review-log.schema.json`, `done-config.schema.json`, `resolver-output.schema.json`, `base-dod.schema.json`, `done-plan.schema.json` (the 6 JSON-Schemas `hc_validate` asserts), plus `base-dod.json` (the seed DoD) and `shell-abi.json` (the declared, test-enforced shell-function ABI) |
 | `scripts/done-gate.sh` | Stop hook — the gate (Steps 1→2→2a→2b→3/3b/3c/3d→4/4b→5→7→8→9); `hc_validate`s done-state (4b) + review-log (8) before trusting fields |
 | `scripts/baseline-snapshot.sh` | SessionStart — pin baselines, tree-base, test snapshot, reap |
-| `scripts/auto-branch.sh` | PreToolUse(Write\|Edit) — trunk→task branch, pin task tree-base |
 | `scripts/commit-ledger.sh` | **Wired twice on the `Bash\|SlashCommand\|mcp__.*` matcher** — PreToolUse(`pre`) pins HEAD to `baselines/<sid>.cursor.<tool_use_id>`, PostToolUse sweeps `CURSOR..HEAD` into `baselines/<sid>.own-commits` (deduped, and filtered to commits whose committer date is >= `baselines/<sid>.started`, so a fast-forward is not authorship). Both modes; no-ops mid-rebase/merge; never fails the tool. HEAD movement inside the window IS the authorship signal — no command-text parsing, no committer-email guess |
 | `scripts/done-detect.sh` | Config detect/seed/preserve + fingerprint; stamps `contract_version:1`, auto-upgrades old configs, validates before writing |
 | `scripts/done-preflight.sh` | `/done` Step 0 — prove the gate is winnable |
@@ -1283,6 +1292,6 @@ flowchart and bullets, §10's state store and §12's matrix were re-synced, and
 | `skills/done/dod-protocol.md` | Full `/done` protocol reference — every step section (anchors) + escalation rules |
 | `agents/dod-reviewer.md` | Shipped Step-5 review subagent — carries the review methodology so the executor never authors the prompt; writes `review-log/<HEAD>.json` |
 | `dod/base-dod.md` | Base DoD folded into the effective DoD (Step 0.5) |
-| `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) — SessionStart, Stop, **two** PreToolUse entries (`Write\|Edit` → auto-branch, `Bash` → `commit-ledger.sh pre`), PostToolUse(`Bash`) |
+| `hooks/hooks.json` | Plugin hook wiring (`${CLAUDE_PLUGIN_ROOT}`) — SessionStart, Stop, one PreToolUse entry (`Bash\|SlashCommand\|mcp__.*` → `commit-ledger.sh pre`), PostToolUse (same matcher → `commit-ledger.sh`) |
 | `.claude-plugin/plugin.json` | Plugin manifest |
-| `install.sh` | Non-plugin installer (mirror into `.claude/`, idempotent `jq`-merge of **all five** hook wirings — hook-for-hook equivalent to the plugin) |
+| `install.sh` | Non-plugin installer (mirror into `.claude/`, idempotent `jq`-merge of **all four** hook wirings — hook-for-hook equivalent to the plugin) |

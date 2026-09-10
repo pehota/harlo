@@ -300,15 +300,16 @@ is out of scope by choice — the limit is stated rather than assumed away.
   advanced to HEAD, so that range diff is empty too and the empty-changeset
   short-circuit takes over. Set path and point path agree on "nothing to review".
   Session mode only.
-- Pinning is **lazy + idempotent at every entry point** (auto-branch can flip trunk→task
-  mid-session, so SessionStart isn't the only place it must pin).
+- Pinning is **lazy + idempotent at every entry point** — whichever script calls
+  `hc_resolve` first (SessionStart, the gate, the writer, preflight) pins the task
+  base and tree-base if they aren't pinned yet; every later call reuses the pin.
 
 **Tree baseline (the classifier's "pre-existing" set), pinned in parallel:**
 alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git status
 --porcelain` snapshot the `hc_tree_status` classifier diffs against.
 - TASK mode → `tree-base/<task_key>.dirty`, pinned **once** at the task's fork point
-  (by `baseline-snapshot.sh`, or by `auto-branch.sh` when the branch is created
-  mid-session) and **never re-seeded** — parallel to `task-base/<task_key>.sha`. This
+  by `baseline-snapshot.sh` — whenever a session already starts off trunk, on a
+  branch or in a worktree — and **never re-seeded** — parallel to `task-base/<task_key>.sha`. This
   is what stops a later session re-seeding "pre-existing" from live porcelain and
   thereby whitelisting the agent's own uncommitted work.
 - SESSION mode → `baselines/<session_id>.dirty`, rewritten every SessionStart (in
@@ -342,7 +343,9 @@ alongside the SHA base, `hc_resolve` resolves `HC_TREE_BASE_FILE` — the `git s
 - **Parallel in separate worktrees** (recommended) — ✅ different branches → different
   `task_key` → isolated.
 - **Same-dir same-branch parallel** — ⚠️ shares the task key; *unsupported* → use worktrees.
-- **On trunk** — SESSION fallback (see auto-branch below); one-time warning, never blocks.
+- **On trunk** — SESSION fallback (see *Branch vs trunk* below); one-time warning, never
+  blocks, and stays SESSION mode for the session's life — branching is a deliberate step,
+  never automatic (see [ADR 0002](adr/0002-remove-auto-branching.md)).
 
 The gate re-checks the tree and `HEAD == verified_sha` live (falling back to tree
 equality — see Stop-hook Step 5), so stale state from a concurrent commit is caught.
@@ -364,41 +367,14 @@ something goes missing.
   rather than one session's slice.
 
 **Recommendation: work on a branch — ideally a worktree** (`new-worktree.sh`, which
-provisions one and puts you in TASK mode from the first commit). Auto-branch does this
-for you on trunk at the first edit, but only when it is enabled and the hook fires.
+provisions one and puts you in TASK mode from the first commit). Nothing does this
+for you automatically — branching is a deliberate step the user takes before or
+during the session (the harness used to auto-branch on trunk at the first edit; that
+was removed, see [ADR 0002](adr/0002-remove-auto-branching.md)).
 
 This is not a cure-all. A branch does not help if the state directory is deleted (the
 done-state and review-log live there regardless of mode) or if the plugin is disabled —
 it removes *one* class of false block, the session-keyed anchor going missing.
-
-### Auto-branch (on trunk, first edit)
-
-Config `auto_branch` (default **false** — opt-in): a `PreToolUse(Write|Edit)` hook (`auto-branch.sh`)
-detects "on trunk, about to edit" and `git checkout -b <branch_prefix><timestamp>` (carries
-WIP), moving the work into TASK mode so it gets cross-session continuity. Fast no-op when
-already off trunk (it fires on every edit), and on detached/mid-rebase/merge or checkout
-failure it **stays on trunk and never blocks the edit**. `auto_branch:false` (the default) →
-stays on trunk with the SessionStart warning. To *resume* an existing task, checkout its branch
-first.
-
-**Why the default is off.** Branching is a decision about where the user's work lives, and the
-hook cannot see the instruction that would override it — a standing "work on main" reaches no
-hook. Opting in costs one config key; opting out of a branch that already happened costs a
-checkout and an explanation. An existing config keeps whatever it already declares: the
-`done-detect.sh` auto-upgrade only seeds the key when it is ABSENT, so a repo that was seeded
-`true` by an older install stays `true` until a human changes it.
-
-**Every edit branches.** The hook does not look at `tool_input.file_path` at all: there is no
-"is this a code file?" question anywhere in the harness, so a prose edit moves the session onto
-a `task/` branch exactly like a code edit — and the Stop gate then reviews it exactly like a
-code edit. An earlier version skipped prose edits here to match a Stop-gate stand-down; both
-were removed together, because every classify-and-skip feature ended up disarming the gate.
-
-After creating the branch it **pins the task tree-base from THIS session's clean pre-edit
-SessionStart snapshot** (`baselines/<session_id>.dirty`) — this hook fires *before* the
-triggering edit, so that snapshot is still clean. When no such snapshot exists it pins an
-**empty** baseline (safe direction: everything blocks), **never live porcelain** (which could
-already contain this session's WIP and whitelist it).
 
 ### SessionStart (`baseline-snapshot.sh`)
 
@@ -1213,8 +1189,6 @@ every escalation is echoed in the step-8 summary for the user to see.
   "start_check_cmd": null,
   "start_timeout": 30,
   "trunk": null,
-  "auto_branch": false,
-  "branch_prefix": "task/",
   "untracked_policy": "baseline",
   "min_review_level": "high"
 }
@@ -1222,7 +1196,7 @@ every escalation is echoed in the step-8 summary for the user to see.
 
 `effective = overrides ?? detected`. `overrides`, `max_fix_attempts`,
 `max_review_rounds`, `baseline_snapshot`, `deploy_check_cmd`, `start_check_cmd`,
-`start_timeout`, `trunk`, `auto_branch`, `branch_prefix`, `untracked_policy`,
+`start_timeout`, `trunk`, `untracked_policy`,
 `min_review_level` are human-owned and sticky; `detected` + `source_fingerprint`
 are auto-managed. The example matches exactly what `done-detect.sh` and
 `install.sh` seed. `contract_version` (const `1`) stamps the config as conforming
@@ -1235,9 +1209,9 @@ preserving every human-owned field. See *Hard contracts*.
 
 Hooks are invoked by the runtime as **static command strings** — the conversation has no way
 to pass argv, and no in-memory channel to a hook process. So an instruction the user gives in
-chat ("work only on main", "this is a docs task") could not reach `auto-branch.sh` at all: the
-branch appeared anyway, and the only remedy was editing the repo's `done-config.json`, which
-outlives the task.
+chat (e.g. "treat untracked files strictly for this task") cannot reach a hook directly: the
+only remedy without this layer would be editing the repo's `done-config.json`, which outlives
+the task.
 
 `hc_cfg <key> [default]` is now the single config read, layering:
 
@@ -1247,23 +1221,21 @@ outlives the task.
 3. the built-in default.
 
 It probes with `has()` at each layer (never a bare `//`, which would treat a literal `false`
-as empty and flip `auto_branch:false` back to `true`); a JSON `null` means "unset here" and
-falls through; arrays are returned space-joined. Keys read through it — the ones a per-task
-instruction can plausibly flip — are `auto_branch`, `branch_prefix` and
-`untracked_policy`. **`trunk` is deliberately excluded:** it selects task-vs-session mode,
-computes the task key, drives auto-branch *and* feeds SessionStart's terminal reap, which
-**deletes** the state of branches it judges merged — a wrong value there destroys state rather
-than merely loosening a check, which is too much authority for an ephemeral, agent-written
-file. `hc__detect_trunk` reads the repo config only.
+as empty and silently fall through to a laxer layer); a JSON `null` means "unset here" and
+falls through; arrays are returned space-joined. The only key currently read through it —
+the one a per-task instruction can plausibly flip — is `untracked_policy`.
+**`trunk` is deliberately excluded:** it selects task-vs-session mode, computes the task
+key, and feeds SessionStart's terminal reap, which **deletes** the state of branches it
+judges merged — a wrong value there destroys state rather than merely loosening a check,
+which is too much authority for an ephemeral, agent-written file. `hc__detect_trunk` reads
+the repo config only.
 
 Lifetime is **one task**: SessionStart preserves the file only on `resume`/`compact`/`fork`
 (the same continuation set the baseline guard uses) and drops it on everything else —
 including an **empty** `source` from an older CLI, because a file that only ever grants
 leniency must fail toward the persisted config rather than survive to the 14-day reap.
 It lives under the state dir, so `hc_is_harness_own_path` already exempts it from the tree
-classification. SessionStart also injects the file's existence into the **agent-visible**
-`additionalContext` when the session starts on trunk with `auto_branch` on — the pre-existing
-warning was a `systemMessage`, which the user sees and the agent does not.
+classification.
 
 `max_review_rounds` (default `2`) caps the Step-6 fix → re-review loop: round 1 is
 the initial full-changeset review, round 2 is the confirming pass scoped to the
@@ -1465,7 +1437,6 @@ global use.
 | `completion-harness/scripts/harness-resolve.sh` | `/done` Step 1: executable resolver wrapper — prints a self-validated JSON object (resolver-output contract), `jq`-parsed by the skill |
 | `completion-harness/contracts/*.json` | Hard-contract schema store: 6 JSON-Schemas (done-state, review-log, done-config, resolver-output, base-dod, done-plan) + `base-dod.json` (seed DoD) + `shell-abi.json` (declared, test-enforced shell ABI). Copied to `.claude/contracts/` |
 | `completion-harness/scripts/baseline-snapshot.sh` | SessionStart: baseline SHA + tree baseline + background test snapshot (self-seeds config, inert-marker + systemMessage when no test cmd) |
-| `completion-harness/scripts/auto-branch.sh` | PreToolUse(Write\|Edit): auto-branch off trunk + pin task tree-base from clean pre-edit snapshot |
 | `completion-harness/scripts/commit-ledger.sh` | The commit ledger, wired **twice** on the `Bash\|SlashCommand\|mcp__.*` matcher: PreToolUse(`pre`) pins HEAD to `baselines/<sid>.cursor.<tool_use_id>`, PostToolUse sweeps `CURSOR..HEAD` into `baselines/<sid>.own-commits`, filtered to commits whose committer date is at or after `baselines/<sid>.started` (so a fast-forward is not read as authorship). **Both modes**; no-ops mid-rebase/merge; never fails the tool. The single authorship signal base-advance reads |
 | `completion-harness/scripts/done-preflight.sh` | `/done` Step 0 preflight: prove the gate is winnable (calls `hc_resolve`+`hc_tree_status`), non-zero on HARD problems; never seeds a baseline |
 | `completion-harness/scripts/done-detect.sh` | `/done` config: probe + fingerprint + write done-config.json (seeds `untracked_policy`) |
@@ -1510,7 +1481,8 @@ problem, because enabling the plugin *is* the installation.
 A plugin ships its own `hooks/hooks.json`, `skills/`, and scripts, with hook commands
 resolved via `${CLAUDE_PLUGIN_ROOT}`. When the plugin is **enabled**:
 - **Hooks fire from the plugin** — Stop→`done-gate.sh`, SessionStart→`baseline-snapshot.sh`,
-  PreToolUse(Write|Edit)→`auto-branch.sh`. No `settings.local.json` `jq`-merge per project.
+  PreToolUse(`Bash|SlashCommand|mcp__.*`)→`commit-ledger.sh pre`, PostToolUse (same
+  matcher)→`commit-ledger.sh`. No `settings.local.json` `jq`-merge per project.
 - **`/done` skill + all scripts** live in the plugin. `harness-common.sh` is sourced from
   `${CLAUDE_PLUGIN_ROOT}`; `base-dod.md` is read from there.
 
@@ -1542,7 +1514,7 @@ Plugins load in headless (`claude -p`, Agent SDK) the same way as interactive �
 discovery entirely. Confirmed: `SessionStart`/`SessionEnd` hooks fire and skills/slash
 commands resolve in `-p` mode. **Undocumented / must be tested empirically:** whether
 `PreToolUse` hooks fire and whether a `decision:block` from the Stop gate actually halts a
-non-interactive run. So for CI, verify the gate + auto-branch behavior empirically before
+non-interactive run. So for CI, verify the gate + commit-ledger behavior empirically before
 relying on them, and never run the harness under `--bare`.
 
 ### Decisions to settle when building the plugin
