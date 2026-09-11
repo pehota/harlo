@@ -6,6 +6,11 @@
       "name": "completion-harness",
       "source": "./completion-harness",
       "description": "Definition-of-Done completion gate."
+    },
+    {
+      "name": "dod",
+      "source": "./dod",
+      "description": "Task-DoD lifecycle: nudges the agent to write a per-task Definition-of-Done contract when a changeset touches product surface, then blocks Stop until that contract exists and /done has run against it."
     }
   ]
 }
