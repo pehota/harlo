@@ -1,0 +1,9 @@
+{
+  "name": "dod",
+  "description": "Task-DoD lifecycle: nudges the agent to write a per-task Definition-of-Done contract when a changeset touches product surface, then blocks Stop until that contract exists and /done has run against it.",
+  "version": "0.0.1",
+  "author": {
+    "name": "Dimitar Apostolov"
+  },
+  "license": "MIT"
+}
