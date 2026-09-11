@@ -80,11 +80,19 @@ dod__match_one() {
 dod_is_product_path() {
   local path="$1" glob
   [ -n "$path" ] || return 0
+  # set -f (noglob): the globs from dod__artifact_globs are intentionally
+  # word-split (space-separated list) but must NOT be filename-expanded
+  # against the cwd — otherwise a real docs/ dir or README.md on disk gets
+  # substituted in place of the literal pattern before dod__match_one ever
+  # sees it, corrupting the classification. Restored unconditionally after.
+  set -f
   for glob in $(dod__artifact_globs); do
     if dod__match_one "$path" "$glob"; then
+      set +f
       return 1
     fi
   done
+  set +f
   return 0
 }
 
