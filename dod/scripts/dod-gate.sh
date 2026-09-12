@@ -114,9 +114,17 @@ fi
 # --- past a prior verified boundary? --------------------------------
 # .verified-<key> holds the verified_sha stamped when this task last passed.
 # If HEAD is still that SHA and the tree carries no NEW product change, the task
-# is still over → stay allowed. If HEAD advanced OR product-surface tree dirt
-# appeared, this is a FRESH task: the live DoD was archived at the boundary, so
-# dod_changeset_has_product below finds product + no DoD and blocks for a new one.
+# is still over → stay allowed. If product-surface content actually changed
+# since PREV_SHA — either uncommitted dirt now, or the committed range
+# PREV_SHA..HEAD — this is a FRESH task and falls through to the missing-DoD
+# logic below.
+#
+# HEAD merely advancing is NOT by itself fresh-task evidence: committing
+# content that was already written and verified before the Stop that archived
+# the DoD (e.g. a bare `git add && git commit` of it) moves HEAD without
+# introducing any new product change. Checking PREV_SHA..HEAD_SHA specifically
+# (dod_range_has_product), instead of the session's full HC_BASE..HEAD, keeps
+# already-verified commits from re-triggering the gate.
 if [ -f "$VERIFIED_MARKER" ]; then
   PREV_SHA=$(cat "$VERIFIED_MARKER" 2>/dev/null | tr -d '\r\n')
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
@@ -127,8 +135,20 @@ if [ -f "$VERIFIED_MARKER" ]; then
       clear_last_block
       exit 0
     fi
+  elif hc_has_fn dod_range_has_product; then
+    # Check the COMMITTED delta since verification (PREV_SHA..HEAD_SHA) plus
+    # any UNCOMMITTED tree dirt — never the session's full HC_BASE..HEAD,
+    # which still contains the already-verified commit and would
+    # false-positive on a bare re-commit of it.
+    if dod_range_has_product "$PREV_SHA" "$HEAD_SHA" \
+      || { hc_has_fn dod_tree_has_product && dod_tree_has_product "$SESSION_ID"; }; then
+      : # genuinely new product content since verification → fresh task.
+    else
+      clear_last_block
+      exit 0
+    fi
   fi
-  # HEAD advanced → fresh task; fall through.
+  # range-check unavailable → fall through to the generic check below.
 fi
 
 if ! dod_changeset_has_product "$SESSION_ID"; then

@@ -34,6 +34,11 @@ PostToolUse (Bash|Write|Edit)          Stop
    exists but `/done` hasn't run (checked via the stub-done marker). Otherwise
    allows, and on a clean pass archives the DoD to
    `task-dod/archive/<verified_sha>.json` and stamps the verified boundary.
+   Past that boundary, whether a later commit reopens the DoD requirement is
+   decided from `dod_range_has_product(verified_sha, HEAD)` plus uncommitted
+   tree dirt — not the session's full base..HEAD range — so a bare re-commit
+   of already-verified content (`git add && git commit`, an empty commit)
+   doesn't re-trigger the block.
 4. **Stub `/done`** (`scripts/dod-stub-done.sh`) — a stand-in for the real
    `/done` checklist, used by the gate/tests to simulate "the checklist ran".
    The real `/done` middle (tests, lint, app-start, fresh-agent review) is out
@@ -102,3 +107,7 @@ identity — callers cannot mis-key it.
   block.
 - **Append-only is enforced by the writer, not the schema** — a schema can't
   compare a write against the prior file on disk.
+- **Boundary re-check is range-scoped, not HEAD-moved.** After a verified
+  boundary, HEAD merely advancing is not itself fresh-task evidence — only
+  genuinely new product-surface content in `verified_sha..HEAD` (or new
+  uncommitted dirt) reopens the gate.

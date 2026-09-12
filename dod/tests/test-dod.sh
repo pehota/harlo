@@ -331,6 +331,26 @@ is_block "$OUT" && ok "reg-2: new-category block still fires under stop_hook_act
   || bad "reg-2: new-category block still fires under stop_hook_active" "$OUT"
 
 # ---------------------------------------------------------------------------
+# Regression (review finding 3) — HEAD advancing past verified_sha must NOT by
+# itself re-trigger the gate. A bare re-commit of already-verified content
+# (e.g. `git add && git commit` of a file written and verified in a prior
+# turn, or an empty/metadata-only commit) moves HEAD without introducing any
+# NEW product change and must stay allowed.
+# ---------------------------------------------------------------------------
+R=$(make_repo task)
+echo "v1" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat1 >/dev/null
+printf '{"__session_id":"c15","created_at":"2026-01-01T00:00:00Z","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"task one","origin":"prompt","added_at":"t"}]}' \
+  | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$R" bash "$STUB" c15 >/dev/null 2>&1
+OUT=$(run_gate "$R" c15)
+[ -z "$OUT" ] && ok "case 15: first task → Stop allows" || bad "case 15: first task allows" "$OUT"
+# a commit that touches NOTHING new (empty commit) past the verified boundary
+git -C "$R" commit -q --allow-empty -m "chore: no-op" >/dev/null
+OUT=$(run_gate "$R" c15)
+[ -z "$OUT" ] && ok "case 15: empty commit past verified_sha → Stop stays quiet" \
+  || bad "case 15: empty commit past verified_sha → Stop stays quiet" "$OUT"
+
+# ---------------------------------------------------------------------------
 # Extra — the fallback artifact-path list matches the shipped default config.
 # This plugin has no contracts/done-config.default.json of its own (that
 # artifact lives in the full completion-harness bundle) — assert the literal

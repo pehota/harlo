@@ -96,38 +96,48 @@ dod_is_product_path() {
   return 0
 }
 
+# dod_tree_has_product <session_id> — 0 iff the UNCOMMITTED tree carries at
+# least one product-surface path (session-scoped blockers only, per
+# hc_tree_status), 1 otherwise. Factored out of dod_changeset_has_product so a
+# caller that already knows the relevant COMMITTED range (dod_range_has_product)
+# can check tree dirt without re-scanning the session's full HC_BASE..HEAD.
+dod_tree_has_product() {
+  local session_id="$1"
+  local line path
+  hc_has_fn hc_tree_status || return 1
+  hc_tree_status "$session_id" 2>/dev/null
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    # porcelain path is everything after the "XY " prefix; a rename line
+    # ("R  old -> new") — take the destination.
+    path="${line:3}"
+    case "$path" in *" -> "*) path="${path##* -> }" ;; esac
+    case "$path" in .claude/.harness/*|.claude/.harness) continue ;; esac
+    dod_is_product_path "$path" && return 0
+  done <<EOF
+$HC_TREE_BLOCKERS
+EOF
+  return 1
+}
+
 # dod_changeset_has_product <session_id> — 0 iff at least one path the changeset
 # touches (uncommitted tree OR committed HC_BASE..HEAD) is product surface,
 # after excluding .claude/.harness/** (arming-exempt: the DoD file write must
 # not itself count). 1 when the changeset is empty or artifact-only.
 #
-# Tree state comes from hc_tree_status — ONLY its blockers, never its warnings.
-# Warnings are baseline dirt (paths already present at the session's tree
-# baseline), not this session's work; counting them would make an idle /
-# read-only session in a repo with any pre-existing product-file dirt demand a
-# task DoD. This matches hc_state's own S0 logic. Committed range comes from
-# `git diff --name-only HC_BASE..HEAD`. hc_resolve is the CALLER's job — this
-# reads HC_BASE / PROJECT_DIR / HARNESS_DIR from scope.
+# Tree state comes via dod_tree_has_product — session-scoped blockers only,
+# never baseline warnings (pre-existing dirt at the session's tree baseline);
+# counting warnings would make an idle / read-only session in a repo with any
+# pre-existing product-file dirt demand a task DoD. This matches hc_state's own
+# S0 logic. Committed range comes from `git diff --name-only HC_BASE..HEAD`.
+# hc_resolve is the CALLER's job — this reads HC_BASE / PROJECT_DIR /
+# HARNESS_DIR from scope.
 dod_changeset_has_product() {
   local session_id="$1"
   local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
-  local line path
 
   # --- uncommitted tree ---------------------------------------------------
-  if hc_has_fn hc_tree_status; then
-    hc_tree_status "$session_id" 2>/dev/null
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      # porcelain path is everything after the "XY " prefix; a rename line
-      # ("R  old -> new") — take the destination.
-      path="${line:3}"
-      case "$path" in *" -> "*) path="${path##* -> }" ;; esac
-      case "$path" in .claude/.harness/*|.claude/.harness) continue ;; esac
-      dod_is_product_path "$path" && return 0
-    done <<EOF
-$HC_TREE_BLOCKERS
-EOF
-  fi
+  dod_tree_has_product "$session_id" && return 0
 
   # --- committed range HC_BASE..HEAD ------------------------------------------
   if [ -n "${HC_BASE:-}" ]; then
@@ -144,5 +154,31 @@ EOF
     fi
   fi
 
+  return 1
+}
+
+# dod_range_has_product <from_sha> <to_sha> — 0 iff `git diff --name-only
+# <from_sha> <to_sha>` touches at least one product-surface path (after
+# excluding .claude/.harness/**), 1 if the range is empty or artifact-only.
+#
+# Used at the verified boundary: once a task's DoD is archived at
+# <verified_sha>, whether a LATER commit reopens the DoD requirement must be
+# decided from what actually changed since that verified point — not from the
+# session's full HC_BASE..HEAD range, which still includes the already-
+# verified content and would false-positive on a bare re-commit of it (e.g.
+# `git add && git commit` of a file written and verified in a prior turn).
+dod_range_has_product() {
+  local from="$1" to="$2"
+  local proj="${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  local path
+  [ -n "$from" ] && [ -n "$to" ] || return 0
+  [ "$from" = "$to" ] && return 1
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    case "$path" in .claude/.harness/*|.claude/.harness) continue ;; esac
+    dod_is_product_path "$path" && return 0
+  done <<EOF
+$(git -C "$proj" diff --name-only "$from" "$to" 2>/dev/null)
+EOF
   return 1
 }
