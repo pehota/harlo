@@ -1,0 +1,24 @@
+{
+  "$comment": "draft-07. task-dod/verified/<task_key>-<verified_sha>.json — EVIDENCE that a collected task-dod/<task_key>.json contract was checked. Separate file, separate lifecycle from the contract (task-dod.schema.json), which stays append-only and is never mutated by verification. requirement_index is the 0-based index into the collected contract's requirements[] array — a stable reference back to the immutable contract without duplicating requirement text. Uses only the keyword subset hc_validate supports (type/required/properties/items/enum/const/additionalProperties/oneOf/not/minLength) — no pattern/minItems/format.",
+  "type": "object",
+  "required": ["task_key", "verified_sha", "checked_at", "results"],
+  "additionalProperties": false,
+  "properties": {
+    "task_key": { "type": "string", "minLength": 1 },
+    "verified_sha": { "type": "string", "minLength": 1 },
+    "checked_at": { "type": "string", "minLength": 1 },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["requirement_index", "status", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "requirement_index": { "type": "integer" },
+          "status": { "enum": ["pass", "fail", "skipped"] },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

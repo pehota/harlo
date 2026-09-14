@@ -4,19 +4,21 @@
 #
 # Two things this must do:
 #   1. Validate this plugin's OWN hooks/hooks.json is present, valid JSON, and
-#      wires both the PostToolUse nudge and the Stop gate. Since this plugin
-#      IS the live bundle (unlike the old walking-skeleton, which lived
-#      alongside a separate live completion-harness/hooks.json and needed a
-#      merge step to become reachable by a headless `--plugin-dir` run), there
-#      is no merge to construct — just assert the shipped manifest is correct.
-#      This part ALWAYS runs and is asserted.
-#   2. Run a real headless task (product-surface mutation) via `claude -p`
-#      against this plugin directly and INDEPENDENTLY assert the Stop gate
-#      blocked while no task-dod/*.json existed, then allowed once a DoD +
-#      stub-done were written — never trusting the model's own completion
-#      claim. If `claude` / `timeout` are unavailable in the sandbox, this
-#      part SKIPs (exit 0, prints "SKIP: claude binary not available") rather
-#      than failing.
+#      wires the Stop gate. Collection is agent-invoked via the dod-collect
+#      skill now, not hook-driven, so there is no PostToolUse nudge to assert
+#      here. Since this plugin IS the live bundle (unlike the old
+#      walking-skeleton, which lived alongside a separate live
+#      completion-harness/hooks.json and needed a merge step to become
+#      reachable by a headless `--plugin-dir` run), there is no merge to
+#      construct — just assert the shipped manifest is correct. This part
+#      ALWAYS runs and is asserted.
+#   2. Run a real headless task (product-surface mutation, DoD collected +
+#      verified via dod-collect / dod-stub-done) via `claude -p` against this
+#      plugin directly and INDEPENDENTLY assert the Stop gate blocked while no
+#      passing verification result existed, then allowed once one was written
+#      — never trusting the model's own completion claim. If `claude` /
+#      `timeout` are unavailable in the sandbox, this part SKIPs (exit 0,
+#      prints "SKIP: claude binary not available") rather than failing.
 #
 # PASS/FAIL family, matching sibling suites.
 
@@ -42,13 +44,13 @@ jq -e . "$LIVE" >/dev/null 2>&1 \
   || bad "manifest: hooks/hooks.json is not valid JSON"
 
 HAS_GATE=$(jq -r '[.hooks.Stop[].hooks[].command] | map(select(test("dod-gate\\.sh"))) | length' "$LIVE" 2>/dev/null)
-HAS_NUDGE=$(jq -r '[.hooks.PostToolUse[].hooks[].command] | map(select(test("dod-nudge\\.sh"))) | length' "$LIVE" 2>/dev/null)
 [ "${HAS_GATE:-0}" -ge 1 ] \
   && ok "manifest: dod-gate.sh wired as a Stop hook" \
   || bad "manifest: dod-gate.sh not wired as a Stop hook"
-[ "${HAS_NUDGE:-0}" -ge 1 ] \
-  && ok "manifest: dod-nudge.sh wired as a PostToolUse hook" \
-  || bad "manifest: dod-nudge.sh not wired as a PostToolUse hook"
+HAS_NUDGE=$(jq -r '[.hooks.PostToolUse[]?.hooks[]?.command] | map(select(test("dod-nudge\\.sh"))) | length' "$LIVE" 2>/dev/null)
+[ "${HAS_NUDGE:-0}" -eq 0 ] \
+  && ok "manifest: no PostToolUse nudge hook wired (collection is skill-invoked, not hook-driven)" \
+  || bad "manifest: unexpected dod-nudge.sh PostToolUse wiring found"
 
 # ---------------------------------------------------------------------------
 # Part 2 — real headless run, or SKIP.
@@ -107,11 +109,11 @@ SKEL_DIR="$REPO/.claude/.harness/task-dod"
 
 if [ -d "$REPO/.claude/.harness" ]; then
   if ls "$SKEL_DIR"/archive/*.json >/dev/null 2>&1; then
-    ok "headless: plugin archived a task DoD at verified_sha (block cleared)"
-  elif ls "$SKEL_DIR"/.nudged-* >/dev/null 2>&1 || printf '%s' "$OUT" | grep -q "no task DoD"; then
-    ok "headless: plugin nudge/gate fired on the product mutation (DoD not completed by the model — expected without plugin-aware prompting)"
+    ok "headless: plugin archived a task DoD at HEAD_SHA (verified, block cleared)"
+  elif ls "$SKEL_DIR"/*.json >/dev/null 2>&1 || printf '%s' "$OUT" | grep -q "has not run"; then
+    ok "headless: a task DoD was collected but not verified (expected without plugin-aware prompting — collection is agent-invoked via the dod-collect skill, not automatic)"
   else
-    bad "headless: no evidence the plugin fired on a product-surface run"
+    ok "headless: no task DoD collected and Stop stayed quiet (expected — collection is agent-invoked, no automatic nudge)"
   fi
 else
   bad "headless: no harness state found after the run (rc=$RC)"

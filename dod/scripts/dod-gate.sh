@@ -8,7 +8,12 @@
 #
 # FAIL-SAFE = ALLOW. Any unexpected condition releases the Stop — we never trap
 # the user. The ONE exception, which is the entire point of this plugin: a
-# product-surface changeset with NO task DoD BLOCKS.
+# COLLECTED task DoD with no matching verification result BLOCKS.
+#
+# Purely structural: this hook does NOT decide whether a task needed a DoD —
+# that call was moved to the dod-collect skill (agent-invoked, not a hook).
+# If no task-dod/<task_key>.json exists, there is nothing to verify and this
+# hook is silent. It never inspects the changeset or classifies paths.
 #
 # No `set -e`, no catch-all EXIT trap; every git/jq call guarded.
 
@@ -17,9 +22,6 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 if [ -f "$PLUGIN_ROOT/scripts/harness-common.sh" ]; then
   . "$PLUGIN_ROOT/scripts/harness-common.sh" 2>/dev/null
-fi
-if [ -f "$PLUGIN_ROOT/scripts/lib-classify.sh" ]; then
-  . "$PLUGIN_ROOT/scripts/lib-classify.sh" 2>/dev/null
 fi
 
 # No jq → cannot reason about state → fail safe (allow), matching done-gate.sh.
@@ -39,10 +41,9 @@ fi
 
 # Recursion brake — CATEGORY-SCOPED, matching done-gate.sh's block() guard.
 # A blanket `stop_hook_active => exit 0` here would swallow a REQUIRED block on
-# the "no-DoD" -> "DoD present, /done not run" transition: the agent writes the
-# DoD inside the block-response cycle, stops again with the flag still true, and
-# a blanket brake would let it finish with /done never run. So the brake fires
-# only when THIS turn's block category equals the previous turn's — an unchanged
+# the "no-verification" -> "still no verification" transition across a turn
+# where the agent wrote the DoD but hasn't verified yet. The brake fires only
+# when THIS turn's block category equals the previous turn's — an unchanged
 # demand the agent has already been told. The category is written by block()
 # into last-block/<key> and consulted there.
 LAST_BLOCK_FILE=""   # set once HARNESS_DIR is known (below)
@@ -76,8 +77,8 @@ fi
 DOD_DIR="$HARNESS_DIR/task-dod"
 DOD_FILE="$DOD_DIR/${HC_TASK_KEY}.json"
 ARCHIVE_DIR="$DOD_DIR/archive"
-STUB_MARKER="$DOD_DIR/.stub-done-${HC_TASK_KEY}"
-VERIFIED_MARKER="$DOD_DIR/.verified-${HC_TASK_KEY}"
+VERIFIED_DIR="$DOD_DIR/verified"
+VERIFIED_RESULT="$VERIFIED_DIR/${HC_TASK_KEY}-${HEAD_SHA}.json"
 LAST_BLOCK_FILE="$HARNESS_DIR/last-block/dod-${HC_TASK_KEY}"
 
 # block <category> <reason>
@@ -103,82 +104,34 @@ block() {
 # different block.
 clear_last_block() { rm -f "$LAST_BLOCK_FILE" 2>/dev/null; }
 
-# --- is there product surface in the changeset? --------------------------------
-if ! hc_has_fn dod_changeset_has_product; then
-  # classifier lib unavailable → cannot make the missing-DoD call safely →
-  # fail-safe allow (this is NOT the missing-DoD-on-product case; we cannot even
-  # tell what surface changed).
-  exit 0
-fi
-
-# --- past a prior verified boundary? --------------------------------
-# .verified-<key> holds the verified_sha stamped when this task last passed.
-# If HEAD is still that SHA and the tree carries no NEW product change, the task
-# is still over → stay allowed. If product-surface content actually changed
-# since PREV_SHA — either uncommitted dirt now, or the committed range
-# PREV_SHA..HEAD — this is a FRESH task and falls through to the missing-DoD
-# logic below.
-#
-# HEAD merely advancing is NOT by itself fresh-task evidence: committing
-# content that was already written and verified before the Stop that archived
-# the DoD (e.g. a bare `git add && git commit` of it) moves HEAD without
-# introducing any new product change. Checking PREV_SHA..HEAD_SHA specifically
-# (dod_range_has_product), instead of the session's full HC_BASE..HEAD, keeps
-# already-verified commits from re-triggering the gate.
-if [ -f "$VERIFIED_MARKER" ]; then
-  PREV_SHA=$(cat "$VERIFIED_MARKER" 2>/dev/null | tr -d '\r\n')
-  if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
-    if dod_changeset_has_product "$SESSION_ID"; then
-      # HEAD unchanged but product tree dirt since the boundary → fresh task.
-      : # fall through to the missing-DoD logic below
-    else
-      clear_last_block
-      exit 0
-    fi
-  elif hc_has_fn dod_range_has_product; then
-    # Check the COMMITTED delta since verification (PREV_SHA..HEAD_SHA) plus
-    # any UNCOMMITTED tree dirt — never the session's full HC_BASE..HEAD,
-    # which still contains the already-verified commit and would
-    # false-positive on a bare re-commit of it.
-    if dod_range_has_product "$PREV_SHA" "$HEAD_SHA" \
-      || { hc_has_fn dod_tree_has_product && dod_tree_has_product "$SESSION_ID"; }; then
-      : # genuinely new product content since verification → fresh task.
-    else
-      clear_last_block
-      exit 0
-    fi
-  fi
-  # range-check unavailable → fall through to the generic check below.
-fi
-
-if ! dod_changeset_has_product "$SESSION_ID"; then
-  # artifact-only or empty changeset → allow silently.
+# --- no collected DoD -> nothing to verify -> allow, silent ------------------
+# Collection is agent-invoked (dod-collect skill), not hook-driven, so the
+# mere absence of a task-dod file is never itself a block condition here.
+if [ ! -f "$DOD_FILE" ]; then
   clear_last_block
   exit 0
 fi
 
-# --- product surface changed -------------------------------------------------
-# no task DoD → BLOCK (the whole point; fail toward block here).
-if [ ! -f "$DOD_FILE" ]; then
-  block "no-dod" "product surface changed but no task DoD exists — write .claude/.harness/task-dod/${HC_TASK_KEY}.json (requirements + blast_radius {tier, reason}) before finishing. See docs/base-dod.md."
+# --- DoD present: does a passing verification result exist for HEAD? --------
+if [ ! -f "$VERIFIED_RESULT" ]; then
+  block "dod-no-verify" "task DoD present but /done has not run for this changeset — run the /done checklist (scripts/dod-stub-done.sh), then stop again."
 fi
 
-# DoD present but the stub /done has not run → BLOCK.
-if [ ! -f "$STUB_MARKER" ]; then
-  block "dod-no-done" "task DoD present but /done has not run for this changeset — run the /done checklist (scripts/dod-stub-done.sh), then stop again."
+FAIL_COUNT=$(jq '[.results[]? | select(.status == "fail")] | length' "$VERIFIED_RESULT" 2>/dev/null)
+case "$FAIL_COUNT" in
+  ''|*[!0-9]*)
+    block "dod-no-verify" "verification result for this changeset is malformed or unreadable — re-run the /done checklist (scripts/dod-stub-done.sh), then stop again."
+    ;;
+esac
+if [ "$FAIL_COUNT" -gt 0 ]; then
+  block "dod-verify-failed" "verification result for this changeset has ${FAIL_COUNT} failing requirement(s) — fix them, re-run the /done checklist, then stop again."
 fi
 
-# --- DoD present AND stub-done present -> allow + stamp the boundary --------
-# Record verified_sha, move the live DoD into the archive keyed by that SHA. A
-# later product mutation past this SHA then finds no live DoD.
+# --- DoD present AND a passing verification result for HEAD -> allow + archive
+# Move the live DoD into the archive keyed by HEAD_SHA. A later product
+# mutation past this SHA then finds no live DoD (dod-collect must run again).
 mkdir -p "$ARCHIVE_DIR" 2>/dev/null
-printf '%s\n' "$HEAD_SHA" > "$VERIFIED_MARKER" 2>/dev/null
-if [ -f "$DOD_FILE" ]; then
-  mv -f "$DOD_FILE" "$ARCHIVE_DIR/${HEAD_SHA}.json" 2>/dev/null
-fi
-# The stub-done and nudge markers belong to the task that just closed — clear
-# them so the next task starts clean.
-rm -f "$STUB_MARKER" "$DOD_DIR/.nudged-${HC_TASK_KEY}" 2>/dev/null
+mv -f "$DOD_FILE" "$ARCHIVE_DIR/${HEAD_SHA}.json" 2>/dev/null
 clear_last_block
 
 exit 0

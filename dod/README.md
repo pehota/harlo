@@ -1,84 +1,85 @@
 # task-dod
 
-Task-DoD lifecycle plugin: nudges the agent to write a per-task Definition-of-Done
-contract when a changeset touches product surface, then blocks `Stop` until that
-contract exists and `/done` has run against it.
+Task-DoD lifecycle plugin: an explicit skill records a per-task
+Definition-of-Done contract before implementation starts, then `Stop` blocks
+until that contract has a passing verification result.
 
 Rationale: [ADR-0001 — the Definition of Done is fixed at task start, not
 assembled at `/done`](../docs/adr/0001-task-dod-defined-at-task-start.md).
 
+Collection and verification are deliberately separate concerns with their own
+triggers — a PostToolUse nudge previously tried to infer "the agent is about
+to implement something" from changed file paths and repeatedly false-
+positived (firing on read-only/discussion turns, on file deletion, on any
+path outside a small allowlist). Collection is now agent-invoked only.
+
 ## Lifecycle
 
 ```
-PostToolUse (Bash|Write|Edit)          Stop
-        │                                │
-        ▼                                ▼
-  dod-nudge.sh  ──writes──▶  task-dod/<task_key>.json  ◀──reads── dod-gate.sh
-   (fires once,                    (dod-write.sh)          (blocks / allows)
-    can't block)
+dod-collect skill                          Stop
+   (agent-invoked)                          │
+        │                                    ▼
+        ▼                          dod-gate.sh reads:
+  dod-write.sh writes        task-dod/<task_key>.json
+  task-dod/<task_key>.json   task-dod/verified/<task_key>-<HEAD_SHA>.json
+        │                                    │
+        │         dod-stub-done.sh writes    │
+        └────────────────▶ verified result ──┘
+                    (test/dev stand-in for the real /done)
 ```
 
-1. **Nudge** (`hooks/dod-nudge.sh`, `PostToolUse` on `Bash|Write|Edit`) — the
-   first time a changeset touches product surface with no task DoD on disk,
-   emits a one-line reminder (`systemMessage` + `additionalContext`) and drops
-   a marker so it fires at most once per task. Cannot block; fails silently on
-   any missing dependency.
+1. **Collect** (`skills/dod-collect/SKILL.md`, agent-invoked) — the skill's
+   own `description` is the trigger: the agent invokes it when it's about to
+   start implementation work, not on every file touch. It builds/confirms a
+   requirements list with the user, then writes the contract via
+   `scripts/dod-write.sh`. No hook, no automatic classifier.
 2. **Write** (`scripts/dod-write.sh`, invoked by the model, not a hook) —
    creates or amends `.claude/.harness/task-dod/<task_key>.json`. First write
    must be schema-valid with non-empty `requirements`. Every write after that
    is append-only: existing requirement text can't be dropped or reworded, and
    `created_at` / `blast_radius` are immutable — only genuinely new
    requirements may be appended.
-3. **Gate** (`hooks/dod-gate.sh`, `Stop`) — blocks with a JSON reason when the
-   changeset touches product surface and either no task DoD exists, or a DoD
-   exists but `/done` hasn't run (checked via the stub-done marker). Otherwise
-   allows, and on a clean pass archives the DoD to
-   `task-dod/archive/<verified_sha>.json` and stamps the verified boundary.
-   Past that boundary, whether a later commit reopens the DoD requirement is
-   decided from `dod_range_has_product(verified_sha, HEAD)` plus uncommitted
-   tree dirt — not the session's full base..HEAD range — so a bare re-commit
-   of already-verified content (`git add && git commit`, an empty commit)
-   doesn't re-trigger the block.
-4. **Stub `/done`** (`scripts/dod-stub-done.sh`) — a stand-in for the real
-   `/done` checklist, used by the gate/tests to simulate "the checklist ran".
-   The real `/done` middle (tests, lint, app-start, fresh-agent review) is out
-   of scope for this plugin; see [`docs/base-dod.md`](docs/base-dod.md) for
-   that checklist.
-
-## Product vs. artifact surface
-
-`scripts/lib-classify.sh` decides what counts as "product surface" that
-requires a DoD. One rule, fail-closed: a changed path is product **unless** it
-matches an `artifact_paths` glob. Default globs:
-
-```
-docs/** tasks/** README* CHANGELOG* LICENSE*
-```
-
-`docs/**`/`tasks/**` match the directory or anything beneath it; `NAME*`
-matches by basename anywhere in the tree. Everything else — including new,
-unlisted top-level directories — is product, so unfamiliar areas over-trigger
-the DoD rather than silently escape the gate. Configurable via `hc_cfg
-artifact_paths`.
+3. **Gate** (`hooks/dod-gate.sh`, `Stop`) — purely structural, no classifier
+   involved:
+   - No `task-dod/<task_key>.json` on disk → allow, silent. Nothing was
+     collected, so there's nothing to verify.
+   - A contract exists but no `task-dod/verified/<task_key>-<HEAD_SHA>.json`
+     → **block**: verification hasn't run for this changeset yet.
+   - A verification result exists for `HEAD_SHA` but contains any
+     `status: "fail"` entry → **block**: fix and re-verify.
+   - A verification result exists for `HEAD_SHA` with zero failures → allow,
+     and archive the contract to `task-dod/archive/<HEAD_SHA>.json`. The next
+     task starts clean — no live contract until `dod-collect` runs again.
+4. **Verify (stub)** (`scripts/dod-stub-done.sh`) — a stand-in for the real
+   verification protocol, used by the gate/tests to simulate "the checklist
+   ran". It reads the collected contract and writes a trivially-passing
+   result (one `pass` per requirement) to
+   `task-dod/verified/<task_key>-<HEAD_SHA>.json`. **Building a real
+   verification skill/protocol that actually runs checks per requirement
+   (tests, lint, app-start, review — see
+   [`docs/base-dod.md`](docs/base-dod.md)) is future work** — this plugin
+   only wires the lifecycle around it.
 
 ## Files
 
 | Path | Role |
 |---|---|
-| `hooks/hooks.json` | Registers the `PostToolUse` nudge and `Stop` gate |
-| `scripts/dod-nudge.sh` | PostToolUse hook: one-shot reminder |
-| `scripts/dod-gate.sh` | Stop hook: blocks missing/unverified DoD |
+| `hooks/hooks.json` | Registers the `Stop` gate only — no PostToolUse hook |
+| `skills/dod-collect/SKILL.md` | Agent-invoked: build + write the DoD contract |
+| `scripts/dod-gate.sh` | Stop hook: blocks missing/failing verification |
 | `scripts/dod-write.sh` | Model-invoked writer: create/amend the DoD contract |
-| `scripts/dod-stub-done.sh` | Test/dev stand-in for the real `/done` |
-| `scripts/lib-classify.sh` | Product-vs-artifact path classifier |
+| `scripts/dod-stub-done.sh` | Test/dev stand-in that writes a passing verification result |
+| `scripts/lib-classify.sh` | Product-vs-artifact path classifier — retained but **not used for gating**; not called from `dod-gate.sh` or any hook |
 | `scripts/harness-common.sh` | Trimmed shared identity/config resolver |
 | `contracts/task-dod.schema.json` | JSON Schema for the DoD contract file |
-| `docs/base-dod.md` | The base checklist `/done` verifies against |
+| `contracts/task-dod-verified.schema.json` | JSON Schema for the verification result file |
+| `docs/base-dod.md` | The base checklist a real verifier should check against |
 | `tests/` | `test-dod.sh`, `test-dod-headless.sh`, fixtures |
 
 ## Contract shape
 
-`.claude/.harness/task-dod/<task_key>.json`:
+`.claude/.harness/task-dod/<task_key>.json` (written by `dod-collect` /
+`dod-write.sh`):
 
 ```json
 {
@@ -94,20 +95,41 @@ artifact_paths`.
 `task_key` is always injected/overwritten by the writer from the resolved
 identity — callers cannot mis-key it.
 
+## Verification-result shape
+
+`.claude/.harness/task-dod/verified/<task_key>-<verified_sha>.json` — a
+**separate file** from the contract, which stays append-only and is never
+mutated by verification:
+
+```json
+{
+  "task_key": "...",
+  "verified_sha": "...",
+  "checked_at": "...",
+  "results": [
+    { "requirement_index": 0, "status": "pass|fail|skipped", "evidence": "..." }
+  ]
+}
+```
+
+`requirement_index` is the 0-based index into the collected contract's
+`requirements[]` array — a stable reference back to the immutable contract
+without duplicating requirement text.
+
 ## Design notes
 
 - **Fail-safe = allow.** Every unexpected condition (no jq, non-git, detached
-  HEAD, mid-rebase, classifier unavailable) releases the `Stop` hook. The one
-  exception — the entire point of the plugin — is a product-surface changeset
-  with no task DoD.
+  HEAD, mid-rebase) releases the `Stop` hook. The one exception — the entire
+  point of the plugin — is a collected DoD contract with no passing
+  verification result for the current `HEAD_SHA`.
 - **Recursion brake is category-scoped**, not blanket. A repeated identical
   block category under `stop_hook_active` is released; a *different* category
-  (e.g. "no-dod" → "dod-no-done") still blocks, so the DoD-write step inside a
-  block-response cycle can't accidentally suppress the following /done-not-run
-  block.
+  (e.g. `"dod-no-verify"` → `"dod-verify-failed"`) still blocks, so a
+  verification write inside a block-response cycle can't accidentally
+  suppress a following block for a different reason.
 - **Append-only is enforced by the writer, not the schema** — a schema can't
   compare a write against the prior file on disk.
-- **Boundary re-check is range-scoped, not HEAD-moved.** After a verified
-  boundary, HEAD merely advancing is not itself fresh-task evidence — only
-  genuinely new product-surface content in `verified_sha..HEAD` (or new
-  uncommitted dirt) reopens the gate.
+- **No automatic re-trigger.** Once a contract is archived, Stop stays quiet
+  on later product changes until `dod-collect` is invoked again — this
+  plugin does not infer "you should have collected a DoD" from a changeset;
+  that inference was the source of the plugin's original false positives.
