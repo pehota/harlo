@@ -9,13 +9,20 @@
 # Exit: non-zero (1) on any HARD problem (gate not winnable as-is); 0 when
 # winnable (warnings allowed). Every problem is printed with exact remediation.
 #
-# Preflight NEVER seeds the tree baseline. Preflight can run AFTER edits, so
-# snapshotting the current porcelain here would capture the agent's own work as
-# "pre-existing" and later let it pass the gate (Invariant 2 violation). The
-# tree baseline is pinned ONLY by baseline-snapshot.sh at SessionStart, which
-# reliably runs before edits. A missing baseline → the classifier degrades to
-# STRICT (everything blocks) — the safe direction — so preflight only REPORTS
-# it and tells the user to restart the session; it does not paper over it.
+# Preflight does NOT seed the tree baseline in the general case. Preflight can
+# run AFTER edits, so snapshotting the current porcelain here would capture the
+# agent's own work as "pre-existing" and later let it pass the gate (Invariant
+# 2 violation). The tree baseline is normally pinned ONLY by
+# dod-session-start.sh at SessionStart, which reliably runs before edits. A
+# missing baseline → the classifier degrades to STRICT (everything blocks) —
+# the safe direction — so preflight REPORTS it and tells the user to restart
+# the session.
+#
+# ONE narrow exception (see Check 3 below): a brand-new TASK-mode key (a
+# branch created mid-session, never seen by SessionStart) with a GENUINELY
+# CLEAN working tree is safe to seed on the spot — there is nothing in the
+# tree to launder as "pre-existing" when the tree is already empty of changes.
+# Every other missing-baseline case still requires a restart.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -85,12 +92,40 @@ if [ ! -f "$DIRTY_FILE" ]; then
   # Missing tree baseline → the classifier degrades to STRICT (every current
   # change blocks). This is a GUARANTEED deadlock, not a mere degrade: without a
   # baseline, hc_tree_status treats every PRE-EXISTING file as introduced → the
-  # gate blocks on files the agent never touched → /done can never pass. So this
-  # is a HARD problem, not a warning. Preflight does NOT seed it: preflight can
-  # run AFTER edits, so snapshotting live porcelain here would capture the
-  # agent's own work as "pre-existing" and later let it pass the gate. Only
-  # SessionStart (baseline-snapshot.sh) — which runs before edits — may pin it.
-  prob "no pinned tree baseline ($DIRTY_FILE) — the SessionStart hook has not recorded it, so tree classification degrades to STRICT: the gate will treat ALL pre-existing files as yours and block forever (guaranteed deadlock). Remediation: restart the session so SessionStart (baseline-snapshot.sh) records the tree baseline before you edit; preflight will NOT seed it (it may run after edits, which would whitelist your own work)."
+  # gate blocks on files the agent never touched → /done can never pass.
+  #
+  # NARROW SAFE EXCEPTION — new TASK KEY, CLEAN tree: this fires whenever a
+  # branch is created/switched to MID-SESSION (dod-session-start.sh only pins a
+  # baseline for whatever branch was checked out at session start; a task key
+  # is derived fresh from the CURRENT branch every hc_resolve call, so a new
+  # branch is a brand-new, never-before-seen task key with no tree-base file of
+  # its own). The general "preflight never seeds" rule exists because preflight
+  # can run AFTER edits, and snapshotting live porcelain then would capture the
+  # agent's own uncommitted work as "pre-existing" (whitelisting it). But when
+  # the tree is GENUINELY CLEAN (`git status --porcelain` empty) right now,
+  # there is nothing to launder — an empty baseline is correct and safe to pin
+  # on the spot, exactly as if SessionStart had run on this branch. Only
+  # applies in TASK mode (a real branch != trunk); SESSION mode still requires
+  # a restart (its baseline is per-session, not per-branch, so there is no
+  # equivalent "this key has simply never been seen" case).
+  if [ "${HC_MODE:-}" = "task" ]; then
+    LIVE_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)
+    if [ -z "$LIVE_STATUS" ]; then
+      TMP_DIRTY="${DIRTY_FILE}.tmp.$$"
+      mkdir -p "$(dirname "$DIRTY_FILE")" 2>/dev/null
+      if git -C "$PROJECT_DIR" status --porcelain > "$TMP_DIRTY" 2>/dev/null \
+         && mv -f "$TMP_DIRTY" "$DIRTY_FILE" 2>/dev/null; then
+        warn "no pinned tree baseline for task_key '${HC_TASK_KEY:-unknown}' (new branch created mid-session) — tree was clean, so it was safely seeded on the spot; no restart needed."
+      else
+        rm -f "$TMP_DIRTY" 2>/dev/null
+        prob "no pinned tree baseline ($DIRTY_FILE) and the on-the-spot seed attempt failed — restart the session so SessionStart (dod-session-start.sh) records the tree baseline before you edit."
+      fi
+    else
+      prob "no pinned tree baseline ($DIRTY_FILE) for task_key '${HC_TASK_KEY:-unknown}' (new branch created mid-session) — the tree currently has uncommitted changes, so it is NOT safe to auto-seed here (that would whitelist your own in-progress work as pre-existing). Remediation: commit or stash your current changes, then restart the session so SessionStart records the baseline before you resume editing."
+    fi
+  else
+    prob "no pinned tree baseline ($DIRTY_FILE) — the SessionStart hook has not recorded it, so tree classification degrades to STRICT: the gate will treat ALL pre-existing files as yours and block forever (guaranteed deadlock). Remediation: restart the session so SessionStart (dod-session-start.sh) records the tree baseline before you edit; preflight will NOT seed it (it may run after edits, which would whitelist your own work)."
+  fi
 fi
 
 # --- Check 3.5: session-mode HEAD diverged since baseline (P2-a, #6) --------
