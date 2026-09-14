@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "required": [
+    "contract_version",
+    "detected",
+    "overrides",
+    "max_fix_attempts",
+    "max_review_rounds",
+    "baseline_snapshot",
+    "start_timeout",
+    "untracked_policy",
+    "min_review_level"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "source_fingerprint": { "type": "string" },
+    "detected": {
+      "type": "object",
+      "properties": {
+        "package_manager": { "type": ["string", "null"] },
+        "test": { "type": ["string", "null"] },
+        "build": { "type": ["string", "null"] },
+        "start": { "type": ["string", "null"] },
+        "lint": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "overrides": { "type": "object", "additionalProperties": true },
+    "max_fix_attempts": { "type": "integer" },
+    "max_review_rounds": { "type": "integer" },
+    "baseline_snapshot": { "type": "boolean" },
+    "deploy_check_cmd": { "type": ["string", "null"] },
+    "start_check_cmd": { "type": ["string", "null"] },
+    "start_timeout": { "type": "integer" },
+    "trunk": { "type": ["string", "null"] },
+    "untracked_policy": { "enum": ["baseline", "strict"] },
+    "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
+    "artifact_paths": {
+      "description": "Exclude list for the task-DoD walking skeleton (dod/). A changed path matched by ANY of these globs is ARTIFACT surface (spec/plan/notes — no task DoD required); a path matched by NONE is PRODUCT surface. Fails CLOSED: an unlisted new directory counts as product. Deliberately NOT a blanket **/*.md — DOD.md and dod-protocol.md ARE the harness's behavioural contract. Read via dod/lib-classify.sh; default in done-config.default.json.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "headless_max_turns": { "type": "integer" },
+    "headless_timeout_minutes": { "type": "integer" },
+    "worktree": {
+      "description": "Worktree provisioning block, owned by worktree-detect.sh. Independently fingerprinted from the top-level detected block so the two never invalidate each other. detected.setup_cmd is ALWAYS null; a runnable setup command only ever comes from overrides.setup_cmd, set by a human.",
+      "type": "object",
+      "properties": {
+        "source_fingerprint": { "type": "string" },
+        "detected": { "type": "object", "additionalProperties": true },
+        "overrides": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

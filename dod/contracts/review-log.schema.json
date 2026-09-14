@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "required": [
+    "contract_version",
+    "reviewed_sha",
+    "min_review_level",
+    "files_reviewed",
+    "findings"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "reviewed_sha": { "type": "string" },
+    "min_review_level": { "enum": ["low", "medium", "high", "critical"] },
+    "files_reviewed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "file", "line", "desc"],
+        "properties": {
+          "severity": { "enum": ["critical", "high", "medium", "low"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "desc": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "open_findings": { "type": "integer" },
+    "advisory_findings": { "type": "integer" }
+  },
+  "additionalProperties": true
+}
