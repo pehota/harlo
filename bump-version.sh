@@ -1,10 +1,12 @@
 #!/bin/bash
 #
-# bump-version.sh [--dry-run] [--tag] [<base> <head>]
+# bump-version.sh <plugin_dir> [--dry-run] [--tag] [<base> <head>]
 #
-# Computes the required completion-harness version for a commit range and, by
-# default, writes it into plugin.json and commits the bump. Same version math
-# as check-version.sh (both source version-lib.sh).
+# Computes the required version for <plugin_dir> over a commit range and, by
+# default, writes it into <plugin_dir>/.claude-plugin/plugin.json and commits
+# the bump. Same version math as check-version.sh (both source
+# version-lib.sh), and the same path-scoping: only commits that touched
+# <plugin_dir> count toward its level.
 #
 # Range:
 #   <base> <head>     explicit range if two positional args are given
@@ -16,8 +18,8 @@
 # Modes:
 #   --dry-run   print the recommendation only; make NO changes.
 #   (default)   write plugin.json (jq, preserving other keys), `git add` it,
-#               and commit  `chore(release): bump completion-harness to X.Y.Z`.
-#   --tag       additionally `git tag vX.Y.Z` (only in write mode).
+#               and commit  `chore(release): bump <plugin_dir> to X.Y.Z`.
+#   --tag       additionally `git tag <plugin_dir>-vX.Y.Z` (only in write mode).
 #
 # If no bump is needed (level none, or plugin.json already >= required),
 # prints "no bump required" and exits 0 without committing.
@@ -30,8 +32,6 @@ set -o pipefail   # so a `git log | vlib_*` pipeline surfaces a git-log failure
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" || exit 1
 # shellcheck source=version-lib.sh
 . "$SCRIPT_DIR/version-lib.sh" || { echo "bump-version: cannot source version-lib.sh" >&2; exit 1; }
-
-PLUGIN_PATH="completion-harness/.claude-plugin/plugin.json"
 
 die() { echo "bump-version: $*" >&2; exit 1; }
 
@@ -47,14 +47,18 @@ for arg in "$@"; do
   esac
 done
 
+[ "${#POS[@]}" -ge 1 ] || die "usage: bump-version.sh <plugin_dir> [--dry-run] [--tag] [<base> <head>]"
+PLUGIN_DIR="${POS[0]%/}"
+PLUGIN_PATH="$PLUGIN_DIR/.claude-plugin/plugin.json"
+
 command -v git >/dev/null 2>&1 || die "git not found"
 command -v jq  >/dev/null 2>&1 || die "jq not found"
 
 # --- resolve range ----------------------------------------------------------
-if [ "${#POS[@]}" -eq 2 ]; then
-  BASE="${POS[0]}"
-  HEAD="${POS[1]}"
-elif [ "${#POS[@]}" -eq 0 ]; then
+if [ "${#POS[@]}" -eq 3 ]; then
+  BASE="${POS[1]}"
+  HEAD="${POS[2]}"
+elif [ "${#POS[@]}" -eq 1 ]; then
   HEAD="$(git rev-parse HEAD)" || die "cannot resolve HEAD"
   if git rev-parse --verify origin/main >/dev/null 2>&1; then
     # Prefer merge-base so we only account for commits unique to this branch.
@@ -66,7 +70,7 @@ elif [ "${#POS[@]}" -eq 0 ]; then
       || die "cannot find root commit"
   fi
 else
-  die "usage: bump-version.sh [--dry-run] [--tag] [<base> <head>]"
+  die "usage: bump-version.sh <plugin_dir> [--dry-run] [--tag] [<base> <head>]"
 fi
 
 git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 || die "bad base sha: $BASE"
@@ -75,7 +79,8 @@ git rev-parse --verify "$HEAD^{commit}" >/dev/null 2>&1 || die "bad head sha: $H
 # --- compute level + versions (mirrors check-version.sh) --------------------
 # Pipe git log STRAIGHT into the lib — capturing it in a variable would strip
 # the NUL record delimiters ($(...) drops NUL bytes) and collapse all records.
-LEVEL="$(git log --format='%s%n%b%x00' "$BASE..$HEAD" | vlib_level_from_subjects)" \
+# `-- <plugin_dir>` restricts to commits that touched this plugin's own tree.
+LEVEL="$(git log --format='%s%n%b%x00' "$BASE..$HEAD" -- "$PLUGIN_DIR" | vlib_level_from_subjects)" \
   || die "level computation failed"
 
 BASE_JSON="$(git show "$BASE:$PLUGIN_PATH" 2>/dev/null)"
@@ -93,11 +98,11 @@ CUR_VER="$(jq -r '.version' "$PLUGIN_PATH" 2>/dev/null)" || die "cannot parse wo
 
 REQUIRED="$(vlib_bump "$BASE_VER" "$LEVEL")" || die "vlib_bump failed (base=$BASE_VER level=$LEVEL)"
 
-echo "bump-version: range=$BASE..$HEAD level=$LEVEL base_version=$BASE_VER current_version=$CUR_VER required=$REQUIRED"
+echo "bump-version: plugin=$PLUGIN_DIR range=$BASE..$HEAD level=$LEVEL base_version=$BASE_VER current_version=$CUR_VER required=$REQUIRED"
 
 # --- no-bump short circuits --------------------------------------------------
 if [ "$LEVEL" = "none" ]; then
-  echo "no bump required (no version-affecting commits in range)"
+  echo "no bump required (no version-affecting commits touching $PLUGIN_DIR in range)"
   exit 0
 fi
 
@@ -123,13 +128,13 @@ mv "$TMP" "$PLUGIN_PATH" || die "cannot write $PLUGIN_PATH"
 git add "$PLUGIN_PATH" || die "git add failed"
 # Pathspec-scoped commit: only the version file, never sweep other staged changes
 # (this runs unattended from the pre-push hook).
-git commit -m "chore(release): bump completion-harness to $REQUIRED" -- "$PLUGIN_PATH" >/dev/null \
+git commit -m "chore(release): bump $PLUGIN_DIR to $REQUIRED" -- "$PLUGIN_PATH" >/dev/null \
   || die "git commit failed"
 echo "bump-version: committed bump to $REQUIRED"
 
 if [ "$DO_TAG" -eq 1 ]; then
-  git tag "v$REQUIRED" || die "git tag v$REQUIRED failed"
-  echo "bump-version: tagged v$REQUIRED"
+  git tag "${PLUGIN_DIR}-v$REQUIRED" || die "git tag ${PLUGIN_DIR}-v$REQUIRED failed"
+  echo "bump-version: tagged ${PLUGIN_DIR}-v$REQUIRED"
 fi
 
 exit 0

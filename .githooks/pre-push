@@ -50,27 +50,33 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   break
 done
 
+PLUGINS="completion-harness dod"
+
 if [ -z "$HEAD" ] || [ -z "$BASE" ]; then
   # Nothing pushable determined (e.g. only deletes) — let git proceed.
   echo "pre-push: no pushable range determined — skipping version check."
 else
-  # --- 2. version enforcement -----------------------------------------------
-  echo "pre-push: checking version for $BASE..$HEAD …"
-  bash check-version.sh "$BASE" "$HEAD"
-  rc=$?
-  if [ "$rc" -eq 3 ]; then
-    echo "pre-push: version under-bumped — auto-bumping…" >&2
-    if ! bash bump-version.sh "$BASE" "$HEAD"; then
-      echo "pre-push: auto-bump FAILED — push aborted." >&2
+  # --- 2. version enforcement (each plugin independently) --------------------
+  # Each plugin has its own version, bumped only by commits that touched its
+  # own directory (check-version.sh / bump-version.sh path-scope the range).
+  for plugin in $PLUGINS; do
+    echo "pre-push: checking version for $plugin ($BASE..$HEAD) …"
+    bash check-version.sh "$plugin" "$BASE" "$HEAD"
+    rc=$?
+    if [ "$rc" -eq 3 ]; then
+      echo "pre-push: $plugin under-bumped — auto-bumping…" >&2
+      if ! bash bump-version.sh "$plugin" "$BASE" "$HEAD"; then
+        echo "pre-push: auto-bump FAILED for $plugin — push aborted." >&2
+        exit 1
+      fi
+      echo "pre-push: auto-bumped $plugin and committed — run your push again to include it." >&2
+      exit 1
+    elif [ "$rc" -ne 0 ]; then
+      echo "pre-push: version check errored for $plugin (rc=$rc) — push aborted. (bypass: git push --no-verify)" >&2
       exit 1
     fi
-    echo "pre-push: auto-bumped and committed — run your push again to include it." >&2
-    exit 1
-  elif [ "$rc" -ne 0 ]; then
-    echo "pre-push: version check errored (rc=$rc) — push aborted. (bypass: git push --no-verify)" >&2
-    exit 1
-  fi
-  echo "pre-push: version OK."
+    echo "pre-push: $plugin version OK."
+  done
 fi
 
 # --- 3. tests (run against an isolated worktree of the pushed commit) ------

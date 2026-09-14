@@ -1,12 +1,16 @@
 #!/bin/bash
 #
-# check-version.sh <base_sha> <head_sha>
+# check-version.sh <plugin_dir> <base_sha> <head_sha>
 #
-# Decides whether plugin.json's declared version is high enough for the changes
-# in the range <base_sha>..<head_sha>, given the conventional commits in it.
+# Decides whether <plugin_dir>/.claude-plugin/plugin.json's declared version
+# is high enough for the changes in the range <base_sha>..<head_sha>, given
+# the conventional commits that TOUCHED <plugin_dir> in that range. Each
+# plugin in this repo is versioned independently — a commit that never
+# touches <plugin_dir> never affects its required version.
 #
 # It computes:
-#   level        — highest release level across the range's commits
+#   level        — highest release level across the range's commits that
+#                  touched <plugin_dir> (path-scoped `git log -- <plugin_dir>`)
 #   base_version — plugin.json version AT <base_sha> (0.0.0 if the file was
 #                  absent there)
 #   current_ver  — plugin.json version in the WORKING TREE right now
@@ -24,13 +28,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" || exit 1
 # shellcheck source=version-lib.sh
 . "$SCRIPT_DIR/version-lib.sh" || { echo "check-version: cannot source version-lib.sh" >&2; exit 1; }
 
-PLUGIN_PATH="completion-harness/.claude-plugin/plugin.json"
-
 die() { echo "check-version: $*" >&2; exit 1; }
 
-[ "$#" -eq 2 ] || die "usage: check-version.sh <base_sha> <head_sha>"
-BASE="$1"
-HEAD="$2"
+[ "$#" -eq 3 ] || die "usage: check-version.sh <plugin_dir> <base_sha> <head_sha>"
+PLUGIN_DIR="${1%/}"
+BASE="$2"
+HEAD="$3"
+PLUGIN_PATH="$PLUGIN_DIR/.claude-plugin/plugin.json"
 
 command -v git >/dev/null 2>&1 || die "git not found"
 command -v jq  >/dev/null 2>&1 || die "jq not found"
@@ -38,11 +42,13 @@ command -v jq  >/dev/null 2>&1 || die "jq not found"
 git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 || die "bad base sha: $BASE"
 git rev-parse --verify "$HEAD^{commit}" >/dev/null 2>&1 || die "bad head sha: $HEAD"
 
-# --- level from the range's commits -----------------------------------------
+# --- level from the range's commits, PATH-SCOPED to this plugin -------------
 # NUL-delimited <subject>\n<body> records, piped STRAIGHT into the lib. We must
 # NOT capture the stream in a shell variable first: `$(...)` strips NUL bytes,
 # which would collapse all records into one and break multi-commit detection.
-LEVEL="$(git log --format='%s%n%b%x00' "$BASE..$HEAD" | vlib_level_from_subjects)" \
+# `-- <plugin_dir>` restricts to commits that touched this plugin's own tree —
+# a commit scoped to a sibling plugin never affects this one's required bump.
+LEVEL="$(git log --format='%s%n%b%x00' "$BASE..$HEAD" -- "$PLUGIN_DIR" | vlib_level_from_subjects)" \
   || die "level computation failed"
 
 # --- base version (at BASE) --------------------------------------------------
@@ -69,7 +75,7 @@ vlib_ge "$CUR_VER" "$REQUIRED"
 GE_RC=$?
 [ "$GE_RC" -eq 2 ] && die "malformed version in comparison (current=$CUR_VER required=$REQUIRED)"
 
-echo "check-version: level=$LEVEL base_version=$BASE_VER current_version=$CUR_VER required=$REQUIRED"
+echo "check-version: plugin=$PLUGIN_DIR level=$LEVEL base_version=$BASE_VER current_version=$CUR_VER required=$REQUIRED"
 
 if [ "$GE_RC" -eq 0 ]; then
   echo "check-version: OK — current ($CUR_VER) >= required ($REQUIRED)"

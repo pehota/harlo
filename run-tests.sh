@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Run the completion-harness test suites.
+# Run every plugin's test suites (completion-harness, dod).
 #
-# The suites are self-contained and tracked under completion-harness/tests/. Each
-# one sources/execs the REAL bundle scripts (completion-harness/scripts/*), which
-# resolve their sibling contracts/ via BASH_SOURCE — so no install step is needed.
+# The suites are self-contained and tracked under <plugin>/tests/. Each one
+# sources/execs the REAL bundle scripts (<plugin>/scripts/*), which resolve
+# their sibling contracts/ via BASH_SOURCE — so no install step is needed.
 # Install shipping itself is verified by completion-harness/tests/test-install.sh,
 # which installs into a throwaway dir and asserts the shipped .claude/ layout.
 # Each test-*.sh ends with `[ "$FAIL" -eq 0 ]`, so its exit code is meaningful;
@@ -17,8 +17,8 @@ cd "$(dirname "$0")" || exit 1
 fail=0
 total=0
 
-# Root-level version suite plus every self-contained completion-harness suite.
-for t in test-version.sh completion-harness/tests/test-*.sh; do
+# Root-level version suite plus every self-contained plugin suite.
+for t in test-version.sh completion-harness/tests/test-*.sh dod/tests/test-*.sh; do
   [ -f "$t" ] || continue
   # test-helpers.sh is a sourced library, not a suite — it matches the glob
   # above by name but has no PASS/FAIL of its own to report.
