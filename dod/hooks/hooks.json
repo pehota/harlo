@@ -1,5 +1,8 @@
 {
   "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/dod-session-start.sh\"" } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/dod-gate.sh\"", "timeout": 10 } ] }
     ]

@@ -32,7 +32,19 @@ die() { printf 'dod-stub-done: %s\n' "$1" >&2; exit "${2:-1}"; }
 hc_has_jq || die "jq is required" 3
 hc_has_fn hc_resolve || die "harness-common.sh did not load" 3
 
-SESSION_ID="${1:-${DOD_SESSION_ID:-unknown-session}}"
+# Same precedence as dod-write.sh / dod-verify-write-result.sh: an explicit
+# arg wins, then the current-session marker SessionStart (dod-session-start.sh)
+# writes from its own real hook stdin, then DOD_SESSION_ID (tests), then
+# "unknown-session" last resort. dod-gate.sh's own block message points a live
+# agent at this script to remediate — without the marker step it would key the
+# verification result under an id that never matches what the gate resolves
+# from ITS real hook stdin, reproducing the exact silent forever-block this
+# marker was introduced to close.
+SESSION_ID="${1:-}"
+if [ -z "$SESSION_ID" ] && [ -f "$PROJECT_DIR/.claude/.harness/current-session" ]; then
+  SESSION_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
+fi
+[ -n "$SESSION_ID" ] || SESSION_ID="${DOD_SESSION_ID:-unknown-session}"
 git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo" 3
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 [ -n "$HEAD_SHA" ] || die "no HEAD" 3

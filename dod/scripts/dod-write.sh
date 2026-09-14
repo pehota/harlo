@@ -48,9 +48,18 @@ fi
 printf '%s' "$PAYLOAD" | jq . >/dev/null 2>&1 || die "input is not valid JSON"
 
 # --- resolve identity --------------------------------------------------------
+# Precedence: an explicit __session_id in the payload (test/override escape
+# hatch) → the authoritative current-session marker SessionStart
+# (dod-session-start.sh) writes from its OWN hook stdin → DOD_SESSION_ID env
+# override (tests) → "unknown-session" last resort. Without the marker step,
+# every real invocation fell through to the literal "unknown-session", which
+# almost never matches the real id dod-gate.sh reads from ITS OWN hook stdin —
+# a silent forever-block (the contract gets written under a key the gate never
+# checks). Same precedence dod-verify-write-result.sh already uses.
 SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.__session_id // ""' 2>/dev/null)
-# Fallback: the harness resolver needs a session id only in session mode; in
-# task mode the branch is the key. Allow an env override for the tests.
+if [ -z "$SESSION_ID" ] && [ -f "$PROJECT_DIR/.claude/.harness/current-session" ]; then
+  SESSION_ID=$(cat "$PROJECT_DIR/.claude/.harness/current-session" 2>/dev/null)
+fi
 [ -n "$SESSION_ID" ] || SESSION_ID="${DOD_SESSION_ID:-unknown-session}"
 hc_resolve "$SESSION_ID" 2>/dev/null
 [ -n "$HARNESS_DIR" ] || die "could not resolve HARNESS_DIR" 3
