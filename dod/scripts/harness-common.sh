@@ -102,6 +102,83 @@ hc_has_jq() {
 #                            each other's sweep window.
 #   HC_HOOK_SOURCE           .source
 #   HC_HOOK_STOP_ACTIVE      .stop_hook_active (text "true"/"false")
+# ---------------------------------------------------------------------------
+# hc__harness_dir [project_root]
+#
+# Prints "<project_root>/$HC_HARNESS_REL" ($PROJECT_DIR when project_root is
+# omitted). Single place callers derive the harness state dir path from a
+# root other than the already-resolved $HARNESS_DIR global (e.g. a worktree
+# root) — do not re-spell the concatenation at call sites.
+hc__harness_dir() {
+  printf '%s/%s\n' "${1:-$PROJECT_DIR}" "$HC_HARNESS_REL"
+}
+
+# ---------------------------------------------------------------------------
+# hc_hash_stdin
+#
+# Deterministic hash of stdin, printed to stdout. Prefers sha256sum, then
+# `shasum -a 256`, then cksum as a stable-ish last resort so a host with neither
+# coreutils flavour still produces a value that CHANGES when the input changes —
+# which is all a fingerprint needs. Never fails the caller (an unhashable stdin
+# yields empty; callers substitute their own sentinel).
+#
+# Shared by every probe that fingerprints its own source (done-detect.sh's
+# `detected` block, worktree-detect.sh's `worktree.detected` block), so two
+# blocks living in the SAME config file can never drift onto different digests.
+hc_hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 2>/dev/null | cut -d' ' -f1
+  else
+    cksum 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# hc_pkg_probe [proj]
+#
+# LOCKFILE-DRIVEN Node package-manager probe. Prints nothing; sets:
+#   HC_PKG_MGR     pnpm | yarn | npm | ""   ("" = not a Node project at all)
+#   HC_LOCKFILE    pnpm-lock.yaml | yarn.lock | package-lock.json | none
+#   HC_YARN_BERRY  1 when a .yarnrc.yml sits beside yarn.lock, else 0
+#
+# Probe files, never guess — the same discipline as the rest of Step 0. Order is
+# deliberate: a repo carrying more than one lockfile resolves by precedence
+# (pnpm > yarn > npm), and a bare package.json with NO lockfile still yields
+# "npm" because npm is the default runner for a Node project. HC_LOCKFILE stays
+# "none" in that last case: a lockfile appearing or disappearing is a meaningful
+# source change and must move a fingerprint, which it only can if the probe
+# reports the lockfile SEPARATELY from the manager.
+#
+# HC_YARN_BERRY exists because yarn's frozen-install flag is version-dependent
+# (`--immutable` on berry, `--frozen-lockfile` on classic) and guessing wrong
+# turns provisioning into a hard failure. `.yarnrc.yml` is berry-only, so its
+# presence is a FILE PROBE, not a version heuristic.
+#
+# Never fails; a missing/unreadable project dir degrades every global to the
+# not-a-Node-project answer.
+hc_pkg_probe() {
+  local proj="${1:-${PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
+
+  HC_PKG_MGR=""
+  HC_LOCKFILE="none"
+  HC_YARN_BERRY=0
+
+  if [ -f "$proj/pnpm-lock.yaml" ]; then
+    HC_PKG_MGR="pnpm"; HC_LOCKFILE="pnpm-lock.yaml"
+  elif [ -f "$proj/yarn.lock" ]; then
+    HC_PKG_MGR="yarn"; HC_LOCKFILE="yarn.lock"
+    [ -f "$proj/.yarnrc.yml" ] && HC_YARN_BERRY=1
+  elif [ -f "$proj/package-lock.json" ]; then
+    HC_PKG_MGR="npm"; HC_LOCKFILE="package-lock.json"
+  elif [ -f "$proj/package.json" ]; then
+    HC_PKG_MGR="npm"   # default runner for a Node project with no lockfile
+  fi
+
+  return 0
+}
+
 hc_read_hook_input() {
   HC_HOOK_RAW=$(cat 2>/dev/null)
   HC_HOOK_SESSION_ID=""
@@ -898,6 +975,34 @@ $current
 EOF
 
   return 0
+}
+
+# hc_tree_remediation — build the exact remediation text from the globals set by
+# the most recent hc_tree_status call. Names ONLY the blocking (introduced)
+# files. Pre-existing (warned-only) entries are intentionally NOT surfaced —
+# they are irrelevant to the task. Prints to stdout.
+#
+# DEGRADED BASELINE (HC_TREE_BASELINE_MISSING=1). Without a baseline file the
+# classifier has no way to tell the session's own work from a two-month-old
+# worktree, so "changes you introduced" would be an assertion the harness cannot
+# support — and a false one destroys trust in the gate. The verdict is unchanged
+# (these paths still block); only the CLAIM is softened, and the remediation
+# names the real repair: restart the session so SessionStart rewrites the
+# baseline. Kept as a drop-in replacement for the parenthetical, so every caller
+# ("finish the slice (...)", the preflight problem line, the writer's refusal)
+# inherits the honest wording without its own branch.
+hc_tree_remediation() {
+  local msg=""
+  local list
+  if [ -n "$HC_TREE_BLOCKERS" ]; then
+    list=$(printf '%s' "$HC_TREE_BLOCKERS" | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g')
+    if [ "${HC_TREE_BASELINE_MISSING:-0}" = "1" ]; then
+      msg="no session baseline is recorded, so authorship cannot be determined — these changes MAY predate this session: ${list}; restart the session (SessionStart rewrites the baseline), then commit or stash whatever is yours"
+    else
+      msg="commit or stash these changes you introduced: ${list}"
+    fi
+  fi
+  printf '%s' "$msg"
 }
 
 # ---------------------------------------------------------------------------
