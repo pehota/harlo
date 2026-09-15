@@ -17,7 +17,8 @@
 #   1  SessionStart writes the current-session marker + baseline .sha/.dirty
 #   2  dod-write.sh with NO __session_id resolves via the marker, not "unknown-session"
 #   3  task mode (feature branch): key is br-<branch>, matches what dod-gate.sh
-#      resolves from the SAME real session id — full round trip blocks correctly
+#      AND dod-complete-task.sh resolve from the SAME real session id — full
+#      round trip (write contract, arm the claim latch, gate) blocks correctly
 #   4  compact source preserves an existing session baseline (does not re-seed)
 #   5  non-git dir: SessionStart no-ops without crashing
 #
@@ -30,6 +31,7 @@ SCRIPTS="$ROOT/scripts"
 SESSION_START="$SCRIPTS/dod-session-start.sh"
 WRITE="$SCRIPTS/dod-write.sh"
 GATE="$SCRIPTS/dod-gate.sh"
+CLAIM="$SCRIPTS/dod-complete-task.sh"
 
 # shellcheck source=./test-helpers.sh
 . "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
@@ -55,6 +57,12 @@ run_gate() {
   printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$2" \
     | CLAUDE_PROJECT_DIR="$1" bash "$GATE" 2>/dev/null
 }
+
+# arm_claim <repo> <session_id> — the gate is claim-driven and stays silent
+# until dod-complete-task.sh arms task-dod/claim-<task_key>. Calling the REAL
+# script is the point of this suite: it derives the task key from the same
+# session id the gate does, so a keying mismatch between the two fails here.
+arm_claim() { CLAUDE_PROJECT_DIR="$1" bash "$CLAIM" "$2" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
 # Case 1 — SessionStart writes current-session marker + baseline .sha/.dirty.
@@ -106,6 +114,10 @@ RC=$?
 [ -f "$R/.claude/.harness/task-dod/br-feature-x.json" ] \
   && ok "case 3: contract written under the branch-derived key" \
   || bad "case 3: contract keyed by branch" "$(ls "$R/.claude/.harness/task-dod/" 2>/dev/null)"
+arm_claim "$R" s3
+[ -f "$R/.claude/.harness/task-dod/claim-br-feature-x" ] \
+  && ok "case 3: the claim latch is keyed the same way the contract is (br-feature-x)" \
+  || bad "case 3: claim latch keyed by branch" "$(ls "$R/.claude/.harness/task-dod/" 2>/dev/null)"
 GATE_OUT=$(run_gate "$R" s3)
 is_block "$GATE_OUT" && ok "case 3: gate with the SAME real session id finds + blocks on the contract (keys match)" \
   || bad "case 3: gate finds the contract written by dod-write.sh" "$GATE_OUT"

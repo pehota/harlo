@@ -16,6 +16,14 @@
 #   8  verified + archived, then a NEW DoD collected         → fresh cycle works
 #   9  non-git / detached HEAD / mid-rebase                  → no-op, never blocks
 #
+# THE GATE IS CLAIM-DRIVEN. dod-gate.sh is SILENT until the agent claims it is
+# finished by running dod-complete-task.sh, which arms
+# task-dod/claim-<task_key>. Every case below that expects a BLOCK or an
+# ARCHIVE therefore arms the latch first, via arm_claim() — which shells out to
+# the REAL dod-complete-task.sh rather than hand-writing the latch file, so a
+# keying mismatch between the writer and the gate fails the suite instead of
+# hiding in it.
+#
 # Runs against the source-tree scripts (dod/scripts), resolved relative to
 # this test — no install needed. Each case builds an isolated throwaway git
 # repo with CLAUDE_PROJECT_DIR / CLAUDE_PLUGIN_ROOT pointed at it. PASS/FAIL
@@ -28,6 +36,7 @@ DOD="$ROOT/scripts"
 WRITE="$DOD/dod-write.sh"
 GATE="$DOD/dod-gate.sh"
 STUB="$DOD/dod-stub-done.sh"
+CLAIM="$DOD/dod-complete-task.sh"
 
 # shellcheck source=./test-helpers.sh
 . "$(cd "$(dirname "$0")" && pwd)/test-helpers.sh"
@@ -62,6 +71,11 @@ run_gate_active() {
 
 dodfile() { printf '%s/.claude/.harness/task-dod/%s.json' "$1" "$2"; }
 
+# arm_claim <repo> <session_id> — run the REAL claim script, which arms
+# task-dod/claim-<task_key>. Deliberately NOT a hand-written latch file: the
+# point is to exercise the writer's own task-key derivation against the gate's.
+arm_claim() { CLAUDE_PROJECT_DIR="$1" bash "$CLAIM" "$2" >/dev/null 2>&1; }
+
 # ---------------------------------------------------------------------------
 # Case 1 — no collected DoD: Stop quiet, regardless of what changed.
 # ---------------------------------------------------------------------------
@@ -78,10 +92,11 @@ R=$(make_repo task)
 echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
 printf '{"__session_id":"c2","created_at":"2026-01-01T00:00:00Z","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"does X","origin":"prompt","added_at":"t"}]}' \
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
+arm_claim "$R" c2
 OUT=$(run_gate "$R" c2)
 is_block "$OUT" && ok "case 2: DoD present, no verification result → Stop blocks" \
   || bad "case 2: DoD present, no verification result → Stop blocks" "$OUT"
-printf '%s' "$OUT" | jq -e '.reason | test("has not run")' >/dev/null 2>&1 \
+printf '%s' "$OUT" | jq -e '.reason | test("no verification result")' >/dev/null 2>&1 \
   && ok "case 2: block reason names the missing verification" \
   || bad "case 2: block reason names the missing verification" "$OUT"
 
@@ -93,6 +108,7 @@ echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev
 printf '{"__session_id":"c3","created_at":"2026-01-01T00:00:00Z","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"does X","origin":"prompt","added_at":"t"}]}' \
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
 CLAUDE_PROJECT_DIR="$R" bash "$STUB" c3 >/dev/null 2>&1
+arm_claim "$R" c3
 OUT=$(run_gate "$R" c3)
 [ -z "$OUT" ] && ok "case 3: DoD present + passing verification → Stop allows (empty stdout)" \
   || bad "case 3: DoD present + passing verification → Stop allows" "$OUT"
@@ -114,6 +130,7 @@ HEAD_SHA=$(git -C "$R" rev-parse HEAD)
 mkdir -p "$R/.claude/.harness/task-dod/verified"
 printf '{"task_key":"br-feature-x","verified_sha":"%s","checked_at":"t","results":[{"requirement_index":0,"status":"fail","evidence":"broke"}]}' "$HEAD_SHA" \
   > "$R/.claude/.harness/task-dod/verified/br-feature-x-${HEAD_SHA}.json"
+arm_claim "$R" c4
 OUT=$(run_gate "$R" c4)
 is_block "$OUT" && ok "case 4: verification result with a failing requirement → Stop blocks" \
   || bad "case 4: verification result with a failure → Stop blocks" "$OUT"
@@ -134,6 +151,7 @@ printf '{"__session_id":"c5","created_at":"2026-01-01T00:00:00Z","blast_radius":
 HEAD_SHA=$(git -C "$R" rev-parse HEAD)
 mkdir -p "$R/.claude/.harness/task-dod/verified"
 printf 'not json' > "$R/.claude/.harness/task-dod/verified/br-feature-x-${HEAD_SHA}.json"
+arm_claim "$R" c5
 OUT=$(run_gate "$R" c5)
 is_block "$OUT" && ok "case 5: malformed verification result → Stop blocks" \
   || bad "case 5: malformed verification result → Stop blocks" "$OUT"
@@ -196,6 +214,7 @@ printf '{"__session_id":"c8","created_at":"2026-01-01T00:00:00Z","blast_radius":
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
 CLAUDE_PROJECT_DIR="$R" bash "$STUB" c8 >/dev/null 2>&1
 SHA1=$(git -C "$R" rev-parse HEAD)
+arm_claim "$R" c8
 OUT=$(run_gate "$R" c8)
 [ -z "$OUT" ] && ok "case 8: first task → Stop allows" || bad "case 8: first task allows" "$OUT"
 [ -f "$R/.claude/.harness/task-dod/archive/$SHA1.json" ] \
@@ -204,8 +223,11 @@ OUT=$(run_gate "$R" c8)
 [ ! -f "$(dodfile "$R" br-feature-x)" ] \
   && ok "case 8: no live DoD after archiving" \
   || bad "case 8: live DoD removed after archiving"
-# a NEW product mutation with no new DoD collected → Stop stays quiet (this
-# plugin no longer infers "should have collected" from the changeset).
+# a NEW product mutation with no new DoD collected AND no completion claim →
+# Stop stays quiet. Two reasons now compound: the plugin never infers "should
+# have collected" from the changeset, and the covered path above disarmed the
+# latch, so the gate is back to its silent default. Deliberately NOT re-armed
+# here — "unclaimed work in progress is silent" is the case under test.
 echo "v2 more" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat2 >/dev/null
 OUT=$(run_gate "$R" c8)
 [ -z "$OUT" ] && ok "case 8: new product mutation, no DoD collected → Stop stays quiet" \
@@ -213,6 +235,7 @@ OUT=$(run_gate "$R" c8)
 # now collect + verify the second task
 printf '{"__session_id":"c8","created_at":"2026-03-01T00:00:00Z","blast_radius":{"tier":"low","reason":"r2"},"requirements":[{"text":"task two","origin":"prompt","added_at":"t"}]}' \
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
+arm_claim "$R" c8
 OUT=$(run_gate "$R" c8)
 is_block "$OUT" && ok "case 8: second DoD collected, not yet verified → Stop blocks" \
   || bad "case 8: second DoD collected, not yet verified → Stop blocks" "$OUT"
@@ -260,6 +283,10 @@ R=$(make_repo task)
 echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
 printf '{"__session_id":"c10","created_at":"2026-01-01T00:00:00Z","blast_radius":{"tier":"low","reason":"r"},"requirements":[{"text":"does X","origin":"prompt","added_at":"t"}]}' \
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
+# The brake only has anything to brake once the gate is engaged at all, so the
+# claim latch is armed for the whole sequence. A BLOCK never disarms it (only
+# the covered path and a new user turn do), so one arm covers all three turns.
+arm_claim "$R" c10
 # turn 1: DoD present, no verification → block, category "dod-no-verify" recorded
 run_gate "$R" c10 >/dev/null
 # turn 2, stop_hook_active: same "dod-no-verify" demand → released (not trapped)
