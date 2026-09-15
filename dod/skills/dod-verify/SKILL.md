@@ -58,3 +58,16 @@ and the exact reason each was excluded — to
 **evidence only**: the gate gains **no** precondition on it, and you do
 **not** read it back — stdout is your instruction; the file is the audit
 trail.
+
+## Claiming the task is finished
+
+When you believe the implementation is finished, run:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-complete-task.sh"
+```
+
+This **records a claim and clears nothing** — only a passing verification
+result clears the Stop gate. Running it is not a substitute for this skill.
+
+**Only the orchestrating agent runs it. Subagents never run any dod script.**
