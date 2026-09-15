@@ -14,8 +14,11 @@ for what makes the gate fire.
 **The asymmetry rule** governs everything here: an agent-authored signal may
 only make the gate **stricter**, never looser. Arming the claim latch clears
 nothing; skipping it buys nothing, because the `UserPromptSubmit` reminder fires
-every user turn while product work sits unverified. The one relaxing signal is
-user-authored — a new user prompt voids the previous claim.
+every human turn while product work sits unverified. **Exactly one signal relaxes
+the gate: a passing verification result for HEAD.** `UserPromptSubmit` used to
+disarm the latch on the theory that it means "the user took the turn back"; it
+does not — it fires on subagent hand-backs and background-task notifications too,
+so that disarm was an agent-reachable bypass. It is gone.
 
 Collection, claiming and verification are deliberately separate concerns with
 their own triggers. A PostToolUse nudge previously tried to infer "the agent is
@@ -39,9 +42,10 @@ dod-collect skill        dod-complete-task.sh            Stop
        │        dod-verify skill writes                    │
        └───────────────▶ the verified result ──────────────┘
                                                            │
-UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
-                     reminds (non-blocking) every turn    covered → disarm,
-                     while product work is uncovered      archive, allow
+UserPromptSubmit ──▶ dod-user-turn.sh: reminds only        ▼
+                     (non-blocking, never touches the   covered → disarm,
+                     latch) every HUMAN turn while      archive, allow
+                     product work is uncovered
 ```
 
 1. **Collect** (`skills/dod-collect/SKILL.md`, agent-invoked) — the skill's
@@ -76,11 +80,15 @@ UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
      coverage.
    - Covered → disarm the latch, archive the contract to
      `task-dod/archive/<HEAD_SHA>.json`, allow. The next task starts clean.
-5. **User turn** (`scripts/dod-user-turn.sh`, `UserPromptSubmit`) — disarms the
-   latch first and unconditionally (a new prompt voids the previous claim),
-   then, when the changeset carries uncovered product work, injects a
-   **non-blocking** reminder via `hookSpecificOutput.additionalContext`. No
-   dedup marker: it fires every turn while the condition holds.
+5. **User turn** (`scripts/dod-user-turn.sh`, `UserPromptSubmit`) — **reminder
+   only.** It touches no state: when the changeset carries uncovered product
+   work it injects a **non-blocking** reminder via
+   `hookSpecificOutput.additionalContext`, and otherwise does nothing. No dedup
+   marker: it fires every turn while the condition holds. It skips
+   harness-generated turns — `<agent-message`, `<task-notification>`,
+   `<cross-session-message`, and a leading `Another Claude session sent a
+   message:` — which carry no decision point; anything unrecognised is treated
+   as a human turn and the reminder fires (fail *toward* firing).
 6. **Verify** (`skills/dod-verify/`, agent-invoked) — the real protocol: config
    detect, tests with a before/after checkpoint, app startup, task-specific
    checks, changeset-scoped review. It writes
@@ -88,22 +96,26 @@ UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
    the gate. The `scripts/dod-verify-*.sh` helpers back it;
    `scripts/dod-stub-done.sh` is a **test/dev-only** stand-in and is never
    advertised to the agent as a remedy.
-7. **Log** (`scripts/dod-task-log.sh`, `TaskCompleted`) — observe-only audit
-   trail to `.claude/.harness/task-log/<task_id>.json`, raw payload included.
-   `TaskCompleted` **is** a blocking hook (exit 2 prevents task completion), so
-   this hook always exits 0 and must never learn to do otherwise.
+7. **Decision log** (`scripts/lib-log.sh`, sourced) — every terminal path of
+   `dod-gate.sh`, `dod-user-turn.sh` and `dod-session-start.sh` appends one
+   JSON line to `.claude/.harness/dod-log/<UTC date>.jsonl` recording the
+   decision it took, including the silent early exits that are otherwise
+   unobservable. Observe-only: it changes no decision, never writes to stdout,
+   and always returns 0. It replaced a `TaskCompleted` audit trail, which was
+   bound to an event that does not mean "a task was completed" in the sense
+   this plugin gates on and recorded nothing in a real session.
 
 ## Files
 
 | Path | Role |
 |---|---|
-| `hooks/hooks.json` | Registers `SessionStart`, `Stop`, `UserPromptSubmit`, `TaskCompleted` — never `SubagentStop`, never `PostToolUse` |
+| `hooks/hooks.json` | Registers `SessionStart`, `Stop`, `UserPromptSubmit` — never `TaskCompleted`, never `SubagentStop`, never `PostToolUse` |
 | `skills/dod-collect/SKILL.md` | Agent-invoked: build + write the DoD contract |
 | `skills/dod-verify/` | Agent-invoked: the real verification protocol; writes the result that clears the gate |
 | `scripts/dod-gate.sh` | Stop hook: silent unless the claim latch is armed, then blocks until covered |
 | `scripts/dod-complete-task.sh` | Agent-invoked claim: arms the latch and does nothing else |
-| `scripts/dod-user-turn.sh` | UserPromptSubmit hook: disarms the latch, then reminds (non-blocking) every turn |
-| `scripts/dod-task-log.sh` | TaskCompleted hook: observe-only audit trail; the event can block (exit 2), so this script always exits 0 |
+| `scripts/dod-user-turn.sh` | UserPromptSubmit hook: reminds only (non-blocking), with a state-aware, two-step instruction; skips harness-generated turns; **never touches the latch** |
+| `scripts/lib-log.sh` | Sourced decision log — `dod_log <hook> <decision> [detail]`, append-only JSONL, never breaks its caller |
 | `scripts/dod-write.sh` | Model-invoked writer: create/amend the DoD contract |
 | `scripts/dod-verify-*.sh` | Verifier helpers: detect / preflight / triage / write-result |
 | `scripts/dod-stub-done.sh` | Test/dev stand-in that writes a passing verification result — **never named to the agent as a remedy** |
@@ -121,10 +133,11 @@ All under `.claude/.harness/`:
 | Path | Role |
 |---|---|
 | `task-dod/<task_key>.json` | The append-only DoD contract |
-| `task-dod/claim-<task_key>` | **The claim latch.** Its existence is the whole signal; the content (armed-at UTC + HEAD sha) is a hint for a human. Disarmed by exactly two things: `dod-gate.sh` on coverage, and `dod-user-turn.sh` |
+| `task-dod/claim-<task_key>` | **The claim latch.** Its existence is the whole signal; the content (armed-at UTC + HEAD sha) is a hint for a human. Disarmed by exactly ONE thing: `dod-gate.sh` on its covered path. It persists across turns and, in task mode, across sessions on the same branch. **Human escape hatch:** if a task was claimed and then abandoned, delete this file — the gate goes silent again. (Session mode keys the latch to the session id, so a new session orphans the old one; orphans are inert and are not reaped.) |
 | `task-dod/verified/<task_key>-<HEAD_SHA>.json` | The verification result — the only thing that clears the gate |
 | `task-dod/archive/<HEAD_SHA>.json` | The contract, archived once the changeset was covered |
-| `task-log/<task_id>.json` | Observe-only `TaskCompleted` audit trail |
+| `dod-log/<UTC date>.jsonl` | Append-only decision log — one line per hook invocation, every terminal path |
+| `dod-log/payloads/<ts>-<pid>.json` | **Temporary diagnostic**, capped at the 20 most recent. The question it was added to answer is resolved: no payload field marks origin, only the shape of `.prompt` does. Kept to discover a *new* harness wrapper type, which shows up as a reminder fired on an automated turn |
 | `last-block/dod-<task_key>` | The last block category, for the category-scoped recursion brake |
 
 
@@ -171,13 +184,20 @@ without duplicating requirement text.
 ## Design notes
 
 - **The asymmetry rule.** An agent-authored signal may only make the gate
-  stricter. Arming the latch clears nothing; skipping it buys nothing. The one
-  relaxing signal, `UserPromptSubmit`, is user-authored — which is why it is
-  allowed to relax.
-- **`UserPromptSubmit` is the discriminator.** No hook fires when the *agent*
-  considers the task complete: `Stop` fires at every turn end and `stop_reason`
-  is `"end_turn"` both when the agent is finished and when it is asking a
-  question. A hook does fire when the **user** takes the turn back.
+  stricter. Arming the latch clears nothing; skipping it buys nothing. The only
+  relaxing signal is a passing verification result for HEAD.
+- **There is no origin discriminator.** No hook fires when the *agent* considers
+  the task complete: `Stop` fires at every turn end and `stop_reason` is
+  `"end_turn"` both when the agent is finished and when it is asking a question.
+  `UserPromptSubmit` is not the missing signal either — it fires on subagent
+  hand-backs, background-task notifications and cross-session messages, and its
+  payload carries no field marking origin (`prompt_id` differs on every injected
+  turn, automated ones included). So the gating path does not look at origin at
+  all.
+- **Blast radius decides where content sniffing is allowed.** The reminder may
+  guess a turn's origin from the shape of `.prompt`, because a wrong guess costs
+  one extra line of context. The gate may not, because a wrong guess there fails
+  open and silently voids the gate.
 - **Fail-safe = allow.** Every unexpected condition (no jq, non-git, detached
   HEAD, mid-rebase, an unloadable classifier) releases the `Stop` hook. The one
   exception — the entire point of the plugin — is an armed claim latch with no
@@ -188,7 +208,9 @@ without duplicating requirement text.
   block category under `stop_hook_active` is released; a *different* category
   (e.g. `"dod-no-verify"` → `"dod-verify-failed"`) still blocks. Consequence:
   enforcement is **one firm block per user turn**, plus a reminder that
-  re-fires every turn. Deliberate — never trap the user.
+  re-fires every turn. Deliberate — never trap the user. This is also what makes
+  a persistent latch safe: an unverified claim blocks once per turn-end cycle and
+  then releases, forever, rather than trapping anyone.
 - **The reminder has no dedup marker.** A once-per-task nudge is exactly the
   thing an agent can outlast.
 - **Append-only is enforced by the writer, not the schema** — a schema can't
@@ -200,5 +222,6 @@ without duplicating requirement text.
   can delete it; and gitignored / `.git/info/exclude`d content is invisible to
   the tree classifier.
 - **Subagents run no dod at all.** Only the orchestrator claims. `Stop` does not
-  fire for subagents (that is `SubagentStop`, deliberately not registered) and
-  `UserPromptSubmit` fires only on real user turns.
+  fire for subagents (that is `SubagentStop`, deliberately not registered). A
+  subagent's hand-back *does* raise `UserPromptSubmit` in the orchestrator, but
+  that turn now reaches only the reminder, which skips it.
