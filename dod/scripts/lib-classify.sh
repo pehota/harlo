@@ -183,22 +183,54 @@ dod__expand_untracked_dir() {
 # turned into classified paths, so tree callers cannot drift apart.
 #
 # An untracked-directory line ("??" + trailing "/") is EXPANDED and each real
-# file underneath is classified; everything else (" M file", "?? file.txt",
-# "R  old -> new") keeps its previous handling untouched. If the expansion
-# fails or yields nothing, the collapsed directory is classified as it was
-# before this function existed — i.e. handed to dod_is_product_path, which fails
-# closed to product. Failing OPEN here would be a gate bypass.
+# file underneath is classified; a rename/copy line ("R  old -> new") is
+# classified on BOTH sides; everything else (" M file", "?? file.txt") keeps its
+# previous handling untouched. If the expansion fails or yields nothing, the
+# collapsed directory is classified as it was before this function existed —
+# i.e. handed to dod_is_product_path, which fails closed to product. Failing
+# OPEN here would be a gate bypass.
+#
+# WHY BOTH SIDES OF A RENAME — the destination-only trap. A rename or copy is
+# reported as one line whose path field is the pair "old -> new" (status "R" or
+# "C" in either the index or the worktree column). Reducing that to the
+# DESTINATION alone classifies `git mv src/prod.ts docs/prod.ts` as
+# "docs/prod.ts" — an artifact-glob match — so production code moved out of
+# sight reads as no change at all. That is exactly backwards: moving a file is a
+# change to BOTH locations, and moving production code INTO an artifact
+# directory is the move that most needs to stay visible to the gate. Since
+# dod-gate.sh step 6 gates on dod_tree_has_product, a destination-only reading
+# is a live Stop bypass (verify at HEAD, then `git mv src/x.ts docs/x.ts`, then
+# stop). So: EITHER side being product surface makes the line product surface,
+# with the .claude/.harness exclusion applied to each side independently.
 #
 # Quoted porcelain paths (git quotes a path containing specials, e.g.
 # `?? ".claude/odd dir/"`) do not end in "/" and so are never expanded — they
-# fall through to the pre-existing literal handling. Same fail-closed direction.
+# fall through to the pre-existing literal handling, and a quoted rename side
+# keeps its quotes and so matches no artifact glob. Same fail-closed direction:
+# do not try to unquote.
 dod__porcelain_has_product() {
   local line="$1"
   local path expanded sub
-  # porcelain path is everything after the "XY " prefix; a rename line
-  # ("R  old -> new") — take the destination.
+  # porcelain path is everything after the "XY " prefix.
   path="${line:3}"
-  case "$path" in *" -> "*) path="${path##* -> }" ;; esac
+
+  # Rename / copy — classify both sides. Gated on the STATUS columns, not on
+  # the mere presence of " -> ", so an ordinary file whose name contains that
+  # sequence is never split. A malformed R/C line carrying no " -> " falls
+  # through to the literal handling below, which fails closed to product.
+  case "${line:0:2}" in
+    R?|?R|C?|?C)
+      case "$path" in
+        *" -> "*)
+          for sub in "${path%% -> *}" "${path##* -> }"; do
+            case "$sub" in .claude/.harness/*|.claude/.harness) continue ;; esac
+            dod_is_product_path "$sub" && return 0
+          done
+          return 1
+          ;;
+      esac
+      ;;
+  esac
 
   case "$line" in
     '??'*)

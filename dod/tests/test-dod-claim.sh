@@ -217,6 +217,46 @@ OUT=$(run_gate "$R" g6)
   || bad "step 6: artifact-only dirt allowed" "$OUT"
 
 # ===========================================================================
+# GATE STEP 6 — a RENAME OUT OF PRODUCT SURFACE. `git mv src/prod.py
+# docs/prod.py` produces the single porcelain line
+# "R  src/prod.py -> docs/prod.py". Classifying that on the DESTINATION alone
+# matches docs/** and reads as no product change at all — so verify at HEAD,
+# move production code into docs/, and the gate ALLOWED with uncommitted
+# product code out of sight. Both sides of a rename must count.
+# ===========================================================================
+R=$(make_repo task)
+mkdir -p "$R/src" "$R/docs"
+echo "code" > "$R/src/prod.py"; echo "notes" > "$R/docs/a.md"
+git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+write_dod "$R" g6r
+CLAUDE_PROJECT_DIR="$R" bash "$STUB" g6r >/dev/null 2>&1
+git -C "$R" mv src/prod.py docs/prod.py
+eq "rename: porcelain really does report one line with both sides" \
+   "R  src/prod.py -> docs/prod.py" "$(git -C "$R" status --porcelain | head -1)"
+classify_tree "$R" g6r \
+  && ok "rename: product → artifact move is seen as product-surface tree dirt" \
+  || bad "rename: product → artifact move missed by the classifier" "no product seen"
+arm_claim "$R" g6r
+OUT=$(run_gate "$R" g6r)
+is_block "$OUT" \
+  && ok "rename: verified at HEAD, then a product file moved into docs/ → blocks" \
+  || bad "rename: git mv of product into docs/ blocks" "$OUT"
+eq "rename: block category" "dod-uncommitted" "$(lastblock "$R" br-feature-x)"
+
+# Control, in its own repo (a block leaves the latch armed and HEAD must not
+# move): an artifact → artifact rename is still artifact-only and still allows.
+R=$(make_repo task)
+mkdir -p "$R/docs"; echo "notes" > "$R/docs/a.md"
+git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+write_dod "$R" g6s
+CLAUDE_PROJECT_DIR="$R" bash "$STUB" g6s >/dev/null 2>&1
+git -C "$R" mv docs/a.md docs/b.md
+arm_claim "$R" g6s
+OUT=$(run_gate "$R" g6s)
+[ -z "$OUT" ] && ok "rename: artifact → artifact move (docs/a.md → docs/b.md) → still allowed" \
+  || bad "rename: artifact-only move allowed" "$OUT"
+
+# ===========================================================================
 # GATE STEP 7 — covered → disarm, archive at HEAD, allow.
 # ===========================================================================
 R=$(make_repo task)
@@ -325,23 +365,44 @@ OUT=$(run_user_turn "$R" r1)
 # TaskCompleted audit trail — writes the record, says nothing, exits 0.
 # ===========================================================================
 R=$(make_repo task)
-OUT=$(printf '{"task_id":"t-42","task_description":"do the thing","task_state":"completed"}' \
+# The payload carries the REAL TaskCompleted field names — all top-level, and
+# task_subject rather than the non-existent task_state the hook used to read.
+OUT=$(printf '{"session_id":"s-9","prompt_id":"p-1","transcript_path":"/tmp/t.jsonl","cwd":"/repo","scratchpad_dir":"/tmp/sp","permission_mode":"default","hook_event_name":"TaskCompleted","task_id":"t-42","task_subject":"ship the thing","task_description":"do the thing","teammate_name":"tm","team_name":"team"}' \
         | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1)
 RC=$?
 eq "task-log: exits 0" "0" "$RC"
 eq "task-log: stays silent" "" "$OUT"
 LOG="$R/.claude/.harness/task-log/t-42.json"
 [ -f "$LOG" ] && ok "task-log: record written under the task id" || bad "task-log: record written"
-eq "task-log: task_id recorded"          "t-42"         "$(jq -r '.task_id' "$LOG" 2>/dev/null)"
-eq "task-log: task_description recorded" "do the thing" "$(jq -r '.task_description' "$LOG" 2>/dev/null)"
-eq "task-log: task_state recorded"       "completed"    "$(jq -r '.task_state' "$LOG" 2>/dev/null)"
+eq "task-log: task_id recorded"          "t-42"          "$(jq -r '.task_id' "$LOG" 2>/dev/null)"
+eq "task-log: task_description recorded" "do the thing"  "$(jq -r '.task_description' "$LOG" 2>/dev/null)"
+eq "task-log: task_subject recorded"     "ship the thing" "$(jq -r '.task_subject' "$LOG" 2>/dev/null)"
 printf '%s' "$(jq -r '.recorded_at' "$LOG" 2>/dev/null)" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' \
   && ok "task-log: recorded_at is a UTC timestamp" \
   || bad "task-log: recorded_at is a UTC timestamp" "$(jq -r '.recorded_at' "$LOG" 2>/dev/null)"
+# The RAW payload is kept verbatim: the schema is best-available, not published,
+# so a field renamed upstream must not leave a silently-empty record behind.
+eq "task-log: raw payload persisted verbatim" "s-9" "$(jq -r '.raw.session_id' "$LOG" 2>/dev/null)"
+eq "task-log: raw payload keeps fields the record does not extract" "team" \
+  "$(jq -r '.raw.team_name' "$LOG" 2>/dev/null)"
 # Absent fields are recorded empty, not dropped; the record is still kept.
 printf '{"task_id":"t-43"}' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
-eq "task-log: absent task_state recorded empty" "" \
-  "$(jq -r '.task_state' "$R/.claude/.harness/task-log/t-43.json" 2>/dev/null)"
+eq "task-log: absent task_subject recorded empty" "" \
+  "$(jq -r '.task_subject' "$R/.claude/.harness/task-log/t-43.json" 2>/dev/null)"
+# An id-less completion must NOT clobber the previous id-less record: a fixed
+# "unknown-task" basename made the audit trail keep exactly one survivor.
+printf '{"task_description":"first anonymous"}'  | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
+printf '{"task_description":"second anonymous"}' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
+eq "task-log: two id-less completions leave two records, not one overwritten" "2" \
+  "$(find "$R/.claude/.harness/task-log" -name 'unknown-task*.json' 2>/dev/null | wc -l | tr -d ' ')"
+# Malformed / empty stdin: silent, no record, and still exit 0 — TaskCompleted
+# is a BLOCKING hook, so a non-zero exit here would prevent task completion.
+OUT=$(printf 'not json at all' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1); RC=$?
+eq "task-log: malformed stdin exits 0" "0" "$RC"
+eq "task-log: malformed stdin stays silent" "" "$OUT"
+OUT=$(printf '' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1); RC=$?
+eq "task-log: empty stdin exits 0" "0" "$RC"
+eq "task-log: empty stdin stays silent" "" "$OUT"
 # It must never influence the gate: the record exists, the gate is still silent.
 OUT=$(run_gate "$R" t1)
 [ -z "$OUT" ] && ok "task-log: writing a completion record is not a claim (gate stays silent)" \
