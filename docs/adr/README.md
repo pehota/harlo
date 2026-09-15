@@ -8,3 +8,7 @@
   deletes the `auto-branch.sh` hook and its config keys outright, on the grounds
   that deciding where a user's work lives is version-control policy, not the DoD
   gate's job.
+- [0003 — Verification is triggered by an explicit claim, not inferred from a stopping agent](0003-claim-triggered-verification.md) —
+  the Stop gate goes silent until the agent arms a claim latch, then blocks until a
+  HEAD-keyed verification result *and* a clean product surface cover the changeset;
+  establishes the asymmetry rule that an agent-authored signal may only tighten the gate.

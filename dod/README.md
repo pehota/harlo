@@ -1,31 +1,47 @@
 # task-dod
 
 Task-DoD lifecycle plugin: an explicit skill records a per-task
-Definition-of-Done contract before implementation starts, then `Stop` blocks
-until that contract has a passing verification result.
+Definition-of-Done contract before implementation starts; the agent then
+explicitly **claims** the task is finished, and `Stop` blocks until that claim
+is covered by a passing verification result.
 
 Rationale: [ADR-0001 — the Definition of Done is fixed at task start, not
-assembled at `/done`](../docs/adr/0001-task-dod-defined-at-task-start.md).
+assembled at `/done`](../docs/adr/0001-task-dod-defined-at-task-start.md) for the
+contract, and [ADR-0003 — verification is triggered by an explicit claim, not
+inferred from a stopping agent](../docs/adr/0003-claim-triggered-verification.md)
+for what makes the gate fire.
 
-Collection and verification are deliberately separate concerns with their own
-triggers — a PostToolUse nudge previously tried to infer "the agent is about
-to implement something" from changed file paths and repeatedly false-
-positived (firing on read-only/discussion turns, on file deletion, on any
-path outside a small allowlist). Collection is now agent-invoked only.
+**The asymmetry rule** governs everything here: an agent-authored signal may
+only make the gate **stricter**, never looser. Arming the claim latch clears
+nothing; skipping it buys nothing, because the `UserPromptSubmit` reminder fires
+every user turn while product work sits unverified. The one relaxing signal is
+user-authored — a new user prompt voids the previous claim.
+
+Collection, claiming and verification are deliberately separate concerns with
+their own triggers. A PostToolUse nudge previously tried to infer "the agent is
+about to implement something" from changed file paths and repeatedly false-
+positived; it also deduped with a once-per-task marker, so ignoring it bought
+permanent silence. Collection is agent-invoked only, and the reminder now rides
+`UserPromptSubmit` with no dedup marker at all.
 
 ## Lifecycle
 
 ```
-dod-collect skill                          Stop
-   (agent-invoked)                          │
-        │                                    ▼
-        ▼                          dod-gate.sh reads:
-  dod-write.sh writes        task-dod/<task_key>.json
-  task-dod/<task_key>.json   task-dod/verified/<task_key>-<HEAD_SHA>.json
-        │                                    │
-        │         dod-stub-done.sh writes    │
-        └────────────────▶ verified result ──┘
-                    (test/dev stand-in for the real /done)
+dod-collect skill        dod-complete-task.sh            Stop
+ (agent-invoked)          (agent-invoked)                 │
+       │                        │                          ▼
+       ▼                        ▼                 dod-gate.sh reads:
+ dod-write.sh writes     arms the latch      task-dod/claim-<task_key>   ← no latch: SILENT
+ task-dod/<task_key>     task-dod/           task-dod/<task_key>.json
+ .json                   claim-<task_key>    task-dod/verified/<task_key>-<HEAD_SHA>.json
+                                             + working tree (lib-classify.sh)
+       │                                                   │
+       │        dod-verify skill writes                    │
+       └───────────────▶ the verified result ──────────────┘
+                                                           │
+UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
+                     reminds (non-blocking) every turn    covered → disarm,
+                     while product work is uncovered      archive, allow
 ```
 
 1. **Collect** (`skills/dod-collect/SKILL.md`, agent-invoked) — the skill's
@@ -39,42 +55,77 @@ dod-collect skill                          Stop
    is append-only: existing requirement text can't be dropped or reworded, and
    `created_at` / `blast_radius` are immutable — only genuinely new
    requirements may be appended.
-3. **Gate** (`hooks/dod-gate.sh`, `Stop`) — purely structural, no classifier
-   involved:
-   - No `task-dod/<task_key>.json` on disk → allow, silent. Nothing was
-     collected, so there's nothing to verify.
-   - A contract exists but no `task-dod/verified/<task_key>-<HEAD_SHA>.json`
-     → **block**: verification hasn't run for this changeset yet.
-   - A verification result exists for `HEAD_SHA` but contains any
+3. **Claim** (`scripts/dod-complete-task.sh`, agent-invoked) — the agent
+   declares "I am finished" by arming the latch
+   `task-dod/claim-<task_key>`. Deliberately dumb: it records the claim and
+   nothing else, and must never grow a check. A script that both claims and
+   clears is a bypass with a friendly name.
+4. **Gate** (`scripts/dod-gate.sh`, `Stop`) — latch-driven:
+   - No `claim-<task_key>` latch → allow, **silent**. Nothing was claimed, so
+     there is nothing to hold the agent to. This is what stops the gate
+     blocking at the end of every turn while work is still in progress.
+   - Latched, but no contract *and* no verification result → **block**:
+     completion was claimed without ever agreeing what done means.
+   - Latched, contract present, no `task-dod/verified/<task_key>-<HEAD_SHA>.json`
+     → **block**: verification hasn't run for this changeset.
+   - Verification result for `HEAD_SHA` is malformed, or contains any
      `status: "fail"` entry → **block**: fix and re-verify.
-   - A verification result exists for `HEAD_SHA` with zero failures → allow,
-     and archive the contract to `task-dod/archive/<HEAD_SHA>.json`. The next
-     task starts clean — no live contract until `dod-collect` runs again.
-4. **Verify (stub)** (`scripts/dod-stub-done.sh`) — a stand-in for the real
-   verification protocol, used by the gate/tests to simulate "the checklist
-   ran". It reads the collected contract and writes a trivially-passing
-   result (one `pass` per requirement) to
-   `task-dod/verified/<task_key>-<HEAD_SHA>.json`. **Building a real
-   verification skill/protocol that actually runs checks per requirement
-   (tests, lint, app-start, review — see
-   [`docs/base-dod.md`](docs/base-dod.md)) is future work** — this plugin
-   only wires the lifecycle around it.
+   - Verified at `HEAD_SHA` but the working tree still carries product-surface
+     changes → **block**: uncommitted work is by construction work the
+     verification at HEAD could not have seen. Both halves are required for
+     coverage.
+   - Covered → disarm the latch, archive the contract to
+     `task-dod/archive/<HEAD_SHA>.json`, allow. The next task starts clean.
+5. **User turn** (`scripts/dod-user-turn.sh`, `UserPromptSubmit`) — disarms the
+   latch first and unconditionally (a new prompt voids the previous claim),
+   then, when the changeset carries uncovered product work, injects a
+   **non-blocking** reminder via `hookSpecificOutput.additionalContext`. No
+   dedup marker: it fires every turn while the condition holds.
+6. **Verify** (`skills/dod-verify/`, agent-invoked) — the real protocol: config
+   detect, tests with a before/after checkpoint, app startup, task-specific
+   checks, changeset-scoped review. It writes
+   `task-dod/verified/<task_key>-<HEAD_SHA>.json`, the only thing that clears
+   the gate. The `scripts/dod-verify-*.sh` helpers back it;
+   `scripts/dod-stub-done.sh` is a **test/dev-only** stand-in and is never
+   advertised to the agent as a remedy.
+7. **Log** (`scripts/dod-task-log.sh`, `TaskCompleted`) — observe-only audit
+   trail to `.claude/.harness/task-log/<task_id>.json`. `TaskCompleted` cannot
+   block and this hook must never learn how.
 
 ## Files
 
 | Path | Role |
 |---|---|
-| `hooks/hooks.json` | Registers the `Stop` gate only — no PostToolUse hook |
+| `hooks/hooks.json` | Registers `SessionStart`, `Stop`, `UserPromptSubmit`, `TaskCompleted` — never `SubagentStop`, never `PostToolUse` |
 | `skills/dod-collect/SKILL.md` | Agent-invoked: build + write the DoD contract |
-| `scripts/dod-gate.sh` | Stop hook: blocks missing/failing verification |
+| `skills/dod-verify/` | Agent-invoked: the real verification protocol; writes the result that clears the gate |
+| `scripts/dod-gate.sh` | Stop hook: silent unless the claim latch is armed, then blocks until covered |
+| `scripts/dod-complete-task.sh` | Agent-invoked claim: arms the latch and does nothing else |
+| `scripts/dod-user-turn.sh` | UserPromptSubmit hook: disarms the latch, then reminds (non-blocking) every turn |
+| `scripts/dod-task-log.sh` | TaskCompleted hook: observe-only audit trail, can never block |
 | `scripts/dod-write.sh` | Model-invoked writer: create/amend the DoD contract |
-| `scripts/dod-stub-done.sh` | Test/dev stand-in that writes a passing verification result |
-| `scripts/lib-classify.sh` | Product-vs-artifact path classifier — retained but **not used for gating**; not called from `dod-gate.sh` or any hook |
+| `scripts/dod-verify-*.sh` | Verifier helpers: detect / preflight / triage / write-result |
+| `scripts/dod-stub-done.sh` | Test/dev stand-in that writes a passing verification result — **never named to the agent as a remedy** |
+| `scripts/lib-classify.sh` | Product-vs-artifact path classifier — **used for gating**: sourced by `dod-gate.sh` and `dod-user-turn.sh`. Its `artifact_paths` is read from `.claude/done-config.json` directly, never through the agent-writable session-config layer |
 | `scripts/harness-common.sh` | Trimmed shared identity/config resolver |
 | `contracts/task-dod.schema.json` | JSON Schema for the DoD contract file |
 | `contracts/task-dod-verified.schema.json` | JSON Schema for the verification result file |
 | `docs/base-dod.md` | The base checklist a real verifier should check against |
 | `tests/` | `test-dod.sh`, `test-dod-headless.sh`, fixtures |
+
+## State files
+
+All under `.claude/.harness/`:
+
+| Path | Role |
+|---|---|
+| `task-dod/<task_key>.json` | The append-only DoD contract |
+| `task-dod/claim-<task_key>` | **The claim latch.** Its existence is the whole signal; the content (armed-at UTC + HEAD sha) is a hint for a human. Disarmed by exactly two things: `dod-gate.sh` on coverage, and `dod-user-turn.sh` |
+| `task-dod/verified/<task_key>-<HEAD_SHA>.json` | The verification result — the only thing that clears the gate |
+| `task-dod/archive/<HEAD_SHA>.json` | The contract, archived once the changeset was covered |
+| `task-log/<task_id>.json` | Observe-only `TaskCompleted` audit trail |
+| `last-block/dod-<task_key>` | The last block category, for the category-scoped recursion brake |
+
 
 ## Contract shape
 
@@ -118,18 +169,35 @@ without duplicating requirement text.
 
 ## Design notes
 
+- **The asymmetry rule.** An agent-authored signal may only make the gate
+  stricter. Arming the latch clears nothing; skipping it buys nothing. The one
+  relaxing signal, `UserPromptSubmit`, is user-authored — which is why it is
+  allowed to relax.
+- **`UserPromptSubmit` is the discriminator.** No hook fires when the *agent*
+  considers the task complete: `Stop` fires at every turn end and `stop_reason`
+  is `"end_turn"` both when the agent is finished and when it is asking a
+  question. A hook does fire when the **user** takes the turn back.
 - **Fail-safe = allow.** Every unexpected condition (no jq, non-git, detached
-  HEAD, mid-rebase) releases the `Stop` hook. The one exception — the entire
-  point of the plugin — is a collected DoD contract with no passing
-  verification result for the current `HEAD_SHA`.
+  HEAD, mid-rebase, an unloadable classifier) releases the `Stop` hook. The one
+  exception — the entire point of the plugin — is an armed claim latch with no
+  verification covering the changeset.
+- **Coverage is two halves.** Verified-at-HEAD *and* no product-surface dirt in
+  the working tree. Verified-at-HEAD alone would let uncommitted work through.
 - **Recursion brake is category-scoped**, not blanket. A repeated identical
   block category under `stop_hook_active` is released; a *different* category
-  (e.g. `"dod-no-verify"` → `"dod-verify-failed"`) still blocks, so a
-  verification write inside a block-response cycle can't accidentally
-  suppress a following block for a different reason.
+  (e.g. `"dod-no-verify"` → `"dod-verify-failed"`) still blocks. Consequence:
+  enforcement is **one firm block per user turn**, plus a reminder that
+  re-fires every turn. Deliberate — never trap the user.
+- **The reminder has no dedup marker.** A once-per-task nudge is exactly the
+  thing an agent can outlast.
 - **Append-only is enforced by the writer, not the schema** — a schema can't
   compare a write against the prior file on disk.
-- **No automatic re-trigger.** Once a contract is archived, Stop stays quiet
-  on later product changes until `dod-collect` is invoked again — this
-  plugin does not infer "you should have collected a DoD" from a changeset;
-  that inference was the source of the plugin's original false positives.
+- **Known routes to silence**, stated rather than assumed away: detached HEAD
+  and mid-merge/mid-rebase release unconditionally, so `git checkout --detach`
+  is a one-command bypass; `/clear` re-pins the session baseline and empties the
+  changeset; the latch lives under `.claude/.harness`, where the agent's shell
+  can delete it; and gitignored / `.git/info/exclude`d content is invisible to
+  the tree classifier.
+- **Subagents run no dod at all.** Only the orchestrator claims. `Stop` does not
+  fire for subagents (that is `SubagentStop`, deliberately not registered) and
+  `UserPromptSubmit` fires only on real user turns.

@@ -28,6 +28,12 @@ Tracked in [#11](https://github.com/pehota/harlo/issues/11); a walking skeleton 
 planned `dod/` folder at the repo root — not yet built — proves the flow before anything
 is wired into the live `completion-harness/` bundle.
 
+**Superseded in part by [ADR 0003](0003-claim-triggered-verification.md).** The contract
+described here stands; what *triggers* its verification does not. This ADR left the Stop
+gate keyed to the mere existence of the contract file, which made a skipped `dod-collect`
+the path to zero enforcement. 0003 moves the trigger to an explicit claim latch and makes
+the gate silent until one is armed.
+
 ## Considered options
 
 **In-context only** — the model just remembers the requirements. Rejected: this dies at
