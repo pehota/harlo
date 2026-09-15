@@ -28,6 +28,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/harness-common.sh" ]; then
   . "$SCRIPT_DIR/harness-common.sh" 2>/dev/null
 fi
+# shellcheck source=lib-log.sh
+if [ -f "$SCRIPT_DIR/lib-log.sh" ]; then
+  . "$SCRIPT_DIR/lib-log.sh" 2>/dev/null
+fi
+if ! declare -F dod_log >/dev/null 2>&1; then
+  dod_log() { return 0; }
+fi
 
 SESSION_ID=""
 SOURCE=""
@@ -61,6 +68,7 @@ printf '%s\n' "$SESSION_ID" > "$HARNESS_DIR/current-session" 2>/dev/null
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 if [ -z "$HEAD_SHA" ]; then
   printf 'no-git\n' > "$BASELINE_DIR/${SESSION_ID}.sha" 2>/dev/null
+  dod_log SessionStart "seed" "no git HEAD; session marker only (source=${SOURCE:-unknown})"
   exit 0
 fi
 # Compact preserves an existing session baseline (mid-task continuation); it
@@ -106,6 +114,8 @@ pin_tree_baseline() {
   fi
 }
 
+# Logged AFTER the baseline pin so the record reflects what was actually
+# seeded. Observe-only: dod_log never changes a decision and never prints.
 if [ -n "$HC_TREE_BASE_FILE" ]; then
   if [ "${HC_MODE:-}" = "task" ]; then
     [ -f "$HC_TREE_BASE_FILE" ] || pin_tree_baseline "$HC_TREE_BASE_FILE"
@@ -115,5 +125,7 @@ if [ -n "$HC_TREE_BASE_FILE" ]; then
     pin_tree_baseline "$HC_TREE_BASE_FILE"
   fi
 fi
+
+dod_log SessionStart "seed" "source=${SOURCE:-unknown} baseline=${HEAD_SHA:0:7}"
 
 exit 0

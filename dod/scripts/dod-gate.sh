@@ -31,6 +31,13 @@
 # UserPromptSubmit only fires on real user turns, so no SubagentStop hook and
 # no PostToolUse hook is registered by this plugin — that falls out for free.
 #
+# OBSERVE-ONLY LOGGING. Every terminal path below records its decision via
+# dod_log (scripts/lib-log.sh) — including the early exits, which are precisely
+# the ones that produce no output and were therefore invisible. Logging changes
+# NO decision and never writes to stdout: the block contract above is the
+# protocol, and dod_log is contractually incapable of breaking it (it always
+# returns 0 and never touches stdout).
+#
 # No `set -e`, no catch-all EXIT trap; every git/jq call guarded.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
@@ -43,9 +50,21 @@ fi
 if [ -f "$PLUGIN_ROOT/scripts/lib-classify.sh" ]; then
   . "$PLUGIN_ROOT/scripts/lib-classify.sh" 2>/dev/null
 fi
+# shellcheck source=lib-log.sh
+if [ -f "$PLUGIN_ROOT/scripts/lib-log.sh" ]; then
+  . "$PLUGIN_ROOT/scripts/lib-log.sh" 2>/dev/null
+fi
+# Never let a missing lib-log turn a log call into a "command not found" — the
+# gate must behave identically with and without it. `declare -F` is used rather
+# than hc_has_fn because harness-common.sh may itself have failed to source.
+if ! declare -F dod_log >/dev/null 2>&1; then
+  dod_log() { return 0; }
+fi
 
 # No jq → cannot reason about state → fail safe (allow), matching done-gate.sh.
-hc_has_jq || exit 0
+# Nothing is logged here either: dod_log needs jq too, so this one early exit is
+# unobservable by construction.
+hc_has_jq || { dod_log Stop "silent:no-jq" "jq unavailable"; exit 0; }
 
 # --- read hook stdin ------------------------------------------------------------
 if hc_has_fn hc_read_hook_input; then
@@ -71,19 +90,23 @@ LAST_BLOCK_FILE=""   # set once HARNESS_DIR is known (below)
 # --- non-git / detached HEAD / mid-rebase -> allow, silent ----------
 GIT_DIR=$(git -C "$PROJECT_DIR" rev-parse --git-dir 2>/dev/null)
 if [ -z "$GIT_DIR" ]; then
+  dod_log Stop "silent:non-git" "no git dir at $PROJECT_DIR"
   exit 0
 fi
 case "$GIT_DIR" in /*) : ;; *) GIT_DIR="$PROJECT_DIR/$GIT_DIR" ;; esac
 if [ -f "$GIT_DIR/MERGE_HEAD" ] || [ -d "$GIT_DIR/rebase-apply" ] || [ -d "$GIT_DIR/rebase-merge" ]; then
+  dod_log Stop "silent:mid-merge" "merge or rebase in progress"
   exit 0
 fi
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse -q --verify HEAD 2>/dev/null)
 if [ -z "$HEAD_SHA" ]; then
+  dod_log Stop "silent:no-head" "repo has no commits"
   exit 0
 fi
 # Detached HEAD: symbolic-ref fails. hc_resolve then falls back to session mode;
 # detached HEAD is treated alongside non-git as a no-op case.
 if ! git -C "$PROJECT_DIR" symbolic-ref -q HEAD >/dev/null 2>&1; then
+  dod_log Stop "silent:detached-head" "HEAD is detached"
   exit 0
 fi
 
@@ -104,7 +127,7 @@ if hc_has_fn hc__sanitize; then
 else
   TASK_KEY=$(printf '%s' "$HC_TASK_KEY" | LC_ALL=C sed 's/[^A-Za-z0-9_.-]/-/g' 2>/dev/null)
 fi
-[ -n "$TASK_KEY" ] || exit 0
+[ -n "$TASK_KEY" ] || { dod_log Stop "silent:no-task-key" "task key sanitised away"; exit 0; }
 
 DOD_DIR="$HARNESS_DIR/task-dod"
 DOD_FILE="$DOD_DIR/${TASK_KEY}.json"
@@ -123,10 +146,12 @@ block() {
   local category="$1" reason="$2" prev=""
   [ -f "$LAST_BLOCK_FILE" ] && prev=$(cat "$LAST_BLOCK_FILE" 2>/dev/null | tr -d '\r\n')
   if [ "$STOP_HOOK_ACTIVE" = "true" ] && [ "$category" = "$prev" ]; then
+    dod_log Stop "silent:recursion-brake" "$category repeated under stop_hook_active"
     exit 0
   fi
   mkdir -p "$(dirname "$LAST_BLOCK_FILE")" 2>/dev/null
   printf '%s\n' "$category" > "$LAST_BLOCK_FILE" 2>/dev/null
+  dod_log Stop "block:${category}" "$reason"
   jq -n --arg r "$reason" '{"decision":"block","reason":$r}' 2>/dev/null \
     || printf '{"decision":"block","reason":"%s"}\n' "$reason"
   printf 'task-dod: %s\n' "$reason" >&2
@@ -144,6 +169,7 @@ clear_last_block() { rm -f "$LAST_BLOCK_FILE" 2>/dev/null; }
 # (dod-user-turn.sh) says so.
 if [ ! -f "$LATCH" ]; then
   clear_last_block
+  dod_log Stop "silent:no-claim" "latch not armed"
   exit 0
 fi
 
@@ -192,5 +218,6 @@ if [ -f "$DOD_FILE" ]; then
   mv -f "$DOD_FILE" "$ARCHIVE_DIR/${HEAD_SHA}.json" 2>/dev/null
 fi
 clear_last_block
+dod_log Stop "allow" "covered: verified at HEAD, no product dirt in the tree"
 
 exit 0

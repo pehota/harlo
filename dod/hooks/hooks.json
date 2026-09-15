@@ -6,9 +6,6 @@
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/dod-user-turn.sh\"", "timeout": 10 } ] }
     ],
-    "TaskCompleted": [
-      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/dod-task-log.sh\"" } ] }
-    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/dod-gate.sh\"", "timeout": 10 } ] }
     ]
