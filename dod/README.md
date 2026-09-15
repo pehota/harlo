@@ -89,8 +89,9 @@ UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
    `scripts/dod-stub-done.sh` is a **test/dev-only** stand-in and is never
    advertised to the agent as a remedy.
 7. **Log** (`scripts/dod-task-log.sh`, `TaskCompleted`) — observe-only audit
-   trail to `.claude/.harness/task-log/<task_id>.json`. `TaskCompleted` cannot
-   block and this hook must never learn how.
+   trail to `.claude/.harness/task-log/<task_id>.json`, raw payload included.
+   `TaskCompleted` **is** a blocking hook (exit 2 prevents task completion), so
+   this hook always exits 0 and must never learn to do otherwise.
 
 ## Files
 
@@ -102,7 +103,7 @@ UserPromptSubmit ──▶ dod-user-turn.sh: disarms the latch,   ▼
 | `scripts/dod-gate.sh` | Stop hook: silent unless the claim latch is armed, then blocks until covered |
 | `scripts/dod-complete-task.sh` | Agent-invoked claim: arms the latch and does nothing else |
 | `scripts/dod-user-turn.sh` | UserPromptSubmit hook: disarms the latch, then reminds (non-blocking) every turn |
-| `scripts/dod-task-log.sh` | TaskCompleted hook: observe-only audit trail, can never block |
+| `scripts/dod-task-log.sh` | TaskCompleted hook: observe-only audit trail; the event can block (exit 2), so this script always exits 0 |
 | `scripts/dod-write.sh` | Model-invoked writer: create/amend the DoD contract |
 | `scripts/dod-verify-*.sh` | Verifier helpers: detect / preflight / triage / write-result |
 | `scripts/dod-stub-done.sh` | Test/dev stand-in that writes a passing verification result — **never named to the agent as a remedy** |
