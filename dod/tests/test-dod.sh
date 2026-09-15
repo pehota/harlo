@@ -285,7 +285,7 @@ printf '{"__session_id":"c10","created_at":"2026-01-01T00:00:00Z","blast_radius"
   | CLAUDE_PROJECT_DIR="$R" bash "$WRITE" >/dev/null 2>&1
 # The brake only has anything to brake once the gate is engaged at all, so the
 # claim latch is armed for the whole sequence. A BLOCK never disarms it (only
-# the covered path and a new user turn do), so one arm covers all three turns.
+# the gate's covered path does), so one arm covers all three turns.
 arm_claim "$R" c10
 # turn 1: DoD present, no verification → block, category "dod-no-verify" recorded
 run_gate "$R" c10 >/dev/null

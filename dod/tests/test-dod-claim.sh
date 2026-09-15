@@ -2,7 +2,8 @@
 #
 # Tests for the CLAIM-DRIVEN Stop gate and its three sibling hooks:
 # dod-complete-task.sh (arms the latch), dod-user-turn.sh (UserPromptSubmit —
-# disarms it, then reminds), dod-task-log.sh (TaskCompleted — observe-only).
+# reminder ONLY; it must never touch the latch) and lib-log.sh (the
+# observe-only decision log).
 #
 # THE MECHANISM UNDER TEST. dod-gate.sh is SILENT until the agent claims it is
 # finished. The latch task-dod/claim-<task_key> is that claim. The gate's seven
@@ -14,6 +15,12 @@
 #   5  latched, result with failing requirements  → block dod-verify-failed
 #   6  verified at HEAD, product dirt in the tree → block dod-uncommitted
 #   7  covered                                    → disarm, archive, allow
+#
+# THE COVERED PATH IS THE ONLY DISARM. `UserPromptSubmit` used to clear the
+# latch on the theory that it means "the user took the turn back". It does not:
+# it also fires on subagent hand-backs, background-task notifications and
+# cross-session messages, so that disarm was an AGENT-reachable release of the
+# gate. It is gone, and this suite asserts it stays gone.
 #
 # THE ASYMMETRY RULE is what the whole design rests on and what most of the
 # rest of this suite attacks: an AGENT-authored signal may only make the gate
@@ -30,7 +37,6 @@ SCRIPTS="$ROOT/scripts"
 GATE="$SCRIPTS/dod-gate.sh"
 CLAIM="$SCRIPTS/dod-complete-task.sh"
 USER_TURN="$SCRIPTS/dod-user-turn.sh"
-TASK_LOG="$SCRIPTS/dod-task-log.sh"
 WRITE="$SCRIPTS/dod-write.sh"
 STUB="$SCRIPTS/dod-stub-done.sh"
 
@@ -81,11 +87,14 @@ FAILSAFE_JSON_VIOLATIONS=0
 # latch file: writer and gate must agree on the task key or this suite is a lie.
 arm_claim() { CLAUDE_PROJECT_DIR="$1" bash "$CLAIM" "$2" >/dev/null 2>&1; }
 
-# run_user_turn <repo> <session_id> — the UserPromptSubmit hook; echoes stdout.
+# run_user_turn <repo> <session_id> [prompt] — the UserPromptSubmit hook;
+# echoes stdout. The prompt defaults to an ordinary human turn; pass one of the
+# harness wrapper shapes to exercise the automated-turn predicate.
 REMINDER_OUTPUTS=""
 run_user_turn() {
   local out
-  out=$(printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"next"}' "$2" \
+  out=$(jq -nc --arg s "$2" --arg p "${3:-next}" \
+          '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:$p}' \
           | CLAUDE_PROJECT_DIR="$1" bash "$USER_TURN" 2>/dev/null)
   REMINDER_OUTPUTS="$REMINDER_OUTPUTS
 $out"
@@ -206,7 +215,7 @@ is_block "$OUT" && ok "step 6: verified at HEAD but product dirt in the tree →
   || bad "step 6: uncommitted product dirt → blocks" "$OUT"
 eq "step 6: block category" "dod-uncommitted" "$(lastblock "$R" br-feature-x)"
 [ -f "$(latch "$R" br-feature-x)" ] \
-  && ok "step 6: a BLOCK leaves the latch armed (only coverage or a new user turn disarms)" \
+  && ok "step 6: a BLOCK leaves the latch armed (only the covered path disarms)" \
   || bad "step 6: latch still armed after a block"
 # artifact-only dirt on top of the same state must NOT block — the classifier
 # is what distinguishes them, not the mere fact the tree is dirty.
@@ -321,7 +330,10 @@ printf '%s' "$OUT" | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubm
   || bad "asymmetry: reminder payload shape" "$OUT"
 
 # ===========================================================================
-# LATCH LIFECYCLE — armed by the claim, disarmed by a user turn.
+# LATCH LIFECYCLE — armed by the claim, cleared by the GATE'S COVERED PATH and
+# by nothing else. A UserPromptSubmit turn (human or automated) must leave it
+# exactly where it was: relaxing the gate on a prompt event is precisely the
+# asymmetry violation this suite exists to catch.
 # ===========================================================================
 R=$(make_repo task)
 echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
@@ -331,13 +343,90 @@ write_dod "$R" l1
 arm_claim "$R" l1
 [ -f "$(latch "$R" br-feature-x)" ] && ok "lifecycle: dod-complete-task.sh arms the latch" \
   || bad "lifecycle: claim arms the latch"
+
+# (a) an ordinary HUMAN turn must not clear it.
 run_user_turn "$R" l1 >/dev/null
+[ -f "$(latch "$R" br-feature-x)" ] \
+  && ok "lifecycle: the latch SURVIVES a UserPromptSubmit (human turn)" \
+  || bad "lifecycle: latch survives a human user turn"
+
+# (b) neither may an AUTOMATED turn — the hole that made the disarm a bypass.
+for AUTO_P in '<agent-message from="abc">hand-back</agent-message>' \
+              '<task-notification><task-id>x</task-id></task-notification>' \
+              '<cross-session-message from="s2">hi</cross-session-message>' \
+              'Another Claude session sent a message: hello'; do
+  run_user_turn "$R" l1 "$AUTO_P" >/dev/null
+done
+[ -f "$(latch "$R" br-feature-x)" ] \
+  && ok "lifecycle: the latch SURVIVES every automated-turn payload" \
+  || bad "lifecycle: latch survives automated turns"
+
+# (c) with the latch still armed the gate still blocks — it was never released.
+OUT=$(run_gate "$R" l1)
+is_block "$OUT" \
+  && ok "lifecycle: the gate still blocks after those turns (nothing relaxed it)" \
+  || bad "lifecycle: gate still blocks after user turns" "$OUT"
+
+# (d) ONLY the covered path clears it.
+CLAUDE_PROJECT_DIR="$R" bash "$STUB" l1 >/dev/null 2>&1
+OUT=$(run_gate "$R" l1)
+[ -z "$OUT" ] && ok "lifecycle: the covered path allows" || bad "lifecycle: covered path allows" "$OUT"
 [ ! -f "$(latch "$R" br-feature-x)" ] \
-  && ok "lifecycle: the user taking the turn back disarms the latch" \
-  || bad "lifecycle: user turn disarms the latch"
+  && ok "lifecycle: the gate's covered path is the ONLY thing that clears the latch" \
+  || bad "lifecycle: covered path clears the latch"
 OUT=$(run_gate "$R" l1)
 [ -z "$OUT" ] && ok "lifecycle: after the disarm the gate is silent again" \
   || bad "lifecycle: silent after disarm" "$OUT"
+
+# ===========================================================================
+# AUTOMATED-TURN PREDICATE — the reminder is silent on every known harness
+# wrapper, and FAILS TOWARD FIRING on anything it does not recognise. That
+# direction is mandatory: a missed automated turn costs one extra line of
+# context, a missed HUMAN turn costs the reminder entirely.
+# ===========================================================================
+R=$(make_repo task)
+echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+# Baseline: this changeset genuinely warrants a reminder on a human turn.
+OUT=$(run_user_turn "$R" q1 "please continue")
+[ -n "$OUT" ] && ok "automated: an ordinary human prompt still gets the reminder" \
+  || bad "automated: human prompt gets the reminder" "(empty)"
+
+# One case per known wrapper shape.
+OUT=$(run_user_turn "$R" q1 '<agent-message from="a3c4be23cdd46d5a0">
+[Subagent hand-back] report text
+</agent-message>')
+[ -z "$OUT" ] && ok "automated: <agent-message ...> (subagent hand-back) → silent" \
+  || bad "automated: agent-message silent" "$OUT"
+OUT=$(run_user_turn "$R" q1 '<task-notification>
+<task-id>a3c4</task-id>
+</task-notification>')
+[ -z "$OUT" ] && ok "automated: <task-notification> (background task) → silent" \
+  || bad "automated: task-notification silent" "$OUT"
+OUT=$(run_user_turn "$R" q1 '<cross-session-message from="other">peer</cross-session-message>')
+[ -z "$OUT" ] && ok "automated: <cross-session-message ...> (peer session) → silent" \
+  || bad "automated: cross-session-message silent" "$OUT"
+OUT=$(run_user_turn "$R" q1 'Another Claude session sent a message: look at this')
+[ -z "$OUT" ] && ok "automated: 'Another Claude session sent a message:' → silent" \
+  || bad "automated: plain peer-message form silent" "$OUT"
+# Leading whitespace must not defeat the match.
+OUT=$(run_user_turn "$R" q1 '
+   <task-notification><task-id>a</task-id></task-notification>')
+[ -z "$OUT" ] && ok "automated: leading whitespace before the wrapper → still silent" \
+  || bad "automated: lenient leading-whitespace match" "$OUT"
+# FAIL TOWARD FIRING: an UNRECOGNISED wrapper is treated as a human turn.
+OUT=$(run_user_turn "$R" q1 '<some-future-wrapper>text</some-future-wrapper>')
+[ -n "$OUT" ] && ok "automated: an UNRECOGNISED wrapper still fires (fail toward firing)" \
+  || bad "automated: unrecognised wrapper must still fire" "(empty)"
+# A wrapper marker that merely APPEARS mid-prompt is a human turn quoting it.
+OUT=$(run_user_turn "$R" q1 'see this: <task-notification> — what does it mean?')
+[ -n "$OUT" ] && ok "automated: a marker mid-prompt is a human quoting it → still fires" \
+  || bad "automated: mid-prompt marker must still fire" "(empty)"
+# The skip is recorded in the decision log, so the human:automated ratio is
+# measurable from dod-log/ rather than guessed at.
+run_user_turn "$R" q1 '<task-notification><task-id>b</task-id></task-notification>' >/dev/null
+grep -qF 'quiet:automated-turn' "$(find "$R/.claude/.harness/dod-log" -maxdepth 1 -name '*.jsonl' 2>/dev/null | head -1)" 2>/dev/null \
+  && ok "automated: the skip is recorded as quiet:automated-turn in the decision log" \
+  || bad "automated: skip recorded in the decision log"
 
 # ===========================================================================
 # REMINDER — no dedup marker, deliberately. Three identical turns, three
@@ -362,51 +451,157 @@ OUT=$(run_user_turn "$R" r1)
   || bad "reminder: silent when covered" "$OUT"
 
 # ===========================================================================
-# TaskCompleted audit trail — writes the record, says nothing, exits 0.
+# DECISION LOG — observe-only. It must record EVERY terminal path (including
+# the silent ones, which are the paths that were previously unobservable) and
+# must be incapable of changing what the gate decides or prints.
+# ===========================================================================
+LOGLIB="$SCRIPTS/lib-log.sh"
+[ -f "$LOGLIB" ] && ok "log: lib-log.sh ships" || bad "log: lib-log.sh ships"
+[ -f "$SCRIPTS/dod-task-log.sh" ] \
+  && bad "log: the TaskCompleted audit script is gone" "dod-task-log.sh still present" \
+  || ok "log: the TaskCompleted audit script is gone"
+grep -qF 'TaskCompleted' "$ROOT/hooks/hooks.json" 2>/dev/null \
+  && bad "log: TaskCompleted is unregistered" "$(grep -F TaskCompleted "$ROOT/hooks/hooks.json")" \
+  || ok "log: TaskCompleted is unregistered"
+
+logfile() { find "$1/.claude/.harness/dod-log" -maxdepth 1 -name '*.jsonl' 2>/dev/null | head -1; }
+logdec()  { jq -r '.decision' "$(logfile "$1")" 2>/dev/null; }
+
+# A SILENT gate invocation still leaves a record — the whole point.
+R=$(make_repo task)
+echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+OUT=$(run_gate "$R" d1)
+eq "log: a silent gate invocation stays silent" "" "$OUT"
+LF=$(logfile "$R")
+[ -n "$LF" ] && ok "log: a silent gate invocation still writes a record" \
+  || bad "log: silent gate invocation writes a record" "(no jsonl)"
+printf '%s' "$(logdec "$R")" | grep -q '^silent:no-claim' \
+  && ok "log: the silent no-claim exit is recorded as such" \
+  || bad "log: no-claim exit recorded" "$(logdec "$R")"
+# One JSON object per line, carrying the full record shape.
+eq "log: the record is one valid JSON object per line" "1" \
+  "$(jq -s 'length' "$LF" 2>/dev/null)"
+eq "log: the record carries ts/hook/decision/task_key/mode/head/detail" "true" \
+  "$(jq -r 'has("ts") and has("hook") and has("decision") and has("task_key") and has("mode") and has("head") and has("detail")' "$LF" 2>/dev/null)"
+eq "log: the record names the hook event" "Stop" "$(jq -r '.hook' "$LF" 2>/dev/null)"
+eq "log: the record carries the resolved task key" "br-feature-x" "$(jq -r '.task_key' "$LF" 2>/dev/null)"
+eq "log: the record carries HC_MODE" "task" "$(jq -r '.mode' "$LF" 2>/dev/null)"
+printf '%s' "$(jq -r '.head' "$LF" 2>/dev/null)" | grep -qE '^[0-9a-f]{7,}$' \
+  && ok "log: the record carries a short HEAD sha" \
+  || bad "log: record carries a short HEAD sha" "$(jq -r '.head' "$LF" 2>/dev/null)"
+
+# APPEND-ONLY: successive invocations accumulate, never overwrite.
+run_gate "$R" d1 >/dev/null
+run_gate "$R" d1 >/dev/null
+eq "log: successive invocations append rather than rewrite" "3" \
+  "$(jq -s 'length' "$(logfile "$R")" 2>/dev/null)"
+
+# A BLOCK is recorded with its category.
+arm_claim "$R" d1
+OUT=$(run_gate "$R" d1)
+is_block "$OUT" && ok "log: the blocking path still blocks" || bad "log: blocking path still blocks" "$OUT"
+jq -s -r '.[-1].decision' "$(logfile "$R")" 2>/dev/null | grep -qF 'block:dod-no-contract' \
+  && ok "log: a block is recorded with its category" \
+  || bad "log: block recorded with its category" "$(jq -s -r '.[-1].decision' "$(logfile "$R")" 2>/dev/null)"
+
+# THE GATE'S STDOUT IS A PROTOCOL: byte-identical with and without the log.
+# The comparison runs the REAL gate from a plugin-root copy with lib-log.sh
+# removed — the fallback stub path — against the shipped one.
+PLUGIN_COPY=$(mktemp -d 2>/dev/null)
+if [ -n "$PLUGIN_COPY" ] && cp -R "$ROOT/." "$PLUGIN_COPY/" 2>/dev/null; then
+  rm -f "$PLUGIN_COPY/scripts/lib-log.sh"
+  R2=$(make_repo task)
+  echo "code" > "$R2/src.py"; git -C "$R2" add -A; git -C "$R2" commit -qm feat >/dev/null
+  arm_claim "$R2" d2
+  WITH=$(run_gate "$R2" d2)
+  R3=$(make_repo task)
+  echo "code" > "$R3/src.py"; git -C "$R3" add -A; git -C "$R3" commit -qm feat >/dev/null
+  CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY" CLAUDE_PROJECT_DIR="$R3" bash "$PLUGIN_COPY/scripts/dod-complete-task.sh" d3 >/dev/null 2>&1
+  WITHOUT=$(printf '{"session_id":"d3","hook_event_name":"Stop","stop_hook_active":false}' \
+    | CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY" CLAUDE_PROJECT_DIR="$R3" bash "$PLUGIN_COPY/scripts/dod-gate.sh" 2>/dev/null)
+  WRC=$?
+  eq "log: the gate exits 0 with lib-log.sh absent" "0" "$WRC"
+  eq "log: gate stdout is byte-identical with and without the decision log" "$WITHOUT" "$WITH"
+  [ -z "$(find "$R3/.claude/.harness/dod-log" -type f 2>/dev/null)" ] \
+    && ok "log: with lib-log.sh absent nothing is written (the stub is a true no-op)" \
+    || bad "log: absent lib-log writes nothing"
+  rm -rf "$PLUGIN_COPY"
+else
+  bad "log: could not stage a plugin-root copy for the identical-stdout check"
+fi
+
+# A LOGGING FAILURE MUST NOT BREAK THE GATE. dod-log/ is replaced by a regular
+# file so mkdir -p cannot succeed and every append must fail.
+R=$(make_repo task)
+echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+mkdir -p "$R/.claude/.harness"
+printf 'not a directory\n' > "$R/.claude/.harness/dod-log"
+OUT=$(run_gate "$R" d4)
+eq "log: an unwritable log leaves the silent gate silent" "" "$OUT"
+eq "log: an unwritable log still exits 0" "0" "$G_RC"
+arm_claim "$R" d4
+OUT=$(run_gate "$R" d4)
+is_block "$OUT" && ok "log: an unwritable log does not change the block decision" \
+  || bad "log: unwritable log keeps the block" "$OUT"
+eq "log: an unwritable log still exits 0 on the blocking path" "0" "$G_RC"
+
+# dod_log itself: never stdout, always 0 — asserted directly on the function.
+LOG_STDOUT=$(cd "$R" && HARNESS_DIR="$R/.claude/.harness" PROJECT_DIR="$R" bash -c \
+  '. "$1/scripts/lib-log.sh"; dod_log Stop "allow" "direct call"' _ "$ROOT" 2>/dev/null)
+LOG_RC=$?
+eq "log: dod_log writes nothing to stdout" "" "$LOG_STDOUT"
+eq "log: dod_log always returns 0" "0" "$LOG_RC"
+
+# The user-turn hook logs its quiet paths and captures the raw payload.
+R=$(make_repo task)
+echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+run_user_turn "$R" d5 >/dev/null
+jq -s -r '[.[] | select(.hook == "UserPromptSubmit")] | length' "$(logfile "$R")" 2>/dev/null | grep -qv '^0$' \
+  && ok "log: the user-turn hook records its decision" \
+  || bad "log: user-turn records its decision" "$(cat "$(logfile "$R")" 2>/dev/null)"
+[ -n "$(find "$R/.claude/.harness/dod-log/payloads" -name '*.json' 2>/dev/null)" ] \
+  && ok "log: the raw UserPromptSubmit payload is captured (temporary diagnostic)" \
+  || bad "log: raw payload captured"
+# ...and the capture is BOUNDED. 25 turns must leave at most 20 files behind.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+  run_user_turn "$R" d5 >/dev/null
+done
+PCOUNT=$(find "$R/.claude/.harness/dod-log/payloads" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+[ "${PCOUNT:-0}" -le 20 ] \
+  && ok "log: the payload capture is capped at the 20 most recent files ($PCOUNT)" \
+  || bad "log: payload capture capped at 20" "$PCOUNT files"
+
+# ===========================================================================
+# REMINDER TEXT — it must INSTRUCT, in order, and it must TRACK STATE. The
+# shipped text did neither: it named dod-complete-task.sh only in a trailing
+# caveat about what the script does not do, so nothing ever told the agent to
+# arm the claim and the latch-driven Stop gate never engaged at all.
 # ===========================================================================
 R=$(make_repo task)
-# The payload carries the REAL TaskCompleted field names — all top-level, and
-# task_subject rather than the non-existent task_state the hook used to read.
-OUT=$(printf '{"session_id":"s-9","prompt_id":"p-1","transcript_path":"/tmp/t.jsonl","cwd":"/repo","scratchpad_dir":"/tmp/sp","permission_mode":"default","hook_event_name":"TaskCompleted","task_id":"t-42","task_subject":"ship the thing","task_description":"do the thing","teammate_name":"tm","team_name":"team"}' \
-        | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1)
-RC=$?
-eq "task-log: exits 0" "0" "$RC"
-eq "task-log: stays silent" "" "$OUT"
-LOG="$R/.claude/.harness/task-log/t-42.json"
-[ -f "$LOG" ] && ok "task-log: record written under the task id" || bad "task-log: record written"
-eq "task-log: task_id recorded"          "t-42"          "$(jq -r '.task_id' "$LOG" 2>/dev/null)"
-eq "task-log: task_description recorded" "do the thing"  "$(jq -r '.task_description' "$LOG" 2>/dev/null)"
-eq "task-log: task_subject recorded"     "ship the thing" "$(jq -r '.task_subject' "$LOG" 2>/dev/null)"
-printf '%s' "$(jq -r '.recorded_at' "$LOG" 2>/dev/null)" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' \
-  && ok "task-log: recorded_at is a UTC timestamp" \
-  || bad "task-log: recorded_at is a UTC timestamp" "$(jq -r '.recorded_at' "$LOG" 2>/dev/null)"
-# The RAW payload is kept verbatim: the schema is best-available, not published,
-# so a field renamed upstream must not leave a silently-empty record behind.
-eq "task-log: raw payload persisted verbatim" "s-9" "$(jq -r '.raw.session_id' "$LOG" 2>/dev/null)"
-eq "task-log: raw payload keeps fields the record does not extract" "team" \
-  "$(jq -r '.raw.team_name' "$LOG" 2>/dev/null)"
-# Absent fields are recorded empty, not dropped; the record is still kept.
-printf '{"task_id":"t-43"}' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
-eq "task-log: absent task_subject recorded empty" "" \
-  "$(jq -r '.task_subject' "$R/.claude/.harness/task-log/t-43.json" 2>/dev/null)"
-# An id-less completion must NOT clobber the previous id-less record: a fixed
-# "unknown-task" basename made the audit trail keep exactly one survivor.
-printf '{"task_description":"first anonymous"}'  | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
-printf '{"task_description":"second anonymous"}' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" >/dev/null 2>&1
-eq "task-log: two id-less completions leave two records, not one overwritten" "2" \
-  "$(find "$R/.claude/.harness/task-log" -name 'unknown-task*.json' 2>/dev/null | wc -l | tr -d ' ')"
-# Malformed / empty stdin: silent, no record, and still exit 0 — TaskCompleted
-# is a BLOCKING hook, so a non-zero exit here would prevent task completion.
-OUT=$(printf 'not json at all' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1); RC=$?
-eq "task-log: malformed stdin exits 0" "0" "$RC"
-eq "task-log: malformed stdin stays silent" "" "$OUT"
-OUT=$(printf '' | CLAUDE_PROJECT_DIR="$R" bash "$TASK_LOG" 2>&1); RC=$?
-eq "task-log: empty stdin exits 0" "0" "$RC"
-eq "task-log: empty stdin stays silent" "" "$OUT"
-# It must never influence the gate: the record exists, the gate is still silent.
-OUT=$(run_gate "$R" t1)
-[ -z "$OUT" ] && ok "task-log: writing a completion record is not a claim (gate stays silent)" \
-  || bad "task-log: record must not arm anything" "$OUT"
+echo "code" > "$R/src.py"; git -C "$R" add -A; git -C "$R" commit -qm feat >/dev/null
+M1=$(run_user_turn "$R" x1 | jq -r '.systemMessage // ""' 2>/dev/null)
+printf '%s' "$M1" | grep -qF 'dod-complete-task.sh' \
+  && ok "reminder: names dod-complete-task.sh" || bad "reminder: names the claim script" "$M1"
+printf '%s' "$M1" | grep -qF 'dod-verify' \
+  && ok "reminder: names the dod-verify skill" || bad "reminder: names dod-verify" "$M1"
+printf '%s' "$M1" | grep -qF 'clears nothing' \
+  && ok "reminder: still carries the asymmetry rule, as a clause inside step 1" \
+  || bad "reminder: carries the asymmetry clause" "$M1"
+printf '%s' "$M1" | grep -qiF 'subagents run no dod script' \
+  && ok "reminder: says only the orchestrator runs dod" || bad "reminder: orchestrator-only" "$M1"
+# State-aware: recording the contract must visibly change the text.
+write_dod "$R" x1
+M2=$(run_user_turn "$R" x1 | jq -r '.systemMessage // ""' 2>/dev/null)
+[ "$M1" != "$M2" ] && ok "reminder: the text changes when a DoD contract appears" \
+  || bad "reminder: text tracks contract state" "$M2"
+# ...and so must uncommitted work appearing on top of committed work.
+echo "more" >> "$R/src.py"
+M3=$(run_user_turn "$R" x1 | jq -r '.systemMessage // ""' 2>/dev/null)
+[ "$M2" != "$M3" ] && ok "reminder: the text changes when uncommitted product work appears" \
+  || bad "reminder: text tracks tree state" "$M3"
+# Honest, not artificially varied: unchanged state -> unchanged text.
+M4=$(run_user_turn "$R" x1 | jq -r '.systemMessage // ""' 2>/dev/null)
+eq "reminder: unchanged state leaves the text unchanged (it tracks reality, not a counter)" "$M3" "$M4"
 
 # ===========================================================================
 # RECURSION BRAKE — category-scoped, under the latch. Same category twice under
