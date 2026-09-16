@@ -25,8 +25,11 @@ Phase 2 (`docs/design-v2.plan.md`).
    ```
    If no contract is open, tell the user to run `/dod:define` first.
 
-2. **Hash the diff.** `dod_diff_hash "$PWD"` — the same function `gate.sh`
-   uses. This value becomes the result's trust key.
+2. **Hash the diff.** `dod_diff_hash "$PWD" "$CONTRACT_BASELINE_SHA"` — the
+   same function `gate.sh` uses, against the same baseline (never `HEAD`: a
+   commit moves HEAD and would silently invalidate every prior result even
+   when the working tree is unchanged). This value becomes the result's
+   trust key.
 
 3. **Run each `check` requirement's command.** Capture its exit code.
    `verdict` is `"pass"` if `exit == expect_exit`, else `"fail"`. Keep the

@@ -136,7 +136,7 @@ fi
 # (No unconditional release here — A2 requires checking the category, which
 # only gate__block can do once it knows which branch we're about to hit.)
 
-DIFF_HASH=$(dod_diff_hash "$PROJECT_DIR")
+DIFF_HASH=$(dod_diff_hash "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA")
 
 # --- branch 7: no result, or result stale (diff_hash mismatch) -> block ------
 if [ ! -f "$RESULT_FILE" ]; then

@@ -28,12 +28,13 @@ esac
 
 # --- dod_diff_hash -----------------------------------------------------------
 REPO4=$(dod__test_make_repo)
-H1=$(dod_diff_hash "$REPO4")
-H2=$(dod_diff_hash "$REPO4")
+BASE4=$(git -C "$REPO4" rev-parse HEAD)
+H1=$(dod_diff_hash "$REPO4" "$BASE4")
+H2=$(dod_diff_hash "$REPO4" "$BASE4")
 eq "diff_hash stable for identical tree" "$H1" "$H2"
 
 echo "changed" >> "$REPO4/root.txt"
-H3=$(dod_diff_hash "$REPO4")
+H3=$(dod_diff_hash "$REPO4" "$BASE4")
 if [ "$H1" != "$H3" ]; then
   ok "diff_hash changes when a tracked file is touched"
 else
@@ -41,11 +42,45 @@ else
 fi
 
 echo "new" > "$REPO4/untracked.txt"
-H4=$(dod_diff_hash "$REPO4")
+H4=$(dod_diff_hash "$REPO4" "$BASE4")
 if [ "$H3" != "$H4" ]; then
   ok "diff_hash changes when an untracked file is added"
 else
   bad "diff_hash changes when an untracked file is added" "$H4"
+fi
+
+# --- dod_diff_hash: stable across a commit that doesn't change tree content -
+# Regression (reported by a peer session exercising the live skeleton):
+# `git diff HEAD` measures distance-from-HEAD, not tree content. Committing
+# the exact content just verified moves HEAD to match the working tree, so a
+# HEAD-relative diff collapses to empty -- the gate then saw a "changed" hash
+# for content that hadn't changed at all, and blocked a task that had just
+# passed /dod:verify. Diffing against the fixed baseline SHA (not HEAD) means
+# a commit with no net tree change must not move the hash.
+H_BEFORE_COMMIT=$(dod_diff_hash "$REPO4" "$BASE4")
+git -C "$REPO4" add -A
+git -C "$REPO4" commit -q -am "commit the exact content just hashed"
+H_AFTER_COMMIT=$(dod_diff_hash "$REPO4" "$BASE4")
+eq "diff_hash stable across a commit (same content, HEAD moved)" "$H_BEFORE_COMMIT" "$H_AFTER_COMMIT"
+
+# deleting a tracked file (relative to baseline) must move the hash, not be
+# silently skipped when git hash-object can no longer read it
+REPO7=$(dod__test_make_repo)
+BASE7=$(git -C "$REPO7" rev-parse HEAD)
+H_BEFORE_DELETE=$(dod_diff_hash "$REPO7" "$BASE7")
+rm "$REPO7/root.txt"
+H_AFTER_DELETE=$(dod_diff_hash "$REPO7" "$BASE7")
+if [ "$H_BEFORE_DELETE" != "$H_AFTER_DELETE" ]; then
+  ok "diff_hash changes when a tracked file is deleted"
+else
+  bad "diff_hash changes when a tracked file is deleted" "$H_AFTER_DELETE"
+fi
+
+# no baseline given -> refuse rather than silently diff against something else
+if dod_diff_hash "$REPO4" ""; then
+  bad "diff_hash requires a baseline argument" "accepted empty baseline"
+else
+  ok "diff_hash requires a baseline argument"
 fi
 
 # --- dod_diff_hash: .dod/ must never self-poison the hash -------------------
@@ -61,11 +96,12 @@ git -C "$REPO6" config user.name "t"
 echo "root" > "$REPO6/root.txt"
 git -C "$REPO6" add -A
 git -C "$REPO6" commit -q -m root
+BASE6=$(git -C "$REPO6" rev-parse HEAD)
 
-H5=$(dod_diff_hash "$REPO6")
+H5=$(dod_diff_hash "$REPO6" "$BASE6")
 mkdir -p "$REPO6/.dod/main"
 echo '{"round":1}' > "$REPO6/.dod/main/result.json"
-H6=$(dod_diff_hash "$REPO6")
+H6=$(dod_diff_hash "$REPO6" "$BASE6")
 eq "diff_hash ignores .dod/ even without a .gitignore rule" "$H5" "$H6"
 
 # --- dod_is_ancestor ---------------------------------------------------------

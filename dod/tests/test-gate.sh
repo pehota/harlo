@@ -70,7 +70,8 @@ fi
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
-DH=$(dod_diff_hash "$REPO")
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0}]'
@@ -83,7 +84,8 @@ eq "branch10: status set to passed" "passed" "$STATUS_AFTER"
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
-DH=$(dod_diff_hash "$REPO")
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
@@ -100,7 +102,8 @@ eq "branch8: round incremented" "1" "$ROUND_AFTER"
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
-DH=$(dod_diff_hash "$REPO")
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0}]'
@@ -127,7 +130,8 @@ open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
 OUT1=$(run_gate "$REPO" "p1" "false")
 is_block "$OUT1" || bad "A2 setup: first call should block (no-result)" "$OUT1"
-DH=$(dod_diff_hash "$REPO")
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'

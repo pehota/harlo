@@ -24,9 +24,36 @@ dod_task_key() {
   dod__sanitize "$branch"
 }
 
-# dod_diff_hash <repo_dir> — stable hash of tracked-file diff (vs HEAD) plus
-# untracked file contents. Identical tree -> identical hash; any touched
-# tracked file or added untracked file -> different hash.
+# dod_diff_hash <repo_dir> <baseline_sha> — stable hash of "which paths
+# changed since baseline, and their current blob content". Identical
+# working-tree content -> identical hash, regardless of how many times it's
+# been committed; any touched/added/deleted path (relative to baseline, plus
+# untracked) -> different hash.
+#
+# MUST diff against the task's baseline SHA, never HEAD, and MUST NOT emit
+# `git diff`'s own patch text. Two failure modes were found the hard way:
+#
+#   1. `git diff HEAD` is distance-from-HEAD, not a content fingerprint —
+#      committing moves HEAD to match the working tree, so a HEAD-relative
+#      diff collapses to empty even though nothing in the working tree
+#      changed. Fixed by diffing against the fixed baseline instead (a
+#      commit with no net tree change then can't move the hash).
+#
+#   2. Even diffed against a fixed baseline, patch text is NOT
+#      commit-invariant: before a commit, a newly-added file is untracked and
+#      gets dumped once by the untracked-files loop; after committing it, the
+#      same file is now tracked and ALSO appears in `git diff <baseline>` as
+#      a new-file patch — same logical content, different bytes fed to
+#      hash-object (patch-file framing vs a raw dump), so the hash still
+#      moved. Fixed by hashing (path, current blob content) pairs instead of
+#      patch text: the path list is diff --name-only (tracked, vs baseline)
+#      unioned with untracked paths, and each path contributes its OWN
+#      current bytes via `git hash-object` — content-addressed and identical
+#      whether that path is currently tracked or untracked.
+#
+# A path present in the diff but missing from the working tree (deleted since
+# baseline) hashes to the literal marker "MISSING" rather than being silently
+# skipped — a delete must move the hash same as any other change.
 #
 # Excludes .dod/ defensively even though it belongs in .gitignore: result.json
 # and state.json are themselves written as untracked files under .dod/, so
@@ -35,15 +62,17 @@ dod_task_key() {
 # rely on .gitignore alone for this — a repo that hasn't picked up the ignore
 # rule yet must not wedge the gate.
 dod_diff_hash() {
-  local repo="$1"
+  local repo="$1" baseline="$2"
+  [ -n "$baseline" ] || return 1
   {
-    git -C "$repo" diff HEAD -- 2>/dev/null
-    git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null \
-      | while IFS= read -r -d '' f; do
-          case "$f" in .dod/*) continue ;; esac
-          printf '%s\n' "$f"
-          cat "$repo/$f" 2>/dev/null
-        done
+    {
+      git -C "$repo" diff --name-only "$baseline" -- 2>/dev/null
+      git -C "$repo" ls-files --others --exclude-standard 2>/dev/null
+    } | sort -u | while IFS= read -r f; do
+      case "$f" in .dod/*) continue ;; esac
+      printf '%s\n' "$f"
+      git -C "$repo" hash-object "$repo/$f" 2>/dev/null || printf 'MISSING\n'
+    done
   } | git hash-object --stdin 2>/dev/null
 }
 
