@@ -1,7 +1,7 @@
 {
   "name": "dod",
   "description": "Task-DoD lifecycle: the agent records an explicit completion claim, and the Stop gate blocks until a verification result covers the changeset.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "Dimitar Apostolov"
   },
