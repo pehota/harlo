@@ -700,7 +700,7 @@ quietly mean "passed the easy ones".
 | D26 | Budget = 2 rounds; identical diff hash burns it immediately | 3–5 rounds; no progress guard |
 | D27 | Schema + reader + writer of each artefact share one file | central schema dir with separate accessors |
 | D28 | `/dod:define` and `/dod:verify` instruct the agent to self-trigger verification the moment it believes a task is done, in the same turn — the gate block is the fallback, not the intended path | rely on the Stop-gate block as the only prompt to verify |
-| D29 | **Reverses D4.** `/dod:define`'s verification table blocks on user confirmation (yes/adjust/cancel) before `contract_write` runs, using a fixed template (Verification / Expected Result / Why This Verification per row) | keep D4's silent-print; a status label ("Contract Opened") with no content the user has to read |
+| D29 | **Reverses D4.** `/dod:define`'s verification table blocks on user confirmation (yes/adjust/cancel) before `contract_write` runs, using a fixed template (Verification / Expected Result / Why This Verification per row). The block covers implementation edits too, not just the contract write — no edit toward the task before the user replies | keep D4's silent-print; a status label ("Contract Opened") with no content the user has to read; gate only the file write, allow the agent to start coding while the table sits unanswered |
 
 ---
 

@@ -56,6 +56,15 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
    user must actually see and accept it before it starts governing the gate.
    Recorded as D29 in `docs/design-v2.md`.
 
+   **This blocks implementation too, not just the contract write.** Do not
+   make any edit toward the task — not a "quick start while waiting," not a
+   speculative first file — until the user has replied. The table you're
+   showing is what the user is being asked to approve; starting work before
+   they answer defeats the confirmation regardless of whether `contract.json`
+   itself is written yet. If you're already mid-implementation when you
+   realize a contract should exist (a follow-up `/dod:define` after the fact),
+   say so plainly rather than silently back-dating the baseline.
+
 5. **Record the baseline**, immediately after confirmation, immediately
    before writing the contract:
    ```
