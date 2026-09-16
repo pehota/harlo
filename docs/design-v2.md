@@ -360,8 +360,15 @@ stderr one line + exit 1                           → release (harness error, n
 > `dod-v1-final`. Without this, one spurious `stop_hook_active` release would
 > defeat the gate entirely.
 
-`set -uo pipefail` plus an `ERR` trap routing to branch 0. A bug in the harness
-can never wedge the session.
+> **Correction** (found during Phase 1 implementation review): no `set -e`,
+> `set -u`, or `pipefail`, and no `ERR` trap — `docs/design-v2.plan.md`'s Bash
+> conventions section requires every `git`/`jq` call individually guarded
+> instead, so a single bad call degrades to fail-open (branch 0) without an
+> interpreter-level trap that could itself misfire under `-u`/pipefail in a
+> sourced-into-hooks script. Implemented this way in `dod/hooks/gate.sh`.
+
+Every `git`/`jq` call individually guarded, routing failures to branch 0. A bug
+in the harness can never wedge the session.
 
 ### 6.3 `contract.json`
 

@@ -5,6 +5,7 @@
 DIR0="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR0/test-helpers.sh"
 . "$DIR0/../lib/contract.sh"
+. "$DIR0/../lib/state.sh"
 
 echo "== contract.sh =="
 
@@ -67,6 +68,31 @@ if contract_write "$NOCMD_FILE" \
 else
   ok "contract_write rejects a check requirement missing cmd"
 fi
+
+# --- contract_write resets a stale claim latch on the sibling state.json ----
+# Regression: a task passes (latch armed), then the same task_key is amended
+# (a fresh contract_write with status back to "open"). Without a reset, the
+# gate would treat the very next question-only turn as already latched and
+# demand a claim nobody made this time.
+LATCH_DIR="$REPO/.dod/latch-test"
+LATCH_CFILE="$LATCH_DIR/contract.json"
+LATCH_SFILE="$LATCH_DIR/state.json"
+
+contract_write "$LATCH_CFILE" \
+  --task-key "latch-test" --task "first pass" --task-source "argument" \
+  --session-id "s" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
+state_arm_latch "$LATCH_SFILE"
+state_read "$LATCH_SFILE"
+eq "latch-test setup: latched after arming" "true" "$STATE_LATCHED"
+
+# amend: contract_write runs again for the same task_key
+contract_write "$LATCH_CFILE" \
+  --task-key "latch-test" --task "amended task" --task-source "argument" \
+  --session-id "s" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
+state_read "$LATCH_SFILE"
+eq "contract_write resets a stale latch on amend" "false" "$STATE_LATCHED"
 
 echo
 echo "contract.sh: $PASS passed, $FAIL failed"

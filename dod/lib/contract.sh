@@ -33,6 +33,16 @@ contract__validate_requirements() {
 #                        --baseline-sha SHA [--dirty-files JSON_ARR]
 #                        --requirements JSON_ARR [--waivers JSON_ARR]
 # Validates before writing. Returns 1 and writes nothing on failure.
+#
+# Also resets the sibling state.json (same directory) back to defaults.
+# contract_write is the sole entry point for "a task's lifecycle (re)starts" —
+# fresh /dod:define or an amend after a pass, both always write status:"open"
+# here. Without this reset, state.latched from a PRIOR pass on this task_key
+# survives into the new contract: the gate would then treat the very next
+# question-only turn (branch 5, no claim/no edits -> release) as already
+# latched and demand a claim that was never made this time around. This does
+# not violate N6 — contract.sh calls state_write, it never jq's state.json
+# itself.
 contract_write() {
   local path="$1"; shift
   local task_key="" task="" task_source="" session_id="" baseline_sha=""
@@ -76,7 +86,15 @@ contract_write() {
       baseline: { sha: $baseline_sha, dirty_files: $dirty_files },
       waivers: $waivers,
       requirements: $requirements
-    }' > "$path" 2>/dev/null
+    }' > "$path" 2>/dev/null || return 1
+
+  local state_lib
+  state_lib="$(dirname "${BASH_SOURCE[0]}")/state.sh"
+  if [ -f "$state_lib" ]; then
+    # shellcheck disable=SC1090
+    . "$state_lib"
+    state_write "$(dirname "$path")/state.json"
+  fi
 }
 
 # contract_read <path> — sets CONTRACT_* globals. Returns 1 on missing file,
