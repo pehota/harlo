@@ -12,3 +12,7 @@
   the Stop gate goes silent until the agent arms a claim latch, then blocks until a
   HEAD-keyed verification result *and* a clean product surface cover the changeset;
   establishes the asymmetry rule that an agent-authored signal may only tighten the gate.
+
+> **All ADRs above are marked `review: needed`.** They record decisions for the
+> implementation that [`../design-v2.md`](../design-v2.md) redesigns. Revisit
+> them once the new harness has been built and exercised — not before.

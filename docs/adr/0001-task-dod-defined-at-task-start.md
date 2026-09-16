@@ -1,5 +1,6 @@
 ---
 status: accepted
+review: needed — may be superseded by the harness redesign in docs/design-v2.md
 ---
 
 # The Definition of Done is fixed at task start, not assembled at `/done`

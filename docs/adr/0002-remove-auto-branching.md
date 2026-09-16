@@ -1,5 +1,6 @@
 ---
 status: accepted
+review: needed — may be superseded by the harness redesign in docs/design-v2.md
 ---
 
 # Auto-branching is removed, not merely defaulted off
