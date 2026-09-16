@@ -92,7 +92,12 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
 
 7. **Confirm the contract is open** with a short one-line note (SHA + "ready
    to start") — the verification table already shown in step 4 is the
-   substance; don't repeat it.
+   substance; don't repeat it. **Then start implementing the task
+   immediately, in this same turn.** The user's "yes" in step 4 approved both
+   the verification list AND starting work — it is not a separate go-ahead
+   you wait to be asked for again. Do not stop and hand control back after
+   writing the contract; the contract write is a means to the task, not the
+   task itself.
 
 8. **Tell the agent, not the user, to verify.** State plainly: when you
    believe this task is done, run `/dod:verify` yourself before you stop — do
