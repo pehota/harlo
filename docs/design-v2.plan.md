@@ -1,0 +1,200 @@
+# Implement DoD Harness v2
+
+## Context
+
+The `dod/` plugin fails at its job: it doesn't reliably guide the coding agent to
+verify work before claiming done. Rather than patch it, we ran a full requirements
+interview and produced a clean-sheet design — `docs/design-v2.md`, committed in
+`cc55759`, 27 decisions each recorded with its rejected alternative.
+
+**This plan implements that design.** The design is settled; nothing here re-opens it.
+What remains is sequencing, reuse decisions, and two amendments the codebase forced.
+
+Intended outcome: `/dod:define` writes a contract of typed requirements before code
+is written; a `Stop` hook gates the done-claim; `/dod:verify` runs the checks and a
+fresh-context reviewer; failures loop twice, then escalate.
+
+**Scope:** `dod/` only. `completion-harness/` is a separate plugin with its own
+version, docs and tests — untouched, and its fate decided after v2 is proven.
+
+---
+
+## Amendments to `docs/design-v2.md`
+
+Two changes, agreed after exploring the codebase. Both must be written into the doc
+as part of Phase 1 so doc and code stay in sync.
+
+### A1 — Block form: JSON, not `exit 2`
+
+§6.2 says block = `exit 2` + stderr. **Change to** `{"decision":"block","reason":"…"}`
+on stdout + `exit 0`.
+
+Why: it is the repo's existing convention (`dod/scripts/dod-gate.sh:145-161`), and
+that file's header gives the reason — `exit 2` renders in the transcript as a hook
+*error*, which is wrong for a deliberate gate decision. Harness errors keep `exit 1`,
+so the two stay visibly distinct.
+
+Revised exit contract:
+
+```
+stdout {"decision":"block","reason":"…"} + exit 0  → block  (verification failure)
+silent + exit 0                                    → release (normal)
+stderr one line + exit 1                           → release (harness error, noisy)
+```
+
+Consequence for tests: assert on parsed JSON (`jq -e '.decision == "block"'`), and
+assert *release* as empty stdout — the existing suites' idiom.
+
+### A2 — Category-scoped recursion brake
+
+§5.1 releases whenever `stop_hook_active` is true. The existing gate is smarter
+(`dod-gate.sh:145-163`): it records the *category* of the last block and releases only
+when `stop_hook_active` is true **and** the category is unchanged. A block for a
+*different* reason still blocks.
+
+Adopt it. Without it, one spurious `stop_hook_active` releases the gate entirely; with
+it, only a genuinely stuck loop releases.
+
+---
+
+## Phase 0 — Wipe and tag
+
+1. Delete `dod/scripts/`, `dod/hooks/`, `dod/skills/`, `dod/agents/`, `dod/contracts/`,
+   `dod/tests/`, `dod/docs/base-dod.md`, `dod/README.md`.
+2. Keep `dod/.claude-plugin/plugin.json` (version continuity — the pre-push hook
+   depends on it) and the `dod` entry in `.claude-plugin/marketplace.json`.
+3. Commit `refactor(dod)!: wipe the v1 implementation ahead of the v2 rewrite`,
+   then tag it `dod-v1-final` so every deleted line stays recoverable.
+
+`run-tests.sh` globs `dod/tests/test-*.sh`, so an empty `dod/tests/` leaves the root
+suite green rather than broken.
+
+---
+
+## Phase 1 — Walking skeleton
+
+**Definition of the skeleton:** `/dod:define` writes a contract with the detected test
+command as its single `check`; the agent arms a claim; the gate blocks; `/dod:verify`
+runs that check and writes a result; the gate releases.
+
+**In:** contract/result/state libs, `gitref.sh`, `io.sh`, `gate.sh`, both skills, a
+claim script, `hooks.json` with `Stop` only.
+
+**Out (Phase 2):** `guard.sh`, `track.sh`, `session.sh`, the reviewer, baseline
+worktree, cache, escalation, waivers, e2e requirement, expiry.
+
+**Kept in, despite being "depth":** the claim latch. Deferring it would mean testing a
+gate with different engagement semantics from the real one. The *abandonment guard*
+(`edits_this_prompt`) defers with `track.sh`.
+
+### Files
+
+| File | Contents |
+|---|---|
+| `dod/lib/io.sh` | `dod_hook_read` (one `jq … \| @tsv`, not 8 forks), `dod_block`, `dod_release`, `dod_fail_open`, `dod_log` |
+| `dod/lib/gitref.sh` | `dod_task_key`, `dod_diff_hash`, `dod_is_ancestor` |
+| `dod/lib/contract.sh` | schema + `contract_read/write/validate` — **sole owner of contract.json** |
+| `dod/lib/result.sh` | schema + `result_read/write/validate` |
+| `dod/lib/state.sh` | schema + `state_read/write` + mutators (`state_arm_latch`, `state_bump_round`) |
+| `dod/hooks/gate.sh` | decision tree, branches 0,1,2,3,5,7,8,10 |
+| `dod/hooks/hooks.json` | `Stop` → `gate.sh`, timeout 10 |
+| `dod/skills/dod-define/SKILL.md` | derive + `contract_write` |
+| `dod/skills/dod-verify/SKILL.md` | run checks + `result_write` + print pass table |
+| `dod/scripts/dod-claim.sh` | arms the latch |
+| `dod/tests/test-helpers.sh` | ported `ok/bad/eq`, `make_repo`, `run_gate` |
+| `dod/tests/test-{gate,contract,result,state,gitref}.sh` | one suite per unit |
+
+### Ported functions
+
+Wipe first, then deliberately re-introduce these five — **rewritten to the new
+structure, not copy-pasted**. Originals recoverable at tag `dod-v1-final`.
+
+| From | To | Change on the way |
+|---|---|---|
+| `harness-common.sh:182-200` `hc_read_hook_input` | `io.sh` `dod_hook_read` | collapse 8 `jq` forks into one |
+| `harness-common.sh:426-432` + `:256-258` task key | `gitref.sh` `dod_task_key` | sanitise **once** inside the resolver (v1 re-sanitised at 3 call sites) |
+| `lib-log.sh:48-85` `dod_log` | `io.sh` | verbatim — keep the "never writes stdout" invariant |
+| `dod-gate.sh:145-163` `block`/`clear_last_block` | `gate.sh` | keep the category-scoped brake (A2) |
+| `dod-verify-detect.sh:33-133` detection cascade | `dod:define` battery detector | Phase 2; drop the config read/write/upgrade half |
+
+**Deliberately not ported:** `hc_validate` + `contracts/*.schema.json` (external schema
+files contradict N6 — validation lives inside each lib), the commit-ledger machinery
+(~280 lines, already dead in `dod/`), `dod-verify-triage.sh` (it *is* the old 10-step
+gate design).
+
+### Sequence (TDD on libs + gate; skills verified by exercising the flow)
+
+1. `test-helpers.sh` — ported, no assertions of its own.
+2. `gitref.sh` — tests first: task key from branch, sanitisation, diff hash stability
+   (identical tree → identical hash; touched file → different hash), ancestor check.
+3. `contract.sh` / `result.sh` / `state.sh` — tests first, each covering: write→read
+   round-trip, malformed input rejected, **and the N6 invariant** (a requirement that is
+   neither `check` nor `judgement` is rejected).
+4. `io.sh` — tests first: `dod_hook_read` parses a payload and degrades to defaults
+   without jq; `dod_block` emits exactly one JSON object; `dod_log` writes nothing to
+   stdout.
+5. `gate.sh` — tests first, **one case per branch**, asserting block-vs-release and the
+   reason text, following the v1 suites' `is_block` / empty-stdout idiom.
+6. Skills + `dod-claim.sh` — written against the now-green libs.
+7. `hooks.json`, then end-to-end by hand.
+
+### Bash conventions (from the existing code — follow strictly)
+
+- `#!/bin/bash`, **no `set -e`, no `set -u`, no pipefail** in hooks and libs; guard every
+  `git`/`jq` call individually. (Root-level CLI scripts may use `set -u`.)
+- `dod_*` public, `dod__*` private, `SCREAMING_SNAKE` globals.
+- `PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"`;
+  sourced libs locate themselves via `BASH_SOURCE[0]`.
+- Guarded sourcing + a no-op stub if a lib is missing, so absence never changes behaviour.
+- `jq` always `2>/dev/null`; construct with `jq -n --arg`, never string interpolation;
+  validate numerics with a `case` glob before comparing.
+- Every file opens with a header block stating purpose, contract, exit codes, and *why* —
+  including rejected alternatives.
+
+---
+
+## Phase 2 — Depth (after the skeleton runs end-to-end)
+
+Ordered by what most reduces risk:
+
+1. `track.sh` + abandonment guard — completes the claim rule.
+2. `dod-reviewer` agent + the `judgement` path — the gate the design exists for.
+3. `guard.sh` — contract-before-first-edit.
+4. Escalation: branches 4, 6, 9 + the two-step release.
+5. Baseline worktree + pre-existing-failure resolution.
+6. Cache on `(diff_hash, cmd)`.
+7. `session.sh` — preflight, cancel-on-clear, error banner.
+8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`.
+
+---
+
+## Verification
+
+**Phase 1 is done when all four hold, each stated with how it was verified:**
+
+1. **Requirements** — every skeleton behaviour in the table above demonstrated.
+2. **Real flow, not the diff** — in a scratch git repo with the plugin enabled:
+   `/dod:define` → edit a file → arm the claim → observe the gate block → `/dod:verify`
+   → observe release. Then the negative case: a deliberately failing check must block
+   and name the failure. Transcript captured.
+3. **Fresh-agent review** — independent reviewer on the changeset, running `git diff`
+   itself. Blocking findings fixed; non-blocking findings batched and raised for your
+   decision, never silently fixed or dropped.
+4. **Green** — `bash run-tests.sh` passes; `bash check-version.sh dod <base> <head>`
+   returns 0 (the pre-push hook auto-bumps `dod/.claude-plugin/plugin.json` otherwise).
+
+**Interference check (N1), explicitly:** a session with no contract, and a session with
+a contract but a question-only turn, must both produce empty gate stdout. This is the
+NFR most likely to regress silently, so it gets its own test case rather than riding
+along.
+
+---
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| `completion-harness` stays enabled and its gate fires during the build | Known. Test in a scratch repo, not this one. Disable it if it interferes. |
+| Wipe deletes something we later want | Tagged `dod-v1-final`; ported functions listed explicitly above. |
+| Gate bug wedges a real session | Fail-open discipline + category-scoped brake, both covered by tests before `hooks.json` is written. |
+| Doc and code drift | A1/A2 written into `docs/design-v2.md` in the same phase, per the repo's own "trust the code, re-sync the doc" rule. |
