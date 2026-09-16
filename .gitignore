@@ -7,5 +7,8 @@ test-expectations/
 # Harness runtime state (plugin active — machine-local, seeded at runtime)
 .claude/.harness/
 
+# dod v2 runtime state (plugin active — machine-local, branch-keyed)
+.dod/
+
 # Task worktrees (new-worktree.sh / run-task.sh) — ephemeral, machine-local
 .worktrees/

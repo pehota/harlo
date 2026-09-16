@@ -48,6 +48,26 @@ else
   bad "diff_hash changes when an untracked file is added" "$H4"
 fi
 
+# --- dod_diff_hash: .dod/ must never self-poison the hash -------------------
+# Regression: dod__test_make_repo's fixture .gitignore lists .dod/, which
+# would mask this bug. Build a repo WITHOUT that ignore rule (as a real repo
+# looks before dod's own .gitignore entry has been added, or if it's absent)
+# to prove the exclusion is enforced in code, not borrowed from .gitignore.
+REPO6=$(dod__test_mktemp_d)
+CLEANUP_DIRS="$CLEANUP_DIRS $REPO6"
+git -C "$REPO6" init -q -b main
+git -C "$REPO6" config user.email "t@t.t"
+git -C "$REPO6" config user.name "t"
+echo "root" > "$REPO6/root.txt"
+git -C "$REPO6" add -A
+git -C "$REPO6" commit -q -m root
+
+H5=$(dod_diff_hash "$REPO6")
+mkdir -p "$REPO6/.dod/main"
+echo '{"round":1}' > "$REPO6/.dod/main/result.json"
+H6=$(dod_diff_hash "$REPO6")
+eq "diff_hash ignores .dod/ even without a .gitignore rule" "$H5" "$H6"
+
 # --- dod_is_ancestor ---------------------------------------------------------
 REPO5=$(dod__test_make_repo)
 ROOT_SHA=$(git -C "$REPO5" rev-parse HEAD)

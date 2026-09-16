@@ -27,12 +27,20 @@ dod_task_key() {
 # dod_diff_hash <repo_dir> — stable hash of tracked-file diff (vs HEAD) plus
 # untracked file contents. Identical tree -> identical hash; any touched
 # tracked file or added untracked file -> different hash.
+#
+# Excludes .dod/ defensively even though it belongs in .gitignore: result.json
+# and state.json are themselves written as untracked files under .dod/, so
+# without this exclusion every dod_diff_hash call after a result_write would
+# hash its own output, self-invalidating the very result it just wrote. Never
+# rely on .gitignore alone for this — a repo that hasn't picked up the ignore
+# rule yet must not wedge the gate.
 dod_diff_hash() {
   local repo="$1"
   {
     git -C "$repo" diff HEAD -- 2>/dev/null
     git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null \
       | while IFS= read -r -d '' f; do
+          case "$f" in .dod/*) continue ;; esac
           printf '%s\n' "$f"
           cat "$repo/$f" 2>/dev/null
         done
