@@ -253,7 +253,8 @@ itself each time it blocks.
 ```
   ┌─ preflight assert ──── deps present · is a git repo · no open DoD (or amend)
   ├─ task capture ──────── argument if given, else derive from conversation
-  │                        record task_source · print for objection
+  │                        record task_source (objection window is the
+  │                        confirmation gate below, not a separate print)
   ├─ protocol loader ───── DoD protocol floor + CLAUDE.md chain
   ├─ battery detector ──── package.json / Makefile / cargo / … → check commands
   ├─ requirement synth ─── task-derived requirements + e2e applicability decision

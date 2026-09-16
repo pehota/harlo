@@ -43,17 +43,18 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
 
    One row per requirement. "Why This Verification" is never blank — say
    where the requirement came from (`auto-detected` from step 3,
-   `task`-stated, or `protocol`-required). Do **not** proceed to step 6 until
-   the user replies. `yes` (or equivalent) continues; a correction updates the
-   requirements and re-shows the table; `cancel` aborts — no contract is
-   written.
+   `task`-stated, or `protocol`-required). Do **not** proceed to step 5
+   (baseline recording) or step 6 (contract write) until the user replies.
+   `yes` (or equivalent) continues; a correction updates the requirements and
+   re-shows the table; `cancel` aborts — no baseline is recorded and no
+   contract is written.
 
    **Why this blocks, reversing D4's "no blocking questions":** a printed
    "Contract Opened" table that nobody has to look at is a formality, not a
    check — found in practice to be exactly as ignorable as no confirmation at
    all. The verification list IS the definition of done for this task; the
    user must actually see and accept it before it starts governing the gate.
-   Recorded as D28 revision in `docs/design-v2.md`.
+   Recorded as D29 in `docs/design-v2.md`.
 
 5. **Record the baseline**, immediately after confirmation, immediately
    before writing the contract:
