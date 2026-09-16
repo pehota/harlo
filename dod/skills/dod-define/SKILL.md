@@ -18,8 +18,7 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
 
 2. **Task capture.** If the user gave task text as an argument, use it
    verbatim (`task_source: "argument"`). Otherwise derive one sentence from
-   the current conversation (`task_source: "conversation"`) and print it back
-   for the user to object to before continuing.
+   the current conversation (`task_source: "conversation"`).
 
 3. **Detect the test command.** Look for, in order: `package.json` `scripts.test`
    (`npm test` / the project's package manager equivalent), a `Makefile` `test`
@@ -28,13 +27,42 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
    detected, ask the user for the test command — do not guess a command that
    might not exist.
 
-4. **Record the baseline last**, immediately before writing the contract:
+4. **Present the verification table and wait for confirmation** (D4,
+   amended: this now blocks — see the note below). Before writing anything,
+   show the user exactly what will decide "done", using this template:
+
+   ```
+   Here's how I will verify the task is done:
+
+   | Verification | Expected Result | Why This Verification |
+   |---|---|---|
+   | <cmd>         | exit 0           | <one clause: detected/task-stated/protocol> |
+
+   Does this look right? (yes / adjust / cancel)
+   ```
+
+   One row per requirement. "Why This Verification" is never blank — say
+   where the requirement came from (`auto-detected` from step 3,
+   `task`-stated, or `protocol`-required). Do **not** proceed to step 6 until
+   the user replies. `yes` (or equivalent) continues; a correction updates the
+   requirements and re-shows the table; `cancel` aborts — no contract is
+   written.
+
+   **Why this blocks, reversing D4's "no blocking questions":** a printed
+   "Contract Opened" table that nobody has to look at is a formality, not a
+   check — found in practice to be exactly as ignorable as no confirmation at
+   all. The verification list IS the definition of done for this task; the
+   user must actually see and accept it before it starts governing the gate.
+   Recorded as D28 revision in `docs/design-v2.md`.
+
+5. **Record the baseline**, immediately after confirmation, immediately
+   before writing the contract:
    ```
    HEAD_SHA=$(git rev-parse HEAD)
    ```
    Minimise the window between snapshotting HEAD and allowing edits.
 
-5. **Write the contract** via `dod/lib/contract.sh`'s `contract_write` — do
+6. **Write the contract** via `dod/lib/contract.sh`'s `contract_write` — do
    not construct or edit `contract.json` any other way (N6: `contract.sh` is
    the sole owner):
 
@@ -52,20 +80,22 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
      --requirements '[{"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"}]'
    ```
 
-6. **Print the contract** as a short table: task, baseline SHA, requirements.
-   No blocking questions beyond step 2's objection window (D4: derive
-   silently, print, don't interrogate).
+7. **Confirm the contract is open** with a short one-line note (SHA + "ready
+   to start") — the verification table already shown in step 4 is the
+   substance; don't repeat it.
 
-7. **Tell the agent, not the user, to verify.** State plainly, as part of the
-   printed contract: when you believe this task is done, run `/dod:verify`
-   yourself before you stop — do not tell the user to run it and do not wait
-   for them to ask. The Stop gate will block and name the reason if you skip
-   this, but don't rely on the gate to catch it; treat "run /dod:verify" as
-   your own next action at the moment you'd otherwise claim done, in the same
-   turn, not a request to relay.
+8. **Tell the agent, not the user, to verify.** State plainly: when you
+   believe this task is done, run `/dod:verify` yourself before you stop — do
+   not tell the user to run it and do not wait for them to ask. The Stop gate
+   will block and name the reason if you skip this, but don't rely on the
+   gate to catch it; treat "run /dod:verify" as your own next action at the
+   moment you'd otherwise claim done, in the same turn, not a request to
+   relay.
 
 ## If a contract is already open for this branch
 
-Amend it: re-run `contract_write` for the same `task_key`, updating `task` or
-`requirements` as needed. `--new` (explicit user request) instead opens a
-fresh task, replacing the file outright.
+Amend it: re-run steps 2–4 (capture, detect, **confirm the table again** — an
+amend changes what "done" means, so it needs the same confirmation a fresh
+open does) before `contract_write` for the same `task_key`. `--new` (explicit
+user request) instead opens a fresh task, replacing the file outright, same
+confirmation gate.

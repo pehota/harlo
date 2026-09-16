@@ -259,13 +259,16 @@ itself each time it blocks.
   ├─ requirement synth ─── task-derived requirements + e2e applicability decision
   ├─ waiver extractor ──── free text in the user's prompt → waivers[]
   ├─ schema validator ──── reject malformed · reject vague-without-check
+  ├─ confirmation gate ──── print the verification table · BLOCK on yes/adjust/cancel (D29)
   ├─ baseline recorder ─── HEAD sha + dirty file list
-  └─ contract_write ────── via lib/contract.sh, then print the contract table
+  └─ contract_write ────── via lib/contract.sh, then confirm one-line: "open"
 ```
 
 Ordering matters: **the baseline is recorded last**, immediately before the
 contract is written, minimising the window between snapshotting HEAD and
-allowing edits.
+allowing edits — and now **after** the confirmation gate, since a rejected or
+adjusted table must not have already snapshotted HEAD for the wrong
+requirements.
 
 ### 5.3 `/dod:verify` components
 
@@ -671,7 +674,7 @@ quietly mean "passed the easy ones".
 | D1 | Task unit = a user-declared task, spanning turns; follow-ups amend | one-prompt-per-task; TodoWrite list |
 | D2 | Activation is an explicit `/dod:define`; auto-detection deferred | first-mutating-edit auto-open; prompt classification |
 | D3 | Protocol is the floor; only explicit user input waives a gate | task inference; user-input-wins |
-| D4 | Collection derives silently and prints; no blocking questions | interactive Q&A at task start |
+| D4 | ~~Collection derives silently and prints; no blocking questions~~ **Reversed, D29** — the printed table now blocks on confirmation | interactive Q&A at task start |
 | D5 | Bounded hard block, then escalation | unbounded loop; advisory-only |
 | D6 | Changeset-scoped verification | full-repo battery every time |
 | D7 | Baseline = HEAD SHA at open, minus pre-existing dirty files; edited-file log as cross-check | SHA only; edited-file log only |
@@ -696,6 +699,7 @@ quietly mean "passed the easy ones".
 | D26 | Budget = 2 rounds; identical diff hash burns it immediately | 3–5 rounds; no progress guard |
 | D27 | Schema + reader + writer of each artefact share one file | central schema dir with separate accessors |
 | D28 | `/dod:define` and `/dod:verify` instruct the agent to self-trigger verification the moment it believes a task is done, in the same turn — the gate block is the fallback, not the intended path | rely on the Stop-gate block as the only prompt to verify |
+| D29 | **Reverses D4.** `/dod:define`'s verification table blocks on user confirmation (yes/adjust/cancel) before `contract_write` runs, using a fixed template (Verification / Expected Result / Why This Verification per row) | keep D4's silent-print; a status label ("Contract Opened") with no content the user has to read |
 
 ---
 
