@@ -695,6 +695,7 @@ quietly mean "passed the easy ones".
 | D25 | Bash + `jq` + `git`; grow dependencies only as needed | Node/Python runtime |
 | D26 | Budget = 2 rounds; identical diff hash burns it immediately | 3–5 rounds; no progress guard |
 | D27 | Schema + reader + writer of each artefact share one file | central schema dir with separate accessors |
+| D28 | `/dod:define` and `/dod:verify` instruct the agent to self-trigger verification the moment it believes a task is done, in the same turn — the gate block is the fallback, not the intended path | rely on the Stop-gate block as the only prompt to verify |
 
 ---
 

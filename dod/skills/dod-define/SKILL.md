@@ -56,6 +56,14 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
    No blocking questions beyond step 2's objection window (D4: derive
    silently, print, don't interrogate).
 
+7. **Tell the agent, not the user, to verify.** State plainly, as part of the
+   printed contract: when you believe this task is done, run `/dod:verify`
+   yourself before you stop — do not tell the user to run it and do not wait
+   for them to ask. The Stop gate will block and name the reason if you skip
+   this, but don't rely on the gate to catch it; treat "run /dod:verify" as
+   your own next action at the moment you'd otherwise claim done, in the same
+   turn, not a request to relay.
+
 ## If a contract is already open for this branch
 
 Amend it: re-run `contract_write` for the same `task_key`, updating `task` or

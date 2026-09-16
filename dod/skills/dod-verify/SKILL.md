@@ -11,6 +11,12 @@ requirements only and reports pass/fail. The baseline worktree, cache,
 judgement/reviewer orchestration, and the pass-table's waiver/n/a columns are
 Phase 2 (`docs/design-v2.plan.md`).
 
+**Run this yourself, without being asked.** The moment you believe a task
+covered by an open contract is done, run `/dod:verify` in that same turn
+before you stop — never tell the user to run it and never wait for the gate
+to block first. A block is the fallback for when this was skipped, not the
+intended trigger.
+
 ## Steps
 
 1. **Load the contract.** Assert `status == "open"`:
