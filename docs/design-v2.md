@@ -325,25 +325,40 @@ that the gate parses is precisely where a determinism harness would leak.
 
 ### 6.2 `gate.sh` exit contract
 
+> **Amendment A1** (`docs/design-v2.plan.md`): block is JSON on stdout + exit
+> 0, not `exit 2`. This matches the repo's existing convention
+> (`dod/scripts/dod-gate.sh:145-161` at tag `dod-v1-final`) — `exit 2` renders
+> in the transcript as a hook *error*, which is wrong for a deliberate gate
+> decision. Harness errors keep `exit 1` so the two stay visibly distinct.
+
 ```
-exit 0 → release, silent          (normal operation)
-exit 1 → release, NOISY           (harness error — never blocks)
-exit 2 → block, stderr = reason   (verification failure)
+stdout {"decision":"block","reason":"…"} + exit 0  → block  (verification failure)
+silent + exit 0                                    → release (normal operation)
+stderr one line + exit 1                           → release (harness error, noisy)
 ```
 
-| # | Branch | exit | stderr → agent | state writes |
+| # | Branch | exit | stdout/stderr → agent | state writes |
 |---|---|---|---|---|
-| 0 | harness error | **1** | one line: `dod gate error: <cause> — see .dod/errors.log` | — |
+| 0 | harness error | **1** | stderr, one line: `dod gate error: <cause> — see .dod/errors.log` | — |
 | 1 | `stop_hook_active` | 0 | — | — |
 | 2 | no contract | 0 | — | — |
 | 3 | status ≠ open | 0 | — | — |
 | 4 | baseline not ancestor | 0 | — | `status=expired` |
 | 5 | no claim, no edits | 0 | — | — |
 | 6 | `escalation=armed` | 0 | — | `status=escalated` |
-| 7 | result missing/stale | **2** | `block-no-result.txt` | — |
-| 8 | blocking failures, budget left | **2** | `block-findings.txt` | `round++`, `last_failed_diff_hash` |
-| 9 | budget exhausted | **2** | `block-escalate.txt` | `escalation=armed` |
+| 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — |
+| 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` |
+| 9 | budget exhausted | 0 | stdout JSON: `block-escalate.txt` | `escalation=armed` |
 | 10 | all pass | 0 | — | `status=passed`, worktree torn down |
+
+> **Amendment A2** (`docs/design-v2.plan.md`): branch 1 (`stop_hook_active`)
+> is **category-scoped**, not a blanket release. The gate records the
+> *category* of the last block it issued; it releases on `stop_hook_active`
+> only when the category is unchanged from last turn. A block for a
+> *different* category still blocks even under `stop_hook_active`. Ported
+> from `dod-gate.sh:145-163`'s `block()`/`clear_last_block()` at tag
+> `dod-v1-final`. Without this, one spurious `stop_hook_active` release would
+> defeat the gate entirely.
 
 `set -uo pipefail` plus an `ERR` trap routing to branch 0. A bug in the harness
 can never wedge the session.
