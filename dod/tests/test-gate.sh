@@ -235,6 +235,10 @@ case "$REASON2" in
   *"BUDGET EXHAUSTED"*"Report"*) ok "branch9: reason names budget exhaustion and tells agent to report" ;;
   *) bad "branch9: reason names budget exhaustion and tells agent to report" "$REASON2" ;;
 esac
+case "$REASON2" in
+  *"NO PROGRESS"*) bad "branch9: headline must not say NO PROGRESS when budget, not lack of progress, is the trigger" "$REASON2" ;;
+  *) ok "branch9: headline does not say NO PROGRESS when budget is the actual trigger" ;;
+esac
 ESCALATION_AFTER=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
 eq "branch9: state.escalation armed" "armed" "$ESCALATION_AFTER"
 
@@ -244,11 +248,12 @@ eq "branch6: escalation-armed turn releases silently" "" "$OUT3"
 STATUS_AFTER=$(jq -r '.status' "$REPO/.dod/main/contract.json" 2>/dev/null)
 eq "branch6: status set to escalated" "escalated" "$STATUS_AFTER"
 
-# --- branch 9 (D26 no-progress): identical diff_hash across failing rounds --
-# burns the budget on round 2 even though the literal round count would
-# otherwise still be under budget on its own (round hits 2 here too, but via
-# the no-progress path rather than the budget-reached path — assert the
-# no-progress wording specifically).
+# --- branch 9 (D26 no-progress), ISOLATED from the budget trigger -----------
+# DOD_ROUND_BUDGET is raised to 5 for this case so round 2 does NOT also
+# satisfy "round >= budget" on its own — the only thing that can fire here is
+# the no-progress OR-arm, proving it works independently of the budget check
+# rather than merely producing a different reason string on a round that was
+# going to escalate anyway.
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
@@ -257,22 +262,28 @@ DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
-run_gate "$REPO" "p1" >/dev/null
+DOD_ROUND_BUDGET=5 run_gate "$REPO" "p1" >/dev/null
 
-# no edits between rounds -> same diff_hash, re-verify without progress
+# no edits between rounds -> same diff_hash, re-verify without progress.
+# Round is about to become 2, nowhere near budget=5 — only no-progress can
+# trigger branch 9 here.
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$BASELINE" --round 2 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
-OUT_NP=$(run_gate "$REPO" "p2")
+OUT_NP=$(DOD_ROUND_BUDGET=5 run_gate "$REPO" "p2")
 if is_block "$OUT_NP"; then
-  ok "branch9 (D26): no-progress round blocks"
+  ok "branch9 (D26): no-progress round blocks even though round < budget"
 else
-  bad "branch9 (D26): no-progress round blocks" "$OUT_NP"
+  bad "branch9 (D26): no-progress round blocks even though round < budget" "$OUT_NP"
 fi
 REASON_NP=$(printf '%s' "$OUT_NP" | jq -r '.reason' 2>/dev/null)
 case "$REASON_NP" in
-  *"no progress: diff unchanged between rounds"*) ok "branch9 (D26): reason names no-progress specifically" ;;
-  *) bad "branch9 (D26): reason names no-progress specifically" "$REASON_NP" ;;
+  *"NO PROGRESS"*"no progress: diff unchanged between rounds"*) ok "branch9 (D26): headline and reason both name no-progress specifically, not budget" ;;
+  *) bad "branch9 (D26): headline and reason both name no-progress specifically, not budget" "$REASON_NP" ;;
+esac
+case "$REASON_NP" in
+  *"BUDGET EXHAUSTED"*) bad "branch9 (D26): headline must not say BUDGET EXHAUSTED for a pure no-progress trigger" "$REASON_NP" ;;
+  *) ok "branch9 (D26): headline does not say BUDGET EXHAUSTED for a pure no-progress trigger" ;;
 esac
 ESCALATION_NP=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
 eq "branch9 (D26): state.escalation armed on no-progress" "armed" "$ESCALATION_NP"

@@ -19,7 +19,7 @@
 # D26: round budget = 2. An identical diff_hash across two failing rounds
 # (no progress) burns the budget immediately, same as reaching round 2 —
 # see gate__no_progress below.
-DOD_ROUND_BUDGET=2
+DOD_ROUND_BUDGET="${DOD_ROUND_BUDGET:-2}"
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -217,13 +217,18 @@ if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
 
   if [ "$NEW_ROUND" -ge "$DOD_ROUND_BUDGET" ] || [ "$NO_PROGRESS" = "true" ]; then
     # --- branch 9: budget exhausted (or no progress) -> block once, escalate
+    # Headline names the actual trigger — "no progress" can fire on round 1
+    # (e.g. budget raised above 2 later) without the round count having
+    # reached DOD_ROUND_BUDGET, so "BUDGET EXHAUSTED" would misdescribe it.
     if [ "$NO_PROGRESS" = "true" ]; then
+      ESCALATE_HEADLINE="DOD GATE — NO PROGRESS after ${NEW_ROUND} round(s)."
       ESCALATE_REASON="no progress: diff unchanged between rounds"
     else
+      ESCALATE_HEADLINE="DOD GATE — BUDGET EXHAUSTED after ${NEW_ROUND} round(s)."
       ESCALATE_REASON="verification still failing"
     fi
     state_set_escalation "$STATE_FILE" "armed"
-    gate__block "escalate" "DOD GATE — BUDGET EXHAUSTED after ${NEW_ROUND} round(s). ${ESCALATE_REASON}. Report the unresolved findings to the user, then stop. Do not attempt another fix."
+    gate__block "escalate" "${ESCALATE_HEADLINE} ${ESCALATE_REASON}. Report the unresolved findings to the user, then stop. Do not attempt another fix."
   fi
 
   gate__block "findings" "verification result for this changeset has ${RESULT_BLOCKING_FAIL} failing requirement(s) — fix them, run /dod:verify, then stop again."
