@@ -19,8 +19,7 @@ intended trigger.
 
 ## Steps
 
-1. **Load the contract, then mark verification in progress.** Assert
-   `status == "open"`:
+1. **Load the contract.** Assert `status == "open"`:
    ```bash
    . "${CLAUDE_PLUGIN_ROOT}/lib/contract.sh"
    . "${CLAUDE_PLUGIN_ROOT}/lib/result.sh"
@@ -29,26 +28,32 @@ intended trigger.
 
    TASK_KEY=$(dod_task_key "$PWD")
    contract_read ".dod/$TASK_KEY/contract.json"
+   ```
+   If no contract is open, tell the user to run `/dod:define` first — do
+   not mark verification in progress for a contract that doesn't exist.
+
+2. **Mark verification in progress**, once step 1 confirmed a contract is
+   actually open:
+   ```bash
    state_set_state ".dod/$TASK_KEY/state.json" "verifying"
    ```
-   If no contract is open, tell the user to run `/dod:define` first.
-   `state_set_state ... verifying` right here, before the check battery or
-   the reviewer runs, is what lets the gate tell you "wait, it's already
-   running" instead of "run /dod:verify" if your turn ends (e.g. the
-   background reviewer is still in flight) before step 5 writes the result.
+   This, before the check battery or the reviewer runs, is what lets the
+   gate tell you "wait, it's already running" instead of "run /dod:verify"
+   if your turn ends (e.g. the background reviewer is still in flight)
+   before the result gets written below.
 
-2. **Hash the diff.** `dod_diff_hash "$PWD" "$CONTRACT_BASELINE_SHA"` — the
+3. **Hash the diff.** `dod_diff_hash "$PWD" "$CONTRACT_BASELINE_SHA"` — the
    same function `gate.sh` uses, against the same baseline (never `HEAD`: a
    commit moves HEAD and would silently invalidate every prior result even
    when the working tree is unchanged). This value becomes the result's
    trust key.
 
-3. **Run each `check` requirement's command.** Capture its exit code.
+4. **Run each `check` requirement's command.** Capture its exit code.
    `verdict` is `"pass"` if `exit == expect_exit`, else `"fail"`. Keep the
    command's output — needed for `/dod:verify`'s own summary and, in Phase 2,
    for `evidence/`.
 
-4. **Run each `judgement` requirement by spawning `dod-reviewer`.** Use the
+5. **Run each `judgement` requirement by spawning `dod-reviewer`.** Use the
    `Task` tool with `subagent_type: dod-reviewer` (or the equivalent agent
    invocation for this environment) — never review the changeset yourself
    and write its verdict; the whole point of a judgement requirement is a
@@ -86,7 +91,7 @@ intended trigger.
    any finding has `severity: "blocking"` or any `reconfirm` entry has
    `status != "fixed"`, else `"pass"`.
 
-5. **Write the result, then mark verification done.** Via `dod/lib/result.sh`'s
+6. **Write the result, then mark verification done.** Via `dod/lib/result.sh`'s
    `result_write` — do not construct or edit `result.json` any other way (N6):
 
    ```bash
@@ -105,13 +110,13 @@ intended trigger.
    it's running" message for one round, not a correctness problem, but
    clear it promptly anyway.
 
-6. **Arm the claim latch** — the gate only engages once the agent has
+7. **Arm the claim latch** — the gate only engages once the agent has
    declared the task done:
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
    ```
 
-7. **Print the pass table.** One row per requirement: id, verdict, and
+8. **Print the pass table.** One row per requirement: id, verdict, and
    (checks) command or (judgements) blocking/advisory finding counts. On
    all-pass, tell the user the DoD is satisfied. On failure, list which
    requirements failed — for `review`, list every `blocking` finding's file,
