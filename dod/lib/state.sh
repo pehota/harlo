@@ -114,9 +114,9 @@ state__log_edit_body() {
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
   tmp="${path}.tmp.$$"
   jq --arg p "$prompt_id" --arg f "$file" --arg t "$ts" \
-    '.edits = ((.edits + [{prompt_id: $p, path: $f, ts: $t}])
+    '.edits = (([{prompt_id: $p, path: $f, ts: $t}] + .edits)
                 | unique_by([.prompt_id, .path])
-                | .[-200:])' \
+                | .[0:200])' \
     "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
 }
 state_log_edit() { state__locked "$1" state__log_edit_body "$1" "$2" "$3"; }

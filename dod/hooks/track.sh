@@ -9,10 +9,18 @@
 #   1. Contract open -> append an edit record to state.edits (§6.5). This is
 #      what lets gate.sh's branch 5 (D8) detect "edited this prompt without a
 #      latch" without depending on the agent remembering to claim.
-#   2. No contract open -> print a one-line non-blocking nudge (D9) so the
+#   2. No contract open -> emit a one-line non-blocking nudge (D9) so the
 #      agent notices a DoD was never opened. Non-blocking: PostToolUse output
-#      to stdout is not a permission decision on this event, so this can
-#      never wedge a session the way a gate mistake could.
+#      is not a permission decision on this event, so this can never wedge a
+#      session the way a gate mistake could.
+#
+#      MUST be hookSpecificOutput.systemMessage JSON, not plain stdout: plain
+#      stdout on PostToolUse exit 0 goes only to the debug log, never to the
+#      model or transcript (PostToolUse is not one of the events — UserPromptSubmit,
+#      UserPromptExpansion, SessionStart, PostModelSwitch — where Claude Code
+#      surfaces plain-text stdout as context). Found by the independent
+#      Step-5 reviewer: the original `printf` nudge silently never reached
+#      anyone.
 #
 # Fires only on tools that edit files (Edit, Write, NotebookEdit) — a Read or
 # Bash call is not "an edit" for D8 purposes and must not arm anything.
@@ -69,7 +77,8 @@ STATE_FILE="$DOD_DIR/state.json"
 
 # --- no contract open -> nudge, non-blocking ---------------------------------
 if [ ! -f "$CONTRACT_FILE" ]; then
-  printf 'dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task.\n'
+  jq -n '{hookSpecificOutput: {hookEventName: "PostToolUse",
+    systemMessage: "dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task."}}' 2>/dev/null
   exit 0
 fi
 

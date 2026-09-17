@@ -26,15 +26,20 @@ open_contract() {
     --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
 }
 
-# --- no contract open -> nudge printed, non-blocking exit 0 -------------------
+# --- no contract open -> nudge as hookSpecificOutput.systemMessage JSON ------
+# Plain stdout on PostToolUse exit 0 is discarded (goes only to the debug
+# log, never the model/transcript) — must be JSON with systemMessage.
 REPO=$(dod__test_make_repo)
 OUT=$(run_track "$REPO" "Edit" "$REPO/a.txt")
 RC=$?
 eq "no contract: exit 0" "0" "$RC"
-case "$OUT" in
-  *"no Definition of Done"*) ok "no contract: nudge printed" ;;
-  *) bad "no contract: nudge printed" "$OUT" ;;
+MSG=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.systemMessage // ""' 2>/dev/null)
+case "$MSG" in
+  *"no Definition of Done"*) ok "no contract: nudge in systemMessage" ;;
+  *) bad "no contract: nudge in systemMessage" "$OUT" ;;
 esac
+EVENT_NAME=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.hookEventName // ""' 2>/dev/null)
+eq "no contract: hookEventName is PostToolUse" "PostToolUse" "$EVENT_NAME"
 
 # --- contract open -> edit logged to state.edits -------------------------------
 REPO=$(dod__test_make_repo)

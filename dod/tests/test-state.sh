@@ -72,6 +72,21 @@ if state_has_edit_for_prompt "$SFILE" "p1"; then
 else
   bad "state_has_edit_for_prompt true for logged prompt_id" "false"
 fi
+
+# --- state_log_edit dedupe keeps the FRESHEST record, not the first --------
+state_write "$SFILE"
+state__log_edit_body "$SFILE" "p1" "src/a.ts" 2>/dev/null || true
+jq '.edits[0].ts = "2000-01-01T00:00:00Z"' "$SFILE" > "$SFILE.tmp" && mv "$SFILE.tmp" "$SFILE"
+state_log_edit "$SFILE" "p1" "src/a.ts"
+state_read "$SFILE"
+COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+eq "state_log_edit dedupe: repeat (prompt_id,path) collapses to one" "1" "$COUNT"
+KEPT_TS=$(printf '%s' "$STATE_EDITS" | jq -r '.[0].ts' 2>/dev/null)
+if [ "$KEPT_TS" != "2000-01-01T00:00:00Z" ]; then
+  ok "state_log_edit dedupe: kept the fresh record, not the backdated one"
+else
+  bad "state_log_edit dedupe: kept the fresh record, not the backdated one" "$KEPT_TS"
+fi
 if state_has_edit_for_prompt "$SFILE" "p2"; then
   bad "state_has_edit_for_prompt false for unlogged prompt_id" "true"
 else
