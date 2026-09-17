@@ -62,6 +62,31 @@ result_write "$FAILFILE" \
 result_read "$FAILFILE"
 eq "blocking_fail counts fail verdicts" "1" "$RESULT_BLOCKING_FAIL"
 
+# --- judgement requirement round-trips with nested findings -------------------
+JFILE="$REPO/.dod/main/judgement-result.json"
+result_write "$JFILE" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"fail",
+     "findings":[{"id":"f1","severity":"blocking","file":"a.ts","line":1,"summary":"bug"},
+                 {"id":"f2","severity":"advisory","file":"b.ts","line":2,"summary":"naming"}]}
+  ]'
+result_read "$JFILE"
+eq "judgement: blocking_fail counts a failed judgement" "1" "$RESULT_BLOCKING_FAIL"
+FINDINGS_COUNT=$(printf '%s' "$RESULT_REQUIREMENTS" | jq '.[0].findings | length' 2>/dev/null)
+eq "judgement: findings round-trip intact" "2" "$FINDINGS_COUNT"
+
+# --- judgement requirement, all-advisory findings -> requirement still passes -
+JPASSFILE="$REPO/.dod/main/judgement-pass-result.json"
+result_write "$JPASSFILE" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"pass",
+     "findings":[{"id":"f1","severity":"advisory","file":"b.ts","line":2,"summary":"naming"}]}
+  ]'
+result_read "$JPASSFILE"
+eq "judgement: advisory-only findings do not block" "0" "$RESULT_BLOCKING_FAIL"
+
 echo
 echo "result.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

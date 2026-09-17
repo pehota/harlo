@@ -5,10 +5,10 @@ description: Open a Definition-of-Done contract for the current task before impl
 
 # /dod:define
 
-Opens a DoD contract for the current task. **Skeleton (Phase 1):** the
-contract's single requirement is the detected test command — the battery
-detector, waiver extraction, e2e applicability and the reviewer's judgement
-requirement all land in Phase 2 (`docs/design-v2.plan.md`).
+Opens a DoD contract for the current task. Every contract carries the
+detected test command plus a `judgement` requirement (`dod-reviewer`,
+Phase 2 item 2) — the battery detector, waiver extraction and e2e
+applicability remain Phase 2 items still to land (`docs/design-v2.plan.md`).
 
 ## Steps
 
@@ -37,9 +37,13 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
    | Verification | Expected Result | Why This Verification |
    |---|---|---|
    | <cmd>         | exit 0           | <one clause: detected/task-stated/protocol> |
+   | independent code review | no blocking findings | protocol-required |
 
    Does this look right? (yes / adjust / cancel)
    ```
+
+   The review row is **always present** — every contract carries a
+   `judgement` requirement for `dod-reviewer`, not just check commands.
 
    One row per requirement. "Why This Verification" is never blank — say
    where the requirement came from (`auto-detected` from step 3,
@@ -87,7 +91,10 @@ requirement all land in Phase 2 (`docs/design-v2.plan.md`).
      --task-source "argument|conversation" \
      --session-id "<session id if known, else empty>" \
      --baseline-sha "$HEAD_SHA" \
-     --requirements '[{"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"}]'
+     --requirements '[
+       {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"},
+       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}
+     ]'
    ```
 
 7. **Confirm the contract is open** with a short one-line note (SHA + "ready
