@@ -783,6 +783,28 @@ on either.
 2. **Whether `Stop` fires under `claude -p`.** Inferred not to (the process
    exits after the model turn), not documented. Out of scope for v1 per §9.
 
+3. **`prompt_id` stability across an injected turn (D8, Phase 2 item 1).**
+   `track.sh` logs edits keyed by the PostToolUse event's `prompt_id`;
+   `gate.sh` branch 5 checks the Stop event's `prompt_id` against that log.
+   Live-captured in this repo: within one normal turn (edit → stop, no
+   subagent hand-back in between), PostToolUse and Stop carry the **same**
+   `prompt_id` — confirmed, not assumed. **Not** confirmed: whether an
+   injected/automated turn between the edit and the Stop (a subagent
+   hand-back, a background-task notification) carries a **different**
+   `prompt_id` than the edit's turn. `dod-v1-final`'s ADR 0003 found exactly
+   this pattern for a *different* signal (`UserPromptSubmit` as a latch-disarm
+   trigger) — "a distinct `prompt_id` for every injected turn, automated ones
+   included" — and it broke that mechanism. D8's exposure is narrower (a
+   missed block, not an active disarm the ADR's asymmetry rule forbids), but
+   the same class of gap: if it happens here, the abandonment guard silently
+   releases instead of blocking on an edit that in fact belongs to the same
+   logical turn. Cost of being wrong: D8's core guarantee (§5.1's table, "agent
+   edited, then stopped without latching -> blocked") silently degrades to
+   Phase 1 behaviour (release) for exactly the turns where a hand-back
+   occurred. Settle empirically if this class of turn becomes common; until
+   then, the latch path (`/dod:verify` arming it explicitly) is the reliable
+   half of D8 and does not depend on `prompt_id` at all.
+
 ---
 
 ## 11. Sources

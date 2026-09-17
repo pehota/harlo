@@ -78,6 +78,20 @@ else
   ok "state_has_edit_for_prompt false for unlogged prompt_id"
 fi
 
+# --- concurrent state_log_edit calls: no lost writes under flock -------------
+if command -v flock >/dev/null 2>&1; then
+  state_write "$SFILE"
+  for i in $(seq 1 20); do
+    state_log_edit "$SFILE" "p$i" "file$i.txt" &
+  done
+  wait
+  state_read "$SFILE"
+  COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+  eq "concurrent state_log_edit: no lost writes" "20" "$COUNT"
+else
+  echo "  SKIP: flock not available, concurrency test skipped"
+fi
+
 echo
 echo "state.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -52,7 +52,7 @@ SESSION_ID=$(printf '%s' "$RAW" | jq -r '.session_id // ""' 2>/dev/null)
 PROMPT_ID=$(printf '%s' "$RAW" | jq -r '.prompt_id // ""' 2>/dev/null)
 TOOL_NAME=$(printf '%s' "$RAW" | jq -r '.tool_name // ""' 2>/dev/null)
 FILE_PATH=$(printf '%s' "$RAW" | jq -r \
-  '(.tool_input.file_path // .tool_input.path // "")' 2>/dev/null)
+  '(.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // "")' 2>/dev/null)
 
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit) : ;;
