@@ -26,20 +26,23 @@ open_contract() {
     --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
 }
 
-# --- no contract open -> nudge as hookSpecificOutput.systemMessage JSON ------
+# --- no contract open -> nudge as a top-level systemMessage JSON field ------
 # Plain stdout on PostToolUse exit 0 is discarded (goes only to the debug
-# log, never the model/transcript) — must be JSON with systemMessage.
+# log, never the model/transcript) — must be JSON with systemMessage, and
+# systemMessage is a TOP-LEVEL field, a sibling of hookSpecificOutput, never
+# nested inside it (confirmed against the hooks docs' "Common JSON Output
+# Fields" table).
 REPO=$(dod__test_make_repo)
 OUT=$(run_track "$REPO" "Edit" "$REPO/a.txt")
 RC=$?
 eq "no contract: exit 0" "0" "$RC"
-MSG=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.systemMessage // ""' 2>/dev/null)
+MSG=$(printf '%s' "$OUT" | jq -r '.systemMessage // ""' 2>/dev/null)
 case "$MSG" in
-  *"no Definition of Done"*) ok "no contract: nudge in systemMessage" ;;
-  *) bad "no contract: nudge in systemMessage" "$OUT" ;;
+  *"no Definition of Done"*) ok "no contract: nudge in top-level systemMessage" ;;
+  *) bad "no contract: nudge in top-level systemMessage" "$OUT" ;;
 esac
-EVENT_NAME=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.hookEventName // ""' 2>/dev/null)
-eq "no contract: hookEventName is PostToolUse" "PostToolUse" "$EVENT_NAME"
+NESTED=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.systemMessage // "absent"' 2>/dev/null)
+eq "no contract: systemMessage NOT nested inside hookSpecificOutput" "absent" "$NESTED"
 
 # --- contract open -> edit logged to state.edits -------------------------------
 REPO=$(dod__test_make_repo)

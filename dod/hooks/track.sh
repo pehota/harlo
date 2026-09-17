@@ -14,13 +14,16 @@
 #      is not a permission decision on this event, so this can never wedge a
 #      session the way a gate mistake could.
 #
-#      MUST be hookSpecificOutput.systemMessage JSON, not plain stdout: plain
-#      stdout on PostToolUse exit 0 goes only to the debug log, never to the
-#      model or transcript (PostToolUse is not one of the events — UserPromptSubmit,
+#      MUST be top-level `systemMessage` JSON, not plain stdout: plain stdout
+#      on PostToolUse exit 0 goes only to the debug log, never to the model or
+#      transcript (PostToolUse is not one of the events — UserPromptSubmit,
 #      UserPromptExpansion, SessionStart, PostModelSwitch — where Claude Code
 #      surfaces plain-text stdout as context). Found by the independent
 #      Step-5 reviewer: the original `printf` nudge silently never reached
-#      anyone.
+#      anyone. `systemMessage` is a top-level field, a SIBLING of
+#      hookSpecificOutput, not nested inside it — confirmed against the hooks
+#      docs' "Common JSON Output Fields" table after a first fix attempt
+#      nested it incorrectly and the round-2 reviewer caught that too.
 #
 # Fires only on tools that edit files (Edit, Write, NotebookEdit) — a Read or
 # Bash call is not "an edit" for D8 purposes and must not arm anything.
@@ -77,8 +80,8 @@ STATE_FILE="$DOD_DIR/state.json"
 
 # --- no contract open -> nudge, non-blocking ---------------------------------
 if [ ! -f "$CONTRACT_FILE" ]; then
-  jq -n '{hookSpecificOutput: {hookEventName: "PostToolUse",
-    systemMessage: "dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task."}}' 2>/dev/null
+  jq -n '{systemMessage:
+    "dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task."}' 2>/dev/null
   exit 0
 fi
 
