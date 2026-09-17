@@ -23,6 +23,7 @@ state_read "$SFILE"
 eq "default latched" "false" "$STATE_LATCHED"
 eq "default round" "0" "$STATE_ROUND"
 eq "default escalation" "none" "$STATE_ESCALATION"
+eq "default state" "idle" "$STATE_STATE"
 
 # --- malformed input rejected -------------------------------------------------
 BADFILE="$REPO/.dod/main/bad-state.json"
@@ -92,6 +93,24 @@ if state_has_edit_for_prompt "$SFILE" "p2"; then
 else
   ok "state_has_edit_for_prompt false for unlogged prompt_id"
 fi
+
+# --- state_set_state ----------------------------------------------------------
+state_write "$SFILE"
+state_set_state "$SFILE" "verifying"
+state_read "$SFILE"
+eq "state_set_state sets verifying" "verifying" "$STATE_STATE"
+
+state_set_state "$SFILE" "idle"
+state_read "$SFILE"
+eq "state_set_state sets idle" "idle" "$STATE_STATE"
+
+if state_set_state "$SFILE" "bogus"; then
+  bad "state_set_state rejects an invalid value" "accepted"
+else
+  ok "state_set_state rejects an invalid value"
+fi
+state_read "$SFILE"
+eq "state_set_state: rejected write leaves state unchanged" "idle" "$STATE_STATE"
 
 # --- concurrent state_log_edit calls: no lost writes under flock -------------
 if command -v flock >/dev/null 2>&1; then

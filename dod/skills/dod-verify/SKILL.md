@@ -19,7 +19,8 @@ intended trigger.
 
 ## Steps
 
-1. **Load the contract.** Assert `status == "open"`:
+1. **Load the contract, then mark verification in progress.** Assert
+   `status == "open"`:
    ```bash
    . "${CLAUDE_PLUGIN_ROOT}/lib/contract.sh"
    . "${CLAUDE_PLUGIN_ROOT}/lib/result.sh"
@@ -28,8 +29,13 @@ intended trigger.
 
    TASK_KEY=$(dod_task_key "$PWD")
    contract_read ".dod/$TASK_KEY/contract.json"
+   state_set_state ".dod/$TASK_KEY/state.json" "verifying"
    ```
    If no contract is open, tell the user to run `/dod:define` first.
+   `state_set_state ... verifying` right here, before the check battery or
+   the reviewer runs, is what lets the gate tell you "wait, it's already
+   running" instead of "run /dod:verify" if your turn ends (e.g. the
+   background reviewer is still in flight) before step 5 writes the result.
 
 2. **Hash the diff.** `dod_diff_hash "$PWD" "$CONTRACT_BASELINE_SHA"` — the
    same function `gate.sh` uses, against the same baseline (never `HEAD`: a
@@ -80,8 +86,8 @@ intended trigger.
    any finding has `severity: "blocking"` or any `reconfirm` entry has
    `status != "fixed"`, else `"pass"`.
 
-5. **Write the result** via `dod/lib/result.sh`'s `result_write` — do not
-   construct or edit `result.json` any other way (N6):
+5. **Write the result, then mark verification done.** Via `dod/lib/result.sh`'s
+   `result_write` — do not construct or edit `result.json` any other way (N6):
 
    ```bash
    result_write ".dod/$TASK_KEY/result.json" \
@@ -92,7 +98,12 @@ intended trigger.
        {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
        {"id":"review","type":"judgement","verdict":"pass|fail","findings":[...]}
      ]'
+   state_set_state ".dod/$TASK_KEY/state.json" "idle"
    ```
+   Clear `state` back to `"idle"` right after — leaving it `"verifying"`
+   only means a possible future turn gets a slightly misleading "wait,
+   it's running" message for one round, not a correctness problem, but
+   clear it promptly anyway.
 
 6. **Arm the claim latch** — the gate only engages once the agent has
    declared the task done:

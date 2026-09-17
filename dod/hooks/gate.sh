@@ -152,8 +152,17 @@ fi
 DIFF_HASH=$(dod_diff_hash "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA")
 
 # --- branch 7: no result, or result stale (diff_hash mismatch) -> block ------
+# state.state (wording-only, see state.sh header) distinguishes "verify never
+# started" from "verify is running, e.g. waiting on a backgrounded
+# dod-reviewer" — the main loop's turn can end (triggering Stop) while a
+# spawned reviewer is still in flight, and telling the agent to "run
+# /dod:verify" when it already did is misleading, not just repetitive.
 if [ ! -f "$RESULT_FILE" ]; then
-  gate__block "no-result" "task DoD present but no verification result exists for this changeset — run /dod:verify, then stop again."
+  if [ "$STATE_STATE" = "verifying" ]; then
+    gate__block "no-result" "verification is already running (waiting on the independent reviewer) — wait for it to finish, write the result, then stop again. Do not re-run /dod:verify from scratch."
+  else
+    gate__block "no-result" "task DoD present but no verification result exists for this changeset — run /dod:verify, then stop again."
+  fi
 fi
 
 result_read "$RESULT_FILE" || {

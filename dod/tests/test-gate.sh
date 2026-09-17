@@ -83,6 +83,28 @@ if is_block "$OUT"; then
 else
   bad "branch7: claimed with no result blocks" "$OUT"
 fi
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"run /dod:verify"*) ok "branch7: state=idle -> tells agent to run /dod:verify" ;;
+  *) bad "branch7: state=idle -> tells agent to run /dod:verify" "$REASON" ;;
+esac
+
+# --- branch 7: claimed, no result, state=verifying -> "wait" wording ---------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+state_set_state "$REPO/.dod/main/state.json" "verifying"
+OUT=$(run_gate "$REPO")
+if is_block "$OUT"; then
+  ok "branch7: state=verifying still blocks"
+else
+  bad "branch7: state=verifying still blocks" "$OUT"
+fi
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"already running"*"wait"*) ok "branch7: state=verifying -> tells agent to wait, not re-run" ;;
+  *) bad "branch7: state=verifying -> tells agent to wait, not re-run" "$REASON" ;;
+esac
 
 # --- branch 10: claimed, passing result matching diff_hash -> release --------
 REPO=$(dod__test_make_repo)

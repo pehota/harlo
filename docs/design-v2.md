@@ -511,10 +511,10 @@ dropped. The threshold is hardcoded in v1; see §9.
 ### 6.5 `state.json`
 
 Owned by `lib/state.sh`. Phase 1 fields are only `latched`, `round`,
-`escalation`, `last_failed_diff_hash` — `edits`/`cache`/`worktree`/
-`errors_unacknowledged` below land in Phase 2 (`track.sh`, cache, baseline
-worktree, error banner respectively) and don't exist in a Phase-1 file on
-disk yet.
+`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache`/`worktree`/
+`errors_unacknowledged` below land in Phase 2 (`track.sh`, `/dod:verify`,
+cache, baseline worktree, error banner respectively) and don't exist in a
+Phase-1 file on disk yet.
 
 ```jsonc
 {
@@ -523,11 +523,26 @@ disk yet.
   "escalation": "none",                    // none | armed
   "last_failed_diff_hash": null,
   "edits": [ { "prompt_id": "…", "path": "src/a.ts", "ts": "…" } ],
+  "state": "idle",                         // idle | verifying
   "cache": { "<diff_hash>:<cmd_hash>": "pass" },
   "worktree": null,
   "errors_unacknowledged": 0
 }
 ```
+
+**`state` is wording-only.** `/dod:verify` sets it `"verifying"` before doing
+anything else and back to `"idle"` right after `result_write` succeeds.
+`gate.sh`'s branch 7 reads it only to pick which "no result" message to
+print — "wait, it's already running" vs. "run /dod:verify" — never to change
+the block/release decision, which stays governed entirely by `result.json`'s
+existence and diff-hash match. Found live-testing (2026-09-17,
+`dod-e2e-test`): the main loop's turn can end (triggering `Stop`) while a
+backgrounded `dod-reviewer` it spawned is still running, and the old
+one-size-fits-all "run /dod:verify" message misleadingly implied the agent
+hadn't started when it had. No TTL/staleness guard on `state` — a crashed
+session can leave it stuck `"verifying"`, but the only cost is a
+misleading-but-harmless message for at most one turn before the next
+`/dod:verify` call resets it fresh; not worth the added complexity (YAGNI).
 
 **Not independently owned end-to-end:** `contract.sh`'s `contract_write`
 resets this file to defaults on every open/amend (see §6.3) — `state.json`'s

@@ -7,8 +7,17 @@
 # (only it) mutates.
 #
 # Phase 1 fields: latched, round, escalation, last_failed_diff_hash.
-# Phase 2 adds edits[] (track.sh, this file) additively — cache{}/worktree/
-# errors_unacknowledged still land with their own consumers.
+# Phase 2 adds edits[] (track.sh) and state ("idle"|"verifying", this file)
+# additively — cache{}/worktree/errors_unacknowledged still land with their
+# own consumers.
+#
+# `state` is WORDING-ONLY: gate.sh reads it to pick which block message to
+# print, never to change the block/release decision itself (that stays
+# governed by result.json's existence and diff-hash match, unchanged). No
+# TTL/staleness guard — a crashed session can leave it stuck "verifying",
+# but the only cost is a misleading-but-harmless "wait, it's running"
+# message for at most one turn; the next /dod:verify call resets it fresh
+# regardless of what it was. Deliberately not over-engineered (YAGNI).
 
 STATE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -42,7 +51,8 @@ state__write_body() {
     round: 0,
     escalation: "none",
     last_failed_diff_hash: null,
-    edits: []
+    edits: [],
+    state: "idle"
   }' > "$path" 2>/dev/null
 }
 # state_write <path> — (re)writes defaults. Used both to initialise and,
@@ -58,6 +68,7 @@ state_read() {
   STATE_ESCALATION=""
   STATE_LAST_FAILED_DIFF_HASH=""
   STATE_EDITS="[]"
+  STATE_STATE="idle"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -69,6 +80,8 @@ state_read() {
   STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$path" 2>/dev/null)
   STATE_EDITS=$(jq -c '.edits // []' "$path" 2>/dev/null)
   [ -n "$STATE_EDITS" ] || STATE_EDITS="[]"
+  STATE_STATE=$(jq -r '.state // "idle"' "$path" 2>/dev/null)
+  [ -n "$STATE_STATE" ] || STATE_STATE="idle"
   return 0
 }
 
@@ -86,6 +99,15 @@ state__mutate() { state__locked "$1" state__mutate_body "$1" "$2"; }
 state_arm_latch() { state__mutate "$1" '.latched = true'; }
 
 state_bump_round() { state__mutate "$1" '.round = ((.round // 0) + 1)'; }
+
+# state_set_state <path> <"idle"|"verifying"> — wording-only signal for
+# gate.sh's block message (see header). /dod:verify sets "verifying" before
+# doing anything else, and back to "idle" right after result_write succeeds.
+state_set_state() {
+  local path="$1" value="$2"
+  case "$value" in idle|verifying) : ;; *) return 1 ;; esac
+  state__mutate "$path" ".state = $(jq -n --arg v "$value" '$v')"
+}
 
 state_set_escalation() {
   local path="$1" value="$2"
