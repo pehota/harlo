@@ -80,8 +80,9 @@ runs that check and writes a result; the gate releases.
 **In:** contract/result/state libs, `gitref.sh`, `io.sh`, `gate.sh`, both skills, a
 claim script, `hooks.json` with `Stop` only.
 
-**Out (Phase 2):** `guard.sh`, `track.sh`, `session.sh`, the reviewer, baseline
-worktree, cache, escalation, waivers, e2e requirement, expiry.
+**Out (Phase 2):** `guard.sh` (later decided, never built — see item 3 below
+and D12), `track.sh`, `session.sh`, the reviewer, baseline worktree, cache,
+escalation, waivers, e2e requirement, expiry.
 
 **Kept in, despite being "depth":** the claim latch. Deferring it would mean testing a
 gate with different engagement semantics from the real one. The *abandonment guard*
