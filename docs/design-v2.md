@@ -16,15 +16,20 @@ get silently skipped.
 This harness makes the Definition of Done a **structural forcing function**.
 
 ```
-  /dod:define  ──▶  contract (typed, verifiable requirements)
-                          │
-       agent implements   │
-                          ▼
-  agent claims done ──▶ GATE ──▶ /dod:verify ──▶ result
-                          │                        │
-                          ├── all pass ──────────▶ done
-                          └── failures ──────────▶ fix → verify (max 2 rounds)
-                                                      └── exhausted ──▶ escalate to user
+  /dod:define  ──▶  verification table ──▶ user confirms (D29) ──▶ contract
+                                                  │
+                                     agent implements, same turn
+                                                  │
+                                                  ▼
+  agent believes it's done ──▶ self-triggers /dod:verify (D28) ──▶ result
+                                                  │                   │
+                                                  ├── all pass ─────▶ done
+                                                  └── failures ─────▶ fix → verify (max 2 rounds, Phase 2)
+                                                                        └── exhausted ──▶ escalate to user (Phase 2)
+
+  (Stop GATE is the fallback if the agent skips self-verify — not the
+   intended trigger. It blocks on: no contract confirmed / no matching
+   result / blocking failures, per §6.2.)
 ```
 
 Three parts, none sufficient alone:
@@ -200,41 +205,61 @@ it catches the problem after the fact and forces a fix. The guard is what makes
 
 ### 5.1 `gate.sh` — the decision tree
 
+> **Phase status** (`docs/design-v2.plan.md`): this diagram is the **full v2
+> end-state**. Phase 1 (shipped) implements L2, L3, L5, the diff-hash branch,
+> L7, L8's release/no-findings path, and the round-increment half of L9 —
+> **not** L1 as a standalone top-level branch, L4 (expiry), L6 (escalation
+> check), or L9's escalation-arm branch. `gate.sh`'s own header comment names
+> the shipped branches as "0,1,2,3,5,7,8,10" (its own internal numbering, not
+> this diagram's L-labels) and says so explicitly. Two concrete Phase-1 gaps
+> against this diagram:
+> - `stop_hook_active` is **not** an early top-level check (L1). It's
+>   consulted only inside the block-emitting helper (`gate__block`, the A2
+>   category-scoped brake) — after the contract/status/latch checks already
+>   passed and a block is about to be issued. A Phase-2 implementer following
+>   this diagram literally would put the check in the wrong place.
+> - `state.round` is incremented on every blocking-findings turn (L9's
+>   round++ arm) but is **never compared against a budget**. L9's other arm
+>   (escalation) never fires — round can grow without bound. L4 and L6 don't
+>   exist at all yet, so `status` never becomes `expired` or `escalated`.
+
 ```mermaid
 flowchart TB
   IN["stdin: prompt_id, cwd, stop_hook_active"] --> E0{"harness error?<br/>lib missing · jq/git absent · JSON corrupt"}
   E0 -->|yes| R_ERR["append errors.log<br/>EXIT 1 (noisy release)<br/>record UNVERIFIED (harness error)"]
-  E0 -->|no| L1{"stop_hook_active"}
-  L1 -->|true| R1["EXIT 0 — loop guard"]
-  L1 -->|false| L2{"contract exists?"}
+  E0 -->|no| L2{"contract exists?"}
   L2 -->|no| R2["EXIT 0 — no DoD open"]
   L2 -->|yes| L3{"status == open?"}
   L3 -->|no| R3["EXIT 0 — passed/cancelled"]
-  L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?"}
+  L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?<br/>(Phase 2)"}
   L4 -->|no| R4["status := expired<br/>EXIT 0 — stale"]
   L4 -->|yes| L5{"latched OR<br/>edits this prompt_id?"}
   L5 -->|neither| R5["EXIT 0 — question turn"]
-  L5 -->|yes| L6{"escalation == armed?"}
+  L5 -->|yes| L6{"escalation == armed?<br/>(Phase 2)"}
   L6 -->|yes| R6["status := escalated<br/>EXIT 0 — step 2 of escalation"]
-  L6 -->|no| H["diff_hash := hash(diff + untracked)"]
-  H --> L7{"result exists AND<br/>result.diff_hash == diff_hash?"}
-  L7 -->|no| B7["EXIT 2 — block-no-result.txt"]
+  L6 -->|no| H["diff_hash := hash of (path,blob)<br/>pairs vs baseline, union untracked,<br/>excl. .dod/"]
+  H --> L7{"result exists AND<br/>result.diff_hash == diff_hash?<br/>(L1's stop_hook_active brake<br/>applies here via gate__block)"}
+  L7 -->|no| B7["stdout JSON block + EXIT 0<br/>block-no-result.txt"]
   L7 -->|yes| L8{"blocking failures?"}
-  L8 -->|no| R10["print nothing<br/>status := passed<br/>tear down worktree<br/>EXIT 0"]
-  L8 -->|yes| L9{"round >= 2 OR<br/>diff_hash == last_failed?"}
-  L9 -->|no| B8["round++ · last_failed := diff_hash<br/>EXIT 2 — block-findings.txt"]
-  L9 -->|yes| B9["escalation := armed<br/>EXIT 2 — block-escalate.txt"]
+  L8 -->|no| R10["print nothing<br/>status := passed<br/>tear down worktree (Phase 2)<br/>EXIT 0"]
+  L8 -->|yes| L9{"round >= budget?<br/>(Phase 2 — not enforced yet,<br/>round increments unbounded)"}
+  L9 -->|no| B8["round++ · last_failed := diff_hash<br/>stdout JSON block + EXIT 0<br/>block-findings.txt"]
+  L9 -->|yes| B9["escalation := armed (Phase 2)<br/>stdout JSON block + EXIT 0<br/>block-escalate.txt"]
 
   classDef rel fill:#d5e8d4,stroke:#82b366,color:#000
   classDef blk fill:#f8cecc,stroke:#b85450,color:#000
   classDef err fill:#ffe6cc,stroke:#d79b00,color:#000
-  class R1,R2,R3,R4,R5,R6,R10 rel
-  class B7,B8,B9 blk
+  classDef p2 fill:#fff2cc,stroke:#d6b656,color:#000
+  class R2,R3,R5,R10 rel
+  class B7,B8 blk
+  class L4,R4,L6,R6,L9,B9 p2
   class R_ERR err
 ```
 
 **Gate writes only:** `state.round`, `state.last_failed_diff_hash`,
-`state.escalation`, `contract.status`. Nothing else. It is otherwise read-only.
+`contract.status`. Nothing else. It is otherwise read-only.
+`state.escalation` is written only once L6/L9's Phase-2 escalation branches
+exist — Phase 1 never sets it.
 
 **Why `edits_this_prompt` and not "edits since open":**
 
@@ -341,19 +366,26 @@ silent + exit 0                                    → release (normal operation
 stderr one line + exit 1                           → release (harness error, noisy)
 ```
 
-| # | Branch | exit | stdout/stderr → agent | state writes |
-|---|---|---|---|---|
-| 0 | harness error | **1** | stderr, one line: `dod gate error: <cause> — see .dod/errors.log` | — |
-| 1 | `stop_hook_active` | 0 | — | — |
-| 2 | no contract | 0 | — | — |
-| 3 | status ≠ open | 0 | — | — |
-| 4 | baseline not ancestor | 0 | — | `status=expired` |
-| 5 | no claim, no edits | 0 | — | — |
-| 6 | `escalation=armed` | 0 | — | `status=escalated` |
-| 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — |
-| 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` |
-| 9 | budget exhausted | 0 | stdout JSON: `block-escalate.txt` | `escalation=armed` |
-| 10 | all pass | 0 | — | `status=passed`, worktree torn down |
+**Phase status:** branches 0, 2, 3, 5, 7, 8 (release half), 10 are shipped.
+Branch 1 is shipped but not as a standalone check — see the A2 note below.
+Branch 8's `round++` is shipped; the budget check that would route to branch
+9 is not. **Branches 4, 6, 9 do not exist in the code yet** (Phase 2 per
+`docs/design-v2.plan.md`) — `status` never becomes `expired` or `escalated`,
+and `state.escalation` is never written.
+
+| # | Branch | exit | stdout/stderr → agent | state writes | shipped? |
+|---|---|---|---|---|---|
+| 0 | harness error | **1** | stderr, one line: `dod gate error: <cause> — see .dod/errors.log` | — | yes |
+| 1 | `stop_hook_active` | 0 | — | — | yes, folded into `gate__block`'s A2 brake, not a standalone check |
+| 2 | no contract | 0 | — | — | yes |
+| 3 | status ≠ open | 0 | — | — | yes |
+| 4 | baseline not ancestor | 0 | — | `status=expired` | **no — Phase 2** |
+| 5 | no claim, no edits | 0 | — | — | yes |
+| 6 | `escalation=armed` | 0 | — | `status=escalated` | **no — Phase 2** |
+| 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — | yes |
+| 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` | yes, but "budget left" is unconditional — every failure takes this branch |
+| 9 | budget exhausted | 0 | stdout JSON: `block-escalate.txt` | `escalation=armed` | **no — Phase 2**, round grows unbounded instead |
+| 10 | all pass | 0 | — | `status=passed`, worktree torn down | yes, minus the worktree teardown (no worktree exists yet in Phase 1) |
 
 > **Amendment A2** (`docs/design-v2.plan.md`): branch 1 (`stop_hook_active`)
 > is **category-scoped**, not a blanket release. The gate records the
@@ -408,7 +440,18 @@ Owned by `lib/contract.sh`.
 - every requirement is `check` **or** `judgement`, never neither;
 - every `check` carries `cmd` and `expect_exit`;
 - an `e2e` entry **always exists**, either `applicable:true` with a `cmd`, or
-  `applicable:false` **with a reason**. Never absent.
+  `applicable:false` **with a reason**. Never absent. (Phase 1: not yet
+  enforced — `contract_validate` currently checks only the first two;
+  `e2e` presence lands with the reviewer in Phase 2.)
+
+**Cross-artefact side effect:** every `contract_write` call also resets the
+sibling `state.json` to defaults (via `state_write`) — a fresh `/dod:define`
+and an amend on the same `task_key` both start with `latched:false`. Without
+this, a task that already passed once (latch armed, never cleared) would
+leave the amended contract's very next question-only turn mistakenly gated,
+since the gate can't tell "never claimed" from "claimed in a prior task on
+this branch." `contract.sh` still never `jq`s `state.json` directly — it
+calls `state_write`, preserving N6.
 
 ### 6.4 `result.json`
 
@@ -447,7 +490,11 @@ dropped. The threshold is hardcoded in v1; see §9.
 
 ### 6.5 `state.json`
 
-Owned by `lib/state.sh`.
+Owned by `lib/state.sh`. Phase 1 fields are only `latched`, `round`,
+`escalation`, `last_failed_diff_hash` — `edits`/`cache`/`worktree`/
+`errors_unacknowledged` below land in Phase 2 (`track.sh`, cache, baseline
+worktree, error banner respectively) and don't exist in a Phase-1 file on
+disk yet.
 
 ```jsonc
 {
@@ -461,6 +508,10 @@ Owned by `lib/state.sh`.
   "errors_unacknowledged": 0
 }
 ```
+
+**Not independently owned end-to-end:** `contract.sh`'s `contract_write`
+resets this file to defaults on every open/amend (see §6.3) — `state.json`'s
+lifecycle is tied to `contract.json`'s, not purely to the gate's own writes.
 
 ### 6.6 Block message templates
 

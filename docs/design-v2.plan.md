@@ -87,6 +87,24 @@ worktree, cache, escalation, waivers, e2e requirement, expiry.
 gate with different engagement semantics from the real one. The *abandonment guard*
 (`edits_this_prompt`) defers with `track.sh`.
 
+**Landed during Phase 1, not originally scoped — found by live testing, now
+part of the skeleton's contract:**
+
+- **D28 — self-verify instruction.** `/dod:define` and `/dod:verify` tell the
+  agent to run `/dod:verify` itself the moment it believes a task is done,
+  same turn, never asking the user or waiting for the gate to block first.
+  The gate block is the fallback, not the intended trigger.
+- **D29 — confirmation gate, reverses D4.** `/dod:define` prints a fixed
+  Verification/Expected-Result/Why-This-Verification table and **blocks**
+  (no edit, no baseline recording, no `contract_write`) until the user
+  replies yes/adjust/cancel. Confirmation covers both "the list is right" and
+  "start working" as one gate — the agent proceeds into implementation
+  immediately on "yes," same turn, no second prompt.
+- These are prose-only enforcement (skill instructions), not mechanism —
+  Phase 2's `guard.sh` (contract-before-first-edit, PreToolUse) is the
+  structural version of D29's implementation-blocking half and should absorb
+  it rather than leave it purely instructional.
+
 ### Files
 
 | File | Contents |
@@ -187,6 +205,24 @@ Ordered by what most reduces risk:
 a contract but a question-only turn, must both produce empty gate stdout. This is the
 NFR most likely to regress silently, so it gets its own test case rather than riding
 along.
+
+**In practice, verification exceeded this checklist.** Three real bugs surfaced only
+through live use, not the scratch-repo walkthrough or the test suite:
+
+- `dod_diff_hash` self-poisoned on `.dod/`'s own writes (the walkthrough's own
+  `/dod:verify` call broke the very gate it was trying to satisfy).
+- The claim latch never reset across an amend, silently gating an unrelated
+  question-only turn (found by the independent reviewer, not by any test written in
+  advance of the bug).
+- `dod_diff_hash` used `git diff HEAD` instead of a fixed baseline, so a commit with
+  zero net tree change still invalidated a just-passed result — found by a **second,
+  independent Claude Code session** live-driving the same walkthrough and reporting
+  the block it hit, not by this session's own testing.
+
+Two more skill-instruction gaps (D28, D29 above) were found the same way: a human
+actually running the scenario and reporting "the agent didn't do X." None of these five
+would have been caught by criterion 4 (green tests) alone — criterion 2's live exercise,
+run more than once and by more than one session, is what actually found them.
 
 ---
 
