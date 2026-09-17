@@ -177,7 +177,13 @@ Ordered by what most reduces risk:
 
 1. `track.sh` + abandonment guard — completes the claim rule.
 2. `dod-reviewer` agent + the `judgement` path — the gate the design exists for.
-3. `guard.sh` — contract-before-first-edit.
+3. ~~`guard.sh` — contract-before-first-edit.~~ **Postponed, not scheduled** —
+   live-tested 2026-09-17 (see `docs/design-v2.md` §9): no non-heuristic
+   signal exists for "an edit is implementation work" without either denying
+   every edit unconditionally (rejected — too blunt, no escape hatch) or the
+   same content/path heuristics D2 already deferred. Re-open only once a real
+   signal is found. Numbering below is unchanged so history stays legible;
+   treat this slot as skipped, not "next."
 4. Escalation: branches 4, 6, 9 + the two-step release.
 5. Baseline worktree + pre-existing-failure resolution.
 6. Cache on `(diff_hash, cmd)`.
