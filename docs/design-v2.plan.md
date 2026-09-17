@@ -100,10 +100,11 @@ part of the skeleton's contract:**
   replies yes/adjust/cancel. Confirmation covers both "the list is right" and
   "start working" as one gate — the agent proceeds into implementation
   immediately on "yes," same turn, no second prompt.
-- These are prose-only enforcement (skill instructions), not mechanism —
-  Phase 2's `guard.sh` (contract-before-first-edit, PreToolUse) is the
-  structural version of D29's implementation-blocking half and should absorb
-  it rather than leave it purely instructional.
+- These are prose-only enforcement (skill instructions), not mechanism.
+  **Stays prose-only** (see item 3 below, D12 revised in `docs/design-v2.md`):
+  no `guard.sh` was ever built — a `PreToolUse` gate was considered twice and
+  rejected both times, most recently in favor of the same self-invoke-first,
+  human-fallback pattern D28 already uses for `/dod:verify`.
 
 ### Files
 
@@ -177,13 +178,17 @@ Ordered by what most reduces risk:
 
 1. `track.sh` + abandonment guard — completes the claim rule.
 2. `dod-reviewer` agent + the `judgement` path — the gate the design exists for.
-3. ~~`guard.sh` — contract-before-first-edit.~~ **Postponed, not scheduled** —
-   live-tested 2026-09-17 (see `docs/design-v2.md` §9): no non-heuristic
-   signal exists for "an edit is implementation work" without either denying
-   every edit unconditionally (rejected — too blunt, no escape hatch) or the
-   same content/path heuristics D2 already deferred. Re-open only once a real
-   signal is found. Numbering below is unchanged so history stays legible;
-   treat this slot as skipped, not "next."
+3. ~~`guard.sh` — contract-before-first-edit.~~ **Resolved, not built** — D12
+   revised (`docs/design-v2.md`). Live-tested 2026-09-17: a `PreToolUse`
+   guard was considered twice and rejected both times — first as
+   unenforceable (no non-heuristic "implementation started" signal exists
+   without either denying every edit unconditionally or D2's already-deferred
+   content/path heuristics), then, after a live test showed the agent
+   skipping `/dod:define` for a whole task, rejected again on a simpler
+   ground: the fix is the same self-invoke-first/human-fallback pattern D28
+   already uses for `/dod:verify`, not a hard lock on `Edit`/`Write`.
+   Numbering below is unchanged so history stays legible; treat this slot as
+   permanently skipped, not "next."
 4. Escalation: branches 4, 6, 9 + the two-step release.
 5. Baseline worktree + pre-existing-failure resolution.
 6. Cache on `(diff_hash, cmd)`.
