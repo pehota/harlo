@@ -227,22 +227,27 @@ above), not overlooked.
 ### 5.1 `gate.sh` — the decision tree
 
 > **Phase status** (`docs/design-v2.plan.md`): this diagram is the **full v2
-> end-state**. Phase 1 (shipped) implements L2, L3, L5, the diff-hash branch,
-> L7, L8's release/no-findings path, and the round-increment half of L9 —
-> **not** L1 as a standalone top-level branch, L4 (expiry), L6 (escalation
-> check), or L9's escalation-arm branch. `gate.sh`'s own header comment names
-> the shipped branches as "0,1,2,3,5,7,8,10" (its own internal numbering, not
-> this diagram's L-labels) and says so explicitly. Two concrete Phase-1 gaps
-> against this diagram:
+> end-state**. Shipped: L2, L3, L5, L6, the diff-hash branch, L7, L8, L9
+> (both arms — round++ and the budget/no-progress escalation arm). **Not
+> shipped:** L4 (expiry) and L1 as a standalone top-level branch.
+> `gate.sh`'s own header comment names the shipped branches as
+> "0,1,2,3,5,6,7,8,9,10" (its own internal numbering, not this diagram's
+> L-labels) and says so explicitly. One concrete gap against this diagram:
 > - `stop_hook_active` is **not** an early top-level check (L1). It's
 >   consulted only inside the block-emitting helper (`gate__block`, the A2
 >   category-scoped brake) — after the contract/status/latch checks already
 >   passed and a block is about to be issued. A Phase-2 implementer following
 >   this diagram literally would put the check in the wrong place.
-> - `state.round` is incremented on every blocking-findings turn (L9's
->   round++ arm) but is **never compared against a budget**. L9's other arm
->   (escalation) never fires — round can grow without bound. L4 and L6 don't
->   exist at all yet, so `status` never becomes `expired` or `escalated`.
+>
+> L9's budget is `DOD_ROUND_BUDGET=2` (D26) — round reaching it, **or** an
+> identical `diff_hash` between two failing rounds (no progress since the
+> last failure), both arm escalation on the same Stop. Escalation is
+> two-step (D21): the Stop that crosses the threshold blocks once with the
+> escalate message and sets `state.escalation := armed`; the *next* Stop
+> takes L6, sets `contract.status := escalated`, and releases silently —
+> it does not block again. `status=escalated` then keeps every later turn
+> released via L3 (status != open), same as `passed`/`cancelled`. L4
+> (baseline-not-ancestor / expiry) still does not exist.
 
 ```mermaid
 flowchart TB
@@ -386,12 +391,10 @@ silent + exit 0                                    → release (normal operation
 stderr one line + exit 1                           → release (harness error, noisy)
 ```
 
-**Phase status:** branches 0, 2, 3, 5, 7, 8 (release half), 10 are shipped.
-Branch 1 is shipped but not as a standalone check — see the A2 note below.
-Branch 8's `round++` is shipped; the budget check that would route to branch
-9 is not. **Branches 4, 6, 9 do not exist in the code yet** (Phase 2 per
-`docs/design-v2.plan.md`) — `status` never becomes `expired` or `escalated`,
-and `state.escalation` is never written.
+**Phase status:** branches 0, 2, 3, 5, 6, 7, 8, 9, 10 are shipped. Branch 1
+is shipped but not as a standalone check — see the A2 note below. **Branch 4
+does not exist in the code yet** (Phase 2 per `docs/design-v2.plan.md`) —
+`status` never becomes `expired`.
 
 | # | Branch | exit | stdout/stderr → agent | state writes | shipped? |
 |---|---|---|---|---|---|
@@ -401,11 +404,18 @@ and `state.escalation` is never written.
 | 3 | status ≠ open | 0 | — | — | yes |
 | 4 | baseline not ancestor | 0 | — | `status=expired` | **no — Phase 2** |
 | 5 | no claim, no edits | 0 | — | — | yes |
-| 6 | `escalation=armed` | 0 | — | `status=escalated` | **no — Phase 2** |
+| 6 | `escalation=armed` | 0 | — | `status=escalated` | yes |
 | 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — | yes |
-| 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` | yes, but "budget left" is unconditional — every failure takes this branch |
-| 9 | budget exhausted | 0 | stdout JSON: `block-escalate.txt` | `escalation=armed` | **no — Phase 2**, round grows unbounded instead |
+| 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` | yes |
+| 9 | budget exhausted or no progress | 0 | stdout JSON: escalate reason | `round++`, `last_failed_diff_hash`, `escalation=armed` | yes |
 | 10 | all pass | 0 | — | `status=passed`, worktree torn down | yes, minus the worktree teardown (no worktree exists yet in Phase 1) |
+
+Branch 9 fires instead of branch 8 the moment either holds: the round about
+to be recorded reaches `DOD_ROUND_BUDGET` (2, per D26), or the current
+`diff_hash` equals `state.last_failed_diff_hash` from the prior failure (no
+progress). Branch 9's stdout is not template-rendered from a file yet — v1
+of this phase inlines the message in `gate.sh` itself (`block-escalate.txt`
+in §6.6 is the target shape, not yet wired through `io.sh`'s renderer).
 
 > **Amendment A2** (`docs/design-v2.plan.md`): branch 1 (`stop_hook_active`)
 > is **category-scoped**, not a blanket release. The gate records the

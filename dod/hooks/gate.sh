@@ -11,11 +11,15 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Branches shipped: 0,1,2,3,5,7,8,10. Branch 5 now also detects "edited this
-# prompt_id without a latch" via state.edits (track.sh, Phase 2 item 1) — not
-# latch-only as in Phase 1. Branches 4 (expiry), 6/9 (escalation) remain
-# Phase 2 (docs/design-v2.plan.md) — status stays "open" and the round budget
-# is not yet enforced past incrementing.
+# Branches shipped: 0,1,2,3,5,6,7,8,9,10. Branch 5 now also detects "edited
+# this prompt_id without a latch" via state.edits (track.sh, Phase 2 item 1)
+# — not latch-only as in Phase 1. Branch 4 (expiry) remains Phase 2
+# (docs/design-v2.plan.md item 5).
+#
+# D26: round budget = 2. An identical diff_hash across two failing rounds
+# (no progress) burns the budget immediately, same as reaching round 2 —
+# see gate__no_progress below.
+DOD_ROUND_BUDGET=2
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -145,6 +149,22 @@ if [ "$CLAIMED" != "true" ]; then
   exit 0
 fi
 
+# --- branch 6: escalation already armed -> release, mark escalated (D21) ----
+# Two-step escalation: branch 9 (below) blocks ONCE with the report and arms
+# state.escalation; this branch is what the NEXT Stop sees. It releases
+# silently rather than blocking again — the report was already delivered,
+# the agent has already been told to stop trying and report to the user, so
+# re-blocking here would just resume the loop the escalation was meant to
+# end. contract.status flips to "escalated" so branch 3 (status != open)
+# keeps this task released on every subsequent turn without re-checking
+# escalation each time.
+if [ "$STATE_ESCALATION" = "armed" ]; then
+  contract_set_status "$CONTRACT_FILE" "escalated"
+  gate__clear_last_block
+  dod_release
+  exit 0
+fi
+
 # --- branch 1: stop_hook_active loop guard (category-scoped via gate__block) -
 # (No unconditional release here — A2 requires checking the category, which
 # only gate__block can do once it knows which branch we're about to hit.)
@@ -181,8 +201,31 @@ case "$RESULT_BLOCKING_FAIL" in
 esac
 
 if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
+  # D26: identical diff_hash across two failing rounds means no progress was
+  # made since the last failure — burn the budget immediately rather than
+  # waiting for round to literally reach the cap, so a stuck agent that
+  # re-runs /dod:verify without changing anything doesn't get a free extra
+  # round out of it.
+  NO_PROGRESS="false"
+  [ -n "$STATE_LAST_FAILED_DIFF_HASH" ] && [ "$STATE_LAST_FAILED_DIFF_HASH" = "$DIFF_HASH" ] && NO_PROGRESS="true"
+
   state_bump_round "$STATE_FILE"
   state_set_last_failed_diff_hash "$STATE_FILE" "$DIFF_HASH"
+
+  NEW_ROUND=$((STATE_ROUND + 1))
+  case "$STATE_ROUND" in ''|*[!0-9]*) NEW_ROUND=1 ;; esac
+
+  if [ "$NEW_ROUND" -ge "$DOD_ROUND_BUDGET" ] || [ "$NO_PROGRESS" = "true" ]; then
+    # --- branch 9: budget exhausted (or no progress) -> block once, escalate
+    if [ "$NO_PROGRESS" = "true" ]; then
+      ESCALATE_REASON="no progress: diff unchanged between rounds"
+    else
+      ESCALATE_REASON="verification still failing"
+    fi
+    state_set_escalation "$STATE_FILE" "armed"
+    gate__block "escalate" "DOD GATE — BUDGET EXHAUSTED after ${NEW_ROUND} round(s). ${ESCALATE_REASON}. Report the unresolved findings to the user, then stop. Do not attempt another fix."
+  fi
+
   gate__block "findings" "verification result for this changeset has ${RESULT_BLOCKING_FAIL} failing requirement(s) — fix them, run /dod:verify, then stop again."
 fi
 

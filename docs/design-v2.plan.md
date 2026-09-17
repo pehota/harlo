@@ -190,7 +190,10 @@ Ordered by what most reduces risk:
    already uses for `/dod:verify`, not a hard lock on `Edit`/`Write`.
    Numbering below is unchanged so history stays legible; treat this slot as
    permanently skipped, not "next."
-4. Escalation: branches 4, 6, 9 + the two-step release.
+4. ~~Escalation: branches 4, 6, 9 + the two-step release.~~ **Done** — branches
+   6 and 9 shipped (`dod/hooks/gate.sh`, D21 two-step release, D26 budget=2
+   + no-progress brake). Branch 4 (baseline-not-ancestor expiry) is a
+   separate mechanism, still Phase 2 item 5.
 5. Baseline worktree + pre-existing-failure resolution.
 6. Cache on `(diff_hash, cmd)`.
 7. `session.sh` — preflight, cancel-on-clear, error banner.

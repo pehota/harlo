@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Tests for dod/hooks/gate.sh — one case per Phase 1 branch: 0,1,2,3,5,7,8,10.
-# Branches 4,6,9 (expiry, escalation, budget) are Phase 2 (design-v2.plan.md).
+# Tests for dod/hooks/gate.sh — one case per branch: 0,1,2,3,5,6,7,8,9,10.
+# Branch 4 (expiry) remains Phase 2 (design-v2.plan.md item 5).
 #
 # Idiom (ported from v1's dod-gate.sh suite): assert block via parsed JSON
 # (`jq -e '.decision == "block"'`), assert release via EMPTY stdout.
@@ -201,6 +201,81 @@ else
   bad "branch0: harness error writes to stderr" "empty"
 fi
 rm -f /tmp/dod-test-b0-out.$$ /tmp/dod-test-b0-err.$$
+
+# --- branch 9: round reaches budget (2) -> block once, escalation armed -----
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+
+# round 1: fail
+DH1=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH1" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+OUT1=$(run_gate "$REPO" "p1")
+is_block "$OUT1" || bad "branch9 setup: round1 failure should block" "$OUT1"
+ROUND1=$(jq -r '.round' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "branch9 setup: round bumped to 1" "1" "$ROUND1"
+
+# round 2: still failing, but progress made (different diff) -> reaches budget
+echo "more edits" >> "$REPO/root.txt"
+DH2=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH2" --baseline-sha "$BASELINE" --round 2 \
+  --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+OUT2=$(run_gate "$REPO" "p2")
+if is_block "$OUT2"; then
+  ok "branch9: budget-exhausted round blocks"
+else
+  bad "branch9: budget-exhausted round blocks" "$OUT2"
+fi
+REASON2=$(printf '%s' "$OUT2" | jq -r '.reason' 2>/dev/null)
+case "$REASON2" in
+  *"BUDGET EXHAUSTED"*"Report"*) ok "branch9: reason names budget exhaustion and tells agent to report" ;;
+  *) bad "branch9: reason names budget exhaustion and tells agent to report" "$REASON2" ;;
+esac
+ESCALATION_AFTER=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "branch9: state.escalation armed" "armed" "$ESCALATION_AFTER"
+
+# --- branch 6: escalation already armed -> release, status := escalated -----
+OUT3=$(run_gate "$REPO" "p3")
+eq "branch6: escalation-armed turn releases silently" "" "$OUT3"
+STATUS_AFTER=$(jq -r '.status' "$REPO/.dod/main/contract.json" 2>/dev/null)
+eq "branch6: status set to escalated" "escalated" "$STATUS_AFTER"
+
+# --- branch 9 (D26 no-progress): identical diff_hash across failing rounds --
+# burns the budget on round 2 even though the literal round count would
+# otherwise still be under budget on its own (round hits 2 here too, but via
+# the no-progress path rather than the budget-reached path — assert the
+# no-progress wording specifically).
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+run_gate "$REPO" "p1" >/dev/null
+
+# no edits between rounds -> same diff_hash, re-verify without progress
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 2 \
+  --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+OUT_NP=$(run_gate "$REPO" "p2")
+if is_block "$OUT_NP"; then
+  ok "branch9 (D26): no-progress round blocks"
+else
+  bad "branch9 (D26): no-progress round blocks" "$OUT_NP"
+fi
+REASON_NP=$(printf '%s' "$OUT_NP" | jq -r '.reason' 2>/dev/null)
+case "$REASON_NP" in
+  *"no progress: diff unchanged between rounds"*) ok "branch9 (D26): reason names no-progress specifically" ;;
+  *) bad "branch9 (D26): reason names no-progress specifically" "$REASON_NP" ;;
+esac
+ESCALATION_NP=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "branch9 (D26): state.escalation armed on no-progress" "armed" "$ESCALATION_NP"
 
 echo
 echo "gate.sh: $PASS passed, $FAIL failed"
