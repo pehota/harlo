@@ -14,16 +14,22 @@
 #      is not a permission decision on this event, so this can never wedge a
 #      session the way a gate mistake could.
 #
-#      MUST be top-level `systemMessage` JSON, not plain stdout: plain stdout
-#      on PostToolUse exit 0 goes only to the debug log, never to the model or
-#      transcript (PostToolUse is not one of the events — UserPromptSubmit,
-#      UserPromptExpansion, SessionStart, PostModelSwitch — where Claude Code
-#      surfaces plain-text stdout as context). Found by the independent
-#      Step-5 reviewer: the original `printf` nudge silently never reached
-#      anyone. `systemMessage` is a top-level field, a SIBLING of
-#      hookSpecificOutput, not nested inside it — confirmed against the hooks
-#      docs' "Common JSON Output Fields" table after a first fix attempt
-#      nested it incorrectly and the round-2 reviewer caught that too.
+#      MUST be hookSpecificOutput.additionalContext JSON, not plain stdout or
+#      systemMessage. Plain stdout on PostToolUse exit 0 goes only to the
+#      debug log (never the model/transcript). systemMessage is a top-level
+#      field per the docs, but EMPIRICALLY VERIFIED (live capture in this
+#      session, two markers emitted side by side, only additionalContext
+#      arrived) to surface only to the human's terminal on PostToolUse, not
+#      to the agent's own context — the opposite of what D9 needs, since D9's
+#      whole point is for the AGENT to notice and self-correct. Three review
+#      rounds got this wrong before the live test settled it: (1) a bare
+#      printf, discarded entirely; (2) systemMessage nested one level too
+#      deep inside hookSpecificOutput; (3) systemMessage correctly top-level
+#      but reaching the wrong audience. Docs disagreed with each other on
+#      this point (the hook-development skill claims systemMessage reaches
+#      Claude's context on PostToolUse; the official hooks reference and the
+#      live capture both say otherwise) — trust the live capture over either
+#      doc when they conflict.
 #
 # Fires only on tools that edit files (Edit, Write, NotebookEdit) — a Read or
 # Bash call is not "an edit" for D8 purposes and must not arm anything.
@@ -80,8 +86,8 @@ STATE_FILE="$DOD_DIR/state.json"
 
 # --- no contract open -> nudge, non-blocking ---------------------------------
 if [ ! -f "$CONTRACT_FILE" ]; then
-  jq -n '{systemMessage:
-    "dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task."}' 2>/dev/null
+  jq -n '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext:
+    "dod: no Definition of Done is open for this task. Run /dod:define before continuing, or ignore this if the edit is unrelated to a task."}}' 2>/dev/null
   exit 0
 fi
 

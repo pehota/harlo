@@ -805,6 +805,27 @@ on either.
    then, the latch path (`/dod:verify` arming it explicitly) is the reliable
    half of D8 and does not depend on `prompt_id` at all.
 
+4. **`PostToolUse`'s agent-visible output channel — RESOLVED, empirically.**
+   Not left open; recorded here because it took three wrong guesses first.
+   `track.sh`'s D9 nudge needed a channel that reaches the **agent's** own
+   context (D9's whole point — the agent notices and self-corrects), not the
+   human's terminal. Three attempts, in order: plain stdout to the hook's
+   exit-0 (discarded — goes only to the debug log); top-level `systemMessage`
+   nested one level too deep inside `hookSpecificOutput` (wrong shape);
+   top-level `systemMessage` correctly shaped (right shape, wrong channel —
+   `docs/en/hooks.md`'s own field table describes it as user-facing, and the
+   `plugin-dev:hook-development` skill's claim that "systemMessage included
+   in context" for `PostToolUse` **contradicts that and turned out to be
+   wrong**). Settled by a **live capture** in this repo's own dev session:
+   two markers emitted side by side in one real `PostToolUse` hook response —
+   `systemMessage: "...MARKER-A"` and
+   `hookSpecificOutput.additionalContext: "...MARKER-B"` — only MARKER-B
+   arrived in the agent's context. `hookSpecificOutput.additionalContext` is
+   the confirmed channel; `track.sh` uses it. **Lesson for any future
+   agent-visible `PostToolUse` output in this plugin: trust a live capture
+   over hook documentation when they conflict** — this repo's own bundled
+   skill was wrong on this exact point.
+
 ---
 
 ## 11. Sources
