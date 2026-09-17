@@ -194,7 +194,11 @@ Ordered by what most reduces risk:
    6 and 9 shipped (`dod/hooks/gate.sh`, D21 two-step release, D26 budget=2
    + no-progress brake). Branch 4 (baseline-not-ancestor expiry) is a
    separate mechanism, still Phase 2 item 5.
-5. Baseline worktree + pre-existing-failure resolution.
+5. ~~Baseline worktree + pre-existing-failure resolution.~~ **Done** —
+   `dod_baseline_worktree`/`dod_baseline_worktree_remove` (`dod/lib/gitref.sh`,
+   D18), invoked lazily from `/dod:verify` step 4 on a failing check only,
+   torn down by `gate.sh` branch 10 on pass. Tracked by the worktree's own
+   presence/sha on disk, not a `state.json` field (see design-v2.md §6.5).
 6. Cache on `(diff_hash, cmd)`.
 7. `session.sh` — preflight, cancel-on-clear, error banner.
 8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`.

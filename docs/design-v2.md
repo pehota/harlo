@@ -408,7 +408,7 @@ does not exist in the code yet** (Phase 2 per `docs/design-v2.plan.md`) —
 | 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — | yes |
 | 8 | blocking failures, budget left | 0 | stdout JSON: `block-findings.txt` | `round++`, `last_failed_diff_hash` | yes |
 | 9 | budget exhausted or no progress | 0 | stdout JSON: escalate reason | `round++`, `last_failed_diff_hash`, `escalation=armed` | yes |
-| 10 | all pass | 0 | — | `status=passed`, worktree torn down | yes, minus the worktree teardown (no worktree exists yet in Phase 1) |
+| 10 | all pass | 0 | — | `status=passed`, worktree torn down | yes |
 
 Branch 9 fires instead of branch 8 the moment either holds: the round about
 to be recorded reaches `DOD_ROUND_BUDGET` (2, per D26), or the current
@@ -521,10 +521,20 @@ dropped. The threshold is hardcoded in v1; see §9.
 ### 6.5 `state.json`
 
 Owned by `lib/state.sh`. Phase 1 fields are only `latched`, `round`,
-`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache`/`worktree`/
+`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache`/
 `errors_unacknowledged` below land in Phase 2 (`track.sh`, `/dod:verify`,
-cache, baseline worktree, error banner respectively) and don't exist in a
-Phase-1 file on disk yet.
+cache, error banner respectively) and don't exist in a Phase-1 file on disk
+yet.
+
+**`worktree` — deliberately never a `state.json` field.** The shipped
+baseline worktree (`dod_baseline_worktree`, `lib/gitref.sh`) is tracked by
+its own presence and HEAD sha on disk at
+`.dod/<task_key>/baseline-worktree`, not by a pointer in `state.json` — `git
+worktree` is itself the source of truth for whether one exists and at what
+sha, so mirroring that into a second, independently-mutable field would be a
+cache that can go stale (deleted worktree, `state.json` still claiming it
+exists) for no benefit `git worktree list`/a directory check doesn't already
+give for free.
 
 ```jsonc
 {

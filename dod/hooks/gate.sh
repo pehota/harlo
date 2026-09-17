@@ -236,6 +236,7 @@ fi
 
 # --- branch 10: all pass -> release, mark passed -----------------------------
 contract_set_status "$CONTRACT_FILE" "passed"
+dod_baseline_worktree_remove "$PROJECT_DIR" "$TASK_KEY"
 gate__clear_last_block
 dod_release
 exit 0

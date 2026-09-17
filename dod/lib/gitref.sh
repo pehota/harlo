@@ -83,3 +83,59 @@ dod_is_ancestor() {
   [ -n "$anc" ] && [ -n "$desc" ] || return 1
   git -C "$repo" merge-base --is-ancestor "$anc" "$desc" 2>/dev/null
 }
+
+# dod_baseline_worktree <repo_dir> <task_key> <baseline_sha> — ensures a
+# worktree checked out at baseline_sha exists at
+# .dod/<task_key>/baseline-worktree, creating it only if missing or stale
+# (§5.3, D18: "resolved lazily in a persistent worktree"). Prints the
+# worktree's absolute path on success, prints nothing and returns 1 on
+# failure. Idempotent and cheap to call every time a caller needs it — the
+# expensive `git worktree add` only actually runs once per task.
+#
+# Lazy and persistent, not eager-per-check, because most checks pass on the
+# first try and never need their baseline verdict at all — building the
+# worktree unconditionally at /dod:define time would pay a full checkout's
+# cost on every task, including ones with zero pre-existing failures.
+# Persistent (not torn down after one lookup) because a single verify round
+# commonly re-checks several failing requirements' baselines, and repeated
+# `git worktree add`/`remove` churn would be pure waste against the same sha.
+#
+# Never touches the caller's working tree or index — worktrees are isolated
+# checkouts sharing the same .git, so recompiled artefacts or lockfile state
+# in the main tree are unaffected by this.
+dod_baseline_worktree() {
+  local repo="$1" task_key="$2" baseline_sha="$3" wt
+  [ -n "$repo" ] && [ -n "$task_key" ] && [ -n "$baseline_sha" ] || return 1
+  wt="$repo/.dod/$task_key/baseline-worktree"
+
+  if [ -d "$wt/.git" ] || [ -f "$wt/.git" ]; then
+    local wt_sha
+    wt_sha=$(git -C "$wt" rev-parse -q --verify HEAD 2>/dev/null)
+    if [ "$wt_sha" = "$baseline_sha" ]; then
+      printf '%s' "$wt"
+      return 0
+    fi
+    # stale (task amended to a new baseline) -> rebuild it at the new sha.
+    git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1
+    rm -rf "$wt" 2>/dev/null
+  fi
+
+  mkdir -p "$(dirname "$wt")" 2>/dev/null
+  git -C "$repo" worktree add --detach --force "$wt" "$baseline_sha" >/dev/null 2>&1 || return 1
+  printf '%s' "$wt"
+  return 0
+}
+
+# dod_baseline_worktree_remove <repo_dir> <task_key> — tears down the
+# worktree `dod_baseline_worktree` created, if any. Called on branch 10 (all
+# pass) alongside status:=passed — the design's "tear down worktree" note in
+# §5.1/§6.2's branch-10 row. Safe to call when no worktree exists.
+dod_baseline_worktree_remove() {
+  local repo="$1" task_key="$2" wt
+  [ -n "$repo" ] && [ -n "$task_key" ] || return 1
+  wt="$repo/.dod/$task_key/baseline-worktree"
+  [ -d "$wt" ] || return 0
+  git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1
+  rm -rf "$wt" 2>/dev/null
+  return 0
+}

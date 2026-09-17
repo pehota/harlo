@@ -129,6 +129,59 @@ else
   ok "is_ancestor false for unknown sha"
 fi
 
+# --- dod_baseline_worktree ---------------------------------------------------
+REPO6=$(dod__test_make_repo)
+BASELINE6=$(git -C "$REPO6" rev-parse HEAD)
+echo "post-baseline edit" >> "$REPO6/root.txt"
+git -C "$REPO6" commit -q -am "post-baseline"
+
+WT=$(dod_baseline_worktree "$REPO6" "main" "$BASELINE6")
+if [ -n "$WT" ] && [ -d "$WT" ]; then
+  ok "baseline_worktree creates a worktree directory"
+else
+  bad "baseline_worktree creates a worktree directory" "$WT"
+fi
+WT_CONTENT=$(cat "$WT/root.txt" 2>/dev/null)
+eq "baseline_worktree checks out baseline content, not HEAD's" "root" "$WT_CONTENT"
+WT_SHA=$(git -C "$WT" rev-parse -q --verify HEAD 2>/dev/null)
+eq "baseline_worktree HEAD is the baseline sha" "$BASELINE6" "$WT_SHA"
+
+# idempotent: second call at the same baseline reuses it (no rebuild, no error)
+WT2=$(dod_baseline_worktree "$REPO6" "main" "$BASELINE6")
+eq "baseline_worktree is idempotent at the same baseline" "$WT" "$WT2"
+
+# stale: a different baseline_sha (e.g. task amended) rebuilds at the new sha
+NEW_BASELINE=$(git -C "$REPO6" rev-parse HEAD)
+WT3=$(dod_baseline_worktree "$REPO6" "main" "$NEW_BASELINE")
+WT3_SHA=$(git -C "$WT3" rev-parse -q --verify HEAD 2>/dev/null)
+eq "baseline_worktree rebuilds when the baseline sha changes" "$NEW_BASELINE" "$WT3_SHA"
+WT3_CONTENT=$(cat "$WT3/root.txt" 2>/dev/null)
+eq "rebuilt worktree reflects the new baseline's content" "root
+post-baseline edit" "$WT3_CONTENT"
+
+if dod_baseline_worktree "$REPO6" "main" "deadbeef0000000000000000000000000000dead" >/dev/null 2>&1; then
+  bad "baseline_worktree fails for an unknown sha" "succeeded"
+else
+  ok "baseline_worktree fails for an unknown sha"
+fi
+
+# --- dod_baseline_worktree_remove --------------------------------------------
+dod_baseline_worktree_remove "$REPO6" "main"
+if [ ! -d "$REPO6/.dod/main/baseline-worktree" ]; then
+  ok "baseline_worktree_remove tears down the worktree directory"
+else
+  bad "baseline_worktree_remove tears down the worktree directory" "still exists"
+fi
+GONE=$(git -C "$REPO6" worktree list 2>/dev/null | grep -c "baseline-worktree")
+eq "baseline_worktree_remove unregisters it from git worktree list" "0" "$GONE"
+
+# safe no-op when nothing to remove
+if dod_baseline_worktree_remove "$REPO6" "main"; then
+  ok "baseline_worktree_remove is a safe no-op when already removed"
+else
+  bad "baseline_worktree_remove is a safe no-op when already removed" "failed"
+fi
+
 echo
 echo "gitref.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
