@@ -193,20 +193,32 @@ wins**. Splitting `SessionStart` (preflight + clear-cancel + error banner) or
 `PostToolUse` (edit log + nudge) into separate scripts would race against
 itself. One event, one script.
 
-### No preventive container — `/dod:define` is human-triggered, not guarded
+### No preventive container — self-invoke is primary, the human is the fallback
 
-**`guard.sh` does not exist and is not planned.** Live-tested 2026-09-17 (see
-§9): the agent cannot be relied on to self-initiate `/dod:define` — a nudge
-(D9) fired correctly and was silently ignored for an entire task. A
-preventive `PreToolUse` gate was considered and rejected twice: once as
-unenforceable (D12's original wording presupposed a "DoD should be open"
-signal that D2 explicitly defers), and once, after the live-test escalation
-made "add it anyway" tempting, on a simpler ground — **F1 is satisfied by
-who is expected to invoke `/dod:define`, not by a lock on `Edit`/`Write`.**
-The **human** runs `/dod:define <task>` explicitly, before handing the task
-to the agent. There is nothing for the agent to forget, because opening the
-contract was never the agent's job. Everything in the diagram above is
-detective (nudge, gate block) because there is nothing left to prevent.
+**`guard.sh` does not exist and is not planned.** Live-tested 2026-09-17: a
+`PreToolUse` guard was considered twice and rejected both times. First pass:
+unenforceable as worded (D12's original text presupposed a "DoD should be
+open" signal that D2 explicitly defers). Second pass, after a live test
+showed the agent skipping `/dod:define` for an entire task despite `track.sh`'s
+nudge (D9) firing correctly: still rejected, because the fix for an agent not
+doing its job is not a lock on `Edit`/`Write` — it's the same pattern D28
+already uses for `/dod:verify`. **The agent self-invokes `/dod:define` before
+its first edit, the moment a task is clear — that is the primary path, same
+status as D28's self-triggered `/dod:verify`.** Nothing changes about whose
+job it is; what a preventive gate would add is a hard stop on top of an
+already-correct expectation, at the cost of blocking every unrelated edit
+(docs, scratch files) with no escape hatch. The human running `/dod:define`
+themselves, and `track.sh`'s nudge, are the fallback for when the agent
+doesn't self-invoke — responsibility passes to the human only once the agent
+has already failed to act, not by default. Everything in the diagram above
+stays detective (nudge, gate block) rather than preventive.
+
+**Known ceiling, stated plainly:** prose instructions have no structural
+floor. The live test that found the skipped-entirely case also proved a
+correctly-worded, correctly-delivered nudge (D9) can be silently ignored —
+tightening the skill's wording lowers the odds, it does not eliminate the
+failure mode the way a hook would. Accepted deliberately (§4's rejection
+above), not overlooked.
 
 ---
 
@@ -742,7 +754,7 @@ quietly mean "passed the easy ones".
 | D9 | Missing-DoD leak → non-blocking nudge | silence; auto-open |
 | D10 | Requirements are typed `check` or `judgement`; untyped is malformed | prose requirements; checks only |
 | D11 | Gate reads a result keyed to the diff hash; never re-runs the battery itself | gate re-runs all checks |
-| D12 | **Revised — no `guard.sh`.** `/dod:define` is **human-triggered**, never agent-initiated: the human runs it explicitly before handing off a task. Superseded the original "PreToolUse guard denies edits" wording after two live tests (2026-09-17, scratch repo `dod-e2e-test`) showed prose-only self-initiation is unreliable — one session opened the contract late, a second never opened it at all despite `track.sh`'s nudge firing three times and being silently ignored. A `PreToolUse` guard was considered again at that point and rejected on a simpler ground than the first pass (which only found the original wording unenforceable, per D2): F1 is satisfied by *who* is expected to call `/dod:define`, not by a lock on `Edit`/`Write` — nothing to prevent if the agent was never supposed to self-initiate | rely on skill step ordering (original v1); unconditional PreToolUse deny on all edits until a contract exists (considered, rejected as solving a problem that shouldn't exist once `/dod:define` isn't the agent's job); a signal-based guard requiring D2's deferred auto-detection first (considered, rejected — same false-positive risk D2 already ruled out) |
+| D12 | **Revised — no `guard.sh`.** The agent self-invokes `/dod:define` before its first edit, the moment a task is clear — same status as D28's self-triggered `/dod:verify`, the primary path, not a fallback. The human running it explicitly, and `track.sh`'s nudge (D9), are the fallback for when the agent doesn't self-invoke — responsibility passes to the human only once the agent has already failed to act. Superseded the original "PreToolUse guard denies edits" wording after two live tests (2026-09-17, scratch repo `dod-e2e-test`) showed self-initiation can go wrong — one session opened the contract late, a second never opened it at all despite the nudge firing three times. A `PreToolUse` guard was considered again at that point and rejected on a simpler ground than the first pass (which only found the original wording unenforceable, per D2): the fix for an agent not doing its job is the same pattern already used for `/dod:verify` — expect it, fall back to the human — not a hard lock on `Edit`/`Write` that blocks every unrelated edit with no escape hatch | rely on skill step ordering with no D28-style explicit self-invoke instruction (original v1); unconditional PreToolUse deny on all edits until a contract exists (considered, rejected — no escape hatch, over-blocks doc/scratch edits); a signal-based guard requiring D2's deferred auto-detection first (considered, rejected — same false-positive risk D2 already ruled out); making `/dod:define` human-only with no agent self-invoke path (considered, rejected — inconsistent with D28's proven pattern and removes a working path rather than fixing the failure case) |
 | D13 | Auto-detected battery + task-derived requirements | fixed list; derived only |
 | D14 | e2e applicability decided at definition time, with a recorded reason | decided at verify time; reviewer-confirmed exemption |
 | D15 | Round 2 re-runs all checks, delta-scopes judgements | full re-review; failed-only |
