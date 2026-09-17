@@ -1,9 +1,11 @@
 # DoD Harness — Design v2
 
-> **Status:** design agreed, not implemented.
-> **Supersedes:** [`design.md`](design.md) and the current `dod/` implementation.
-> This document is a clean-sheet redesign. The existing implementation was
-> deliberately ignored during design; it is not a constraint on this document.
+> **Status:** Phase 1 (walking skeleton, `docs/design-v2.plan.md`) shipped and
+> in use — `contract.sh`/`result.sh`/`state.sh`/`gitref.sh`/`io.sh`, `gate.sh`,
+> both skills. This document remains the full v2 end-state spec; sections
+> below are annotated where Phase 1 diverges or defers to Phase 2.
+> **Supersedes:** [`design.md`](design.md) and the pre-v2 `dod/` implementation
+> (recoverable at tag `dod-v1-final`).
 
 ---
 
