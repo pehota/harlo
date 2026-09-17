@@ -11,9 +11,11 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Phase 1 branches only: 0,1,2,3,5,7,8,10. Branches 4 (expiry), 6/9
-# (escalation) are Phase 2 (docs/design-v2.plan.md) — status stays "open"
-# and the round budget is not yet enforced past incrementing.
+# Branches shipped: 0,1,2,3,5,7,8,10. Branch 5 now also detects "edited this
+# prompt_id without a latch" via state.edits (track.sh, Phase 2 item 1) — not
+# latch-only as in Phase 1. Branches 4 (expiry), 6/9 (escalation) remain
+# Phase 2 (docs/design-v2.plan.md) — status stays "open" and the round budget
+# is not yet enforced past incrementing.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -53,6 +55,7 @@ dod_hook_read
 SESSION_ID="$DOD_HOOK_SESSION_ID"
 [ -n "$SESSION_ID" ] || SESSION_ID="unknown-session"
 STOP_HOOK_ACTIVE="$DOD_HOOK_STOP_ACTIVE"
+PROMPT_ID="$DOD_HOOK_PROMPT_ID"
 
 # --- non-git / detached HEAD / mid-rebase -> release, silent -----------------
 GIT_DIR=$(git -C "$PROJECT_DIR" rev-parse --git-dir 2>/dev/null)
@@ -121,12 +124,22 @@ if [ "$CONTRACT_STATUS" != "open" ]; then
   exit 0
 fi
 
-# --- branch 5: claimed or edited this prompt? --------------------------------
+# --- branch 5: claimed OR edited this prompt (D8) -----------------------------
+# Latch alone under-blocks (an agent that edits then stops without running
+# /dod:verify would silently skip the gate); "edits since open" over-blocks
+# (a question-only turn on an already-open contract would wrongly gate). The
+# per-prompt_id edit log from track.sh is the middle ground — see design-v2.md
+# §5.1's table.
 state_read "$STATE_FILE"
 LATCHED="$STATE_LATCHED"
 [ "$LATCHED" = "true" ] || LATCHED="false"
 
-if [ "$LATCHED" != "true" ]; then
+CLAIMED="$LATCHED"
+if [ "$CLAIMED" != "true" ] && [ -n "$PROMPT_ID" ]; then
+  state_has_edit_for_prompt "$STATE_FILE" "$PROMPT_ID" && CLAIMED="true"
+fi
+
+if [ "$CLAIMED" != "true" ]; then
   gate__clear_last_block
   dod_release
   exit 0

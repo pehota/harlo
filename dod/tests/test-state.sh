@@ -55,6 +55,29 @@ state_bump_round "$SFILE"
 state_read "$SFILE"
 eq "state_bump_round increments round again" "2" "$STATE_ROUND"
 
+# --- state_log_edit / state_has_edit_for_prompt -------------------------------
+state_write "$SFILE"
+state_log_edit "$SFILE" "p1" "src/a.ts"
+state_read "$SFILE"
+COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+eq "state_log_edit appends one record" "1" "$COUNT"
+
+state_log_edit "$SFILE" "p1" "src/b.ts"
+state_read "$SFILE"
+COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+eq "state_log_edit appends a second record" "2" "$COUNT"
+
+if state_has_edit_for_prompt "$SFILE" "p1"; then
+  ok "state_has_edit_for_prompt true for logged prompt_id"
+else
+  bad "state_has_edit_for_prompt true for logged prompt_id" "false"
+fi
+if state_has_edit_for_prompt "$SFILE" "p2"; then
+  bad "state_has_edit_for_prompt false for unlogged prompt_id" "true"
+else
+  ok "state_has_edit_for_prompt false for unlogged prompt_id"
+fi
+
 echo
 echo "state.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

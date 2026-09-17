@@ -47,6 +47,24 @@ open_contract "$REPO" "main"
 OUT=$(run_gate "$REPO")
 eq "branch5: no claim, no edits releases silently" "" "$OUT"
 
+# --- branch 5 (D8): edited this prompt_id without a latch -> block -----------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+state_log_edit "$REPO/.dod/main/state.json" "p1" "$REPO/root.txt"
+OUT=$(run_gate "$REPO" "p1")
+if is_block "$OUT"; then
+  ok "branch5 (D8): edited this prompt without a latch blocks"
+else
+  bad "branch5 (D8): edited this prompt without a latch blocks" "$OUT"
+fi
+
+# --- branch 5 (D8): edit logged under a DIFFERENT prompt_id -> release -------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+state_log_edit "$REPO/.dod/main/state.json" "p1" "$REPO/root.txt"
+OUT=$(run_gate "$REPO" "p2")
+eq "branch5 (D8): edit under a different prompt_id releases silently" "" "$OUT"
+
 # --- branch 3: status != open (already passed) -> release, silent ------------
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"

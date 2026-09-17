@@ -6,9 +6,9 @@
 # round counter and escalation flag the gate's decision tree reads and
 # (only it) mutates.
 #
-# Phase 1 fields only: latched, round, escalation, last_failed_diff_hash.
-# edits[]/cache{}/worktree/errors_unacknowledged are Phase 2 (track.sh,
-# cache, baseline worktree) — added additively, not a reshape.
+# Phase 1 fields: latched, round, escalation, last_failed_diff_hash.
+# Phase 2 adds edits[] (track.sh, this file) additively — cache{}/worktree/
+# errors_unacknowledged still land with their own consumers.
 
 STATE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -24,7 +24,8 @@ state_write() {
     latched: false,
     round: 0,
     escalation: "none",
-    last_failed_diff_hash: null
+    last_failed_diff_hash: null,
+    edits: []
   }' > "$path" 2>/dev/null
 }
 
@@ -36,6 +37,7 @@ state_read() {
   STATE_ROUND=""
   STATE_ESCALATION=""
   STATE_LAST_FAILED_DIFF_HASH=""
+  STATE_EDITS="[]"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -45,6 +47,8 @@ state_read() {
   STATE_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
   STATE_ESCALATION=$(jq -r '.escalation // "none"' "$path" 2>/dev/null)
   STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$path" 2>/dev/null)
+  STATE_EDITS=$(jq -c '.edits // []' "$path" 2>/dev/null)
+  [ -n "$STATE_EDITS" ] || STATE_EDITS="[]"
   return 0
 }
 
@@ -76,4 +80,29 @@ state_set_last_failed_diff_hash() {
   dod__has_jq || return 1
   tmp="${path}.tmp.$$"
   jq --arg h "$hash" '.last_failed_diff_hash = $h' "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+}
+
+# state_log_edit <path> <prompt_id> <file_path> — appends one edit record
+# (§6.5). Sole writer of state.edits — track.sh's PostToolUse hook, never the
+# gate. Used by gate.sh branch 5 (D8) to detect "edited this prompt without a
+# latch" without relying on the agent to call dod-claim.sh.
+state_log_edit() {
+  local path="$1" prompt_id="$2" file="$3" ts tmp
+  [ -f "$path" ] || state_write "$path"
+  dod__has_jq || return 1
+  ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+  tmp="${path}.tmp.$$"
+  jq --arg p "$prompt_id" --arg f "$file" --arg t "$ts" \
+    '.edits += [{prompt_id: $p, path: $f, ts: $t}]' \
+    "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+}
+
+# state_has_edit_for_prompt <path> <prompt_id> — 0 if state.edits contains
+# any record for prompt_id, 1 otherwise (including missing/malformed state).
+state_has_edit_for_prompt() {
+  local path="$1" prompt_id="$2"
+  [ -f "$path" ] || return 1
+  dod__has_jq || return 1
+  jq -e --arg p "$prompt_id" '(.edits // []) | any(.[]; .prompt_id == $p)' \
+    "$path" >/dev/null 2>&1
 }
