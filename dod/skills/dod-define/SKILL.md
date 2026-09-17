@@ -1,6 +1,6 @@
 ---
 name: dod-define
-description: Open a Definition-of-Done contract for the current task before implementation begins. Invoke as /dod:define [task text]. Use at the start of implementation work, before the first edit.
+description: Open a Definition-of-Done contract for the current task before implementation begins. Invoke as /dod:define [task text]. This is a HUMAN-triggered command — the user runs it explicitly before handing off a task, not something the agent self-initiates as part of working the task.
 ---
 
 # /dod:define
@@ -9,6 +9,16 @@ Opens a DoD contract for the current task. Every contract carries the
 detected test command plus a `judgement` requirement (`dod-reviewer`,
 Phase 2 item 2) — the battery detector, waiver extraction and e2e
 applicability remain Phase 2 items still to land (`docs/design-v2.plan.md`).
+
+**This is a human-triggered command (D12, revised).** The user runs
+`/dod:define <task>` before handing off a task — F1 ("DoD defined before
+implementation begins") is satisfied by *who* is expected to invoke this,
+not by the agent guessing when to call it. Live testing (2026-09-17) found
+agent self-initiation unreliable — sometimes late, sometimes skipped
+entirely even when `track.sh`'s nudge fired. If you (the agent) are running
+this skill, it's because the user typed `/dod:define` or explicitly asked
+you to open one — don't treat "no contract is open yet" as your own signal
+to call it proactively; that's the user's call.
 
 ## Steps
 

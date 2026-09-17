@@ -115,7 +115,6 @@ flowchart TB
     direction TB
     subgraph HOOKS["Hooks — bash + jq · deterministic · no judgement"]
       SESS["<b>session.sh</b> · SessionStart<br/>preflight deps · cancel on /clear · error banner"]
-      GUARD["<b>guard.sh</b> · PreToolUse<br/>deny edit if DoD open and no contract"]
       TRACK["<b>track.sh</b> · PostToolUse<br/>log edited files · nudge if no DoD"]
       GATE["<b>gate.sh</b> · Stop<br/>decision tree · block or release"]
     end
@@ -144,7 +143,7 @@ flowchart TB
   TOOL["Project toolchain"]
 
   DEV --> CC
-  CC --> SESS & GUARD & TRACK & GATE
+  CC --> SESS & TRACK & GATE
   CC --> DEFINE & VERIFY
   HOOKS -.-> LIB
   SKILLS -.-> LIB
@@ -157,8 +156,7 @@ flowchart TB
   GATE -->|"reads (+ bookkeeping only)"| CONTRACT & RESULT & SSTATE
   GATE -->|appends| ERR
 
-  GATE ==>|"exit 2 = block · exit 1 = noisy release · exit 0 = release"| CC
-  GUARD ==>|deny| CC
+  GATE ==>|"stdout JSON = block · exit 1 = noisy release · silent exit 0 = release"| CC
   VERIFY --> TOOL
   VERIFY -->|lazy, on first failure| WT
   REVIEWER -->|git diff baseline...HEAD| GIT
@@ -169,7 +167,7 @@ flowchart TB
   classDef agent fill:#f8cecc,stroke:#b85450,color:#000
   classDef store fill:#e1d5e7,stroke:#9673a6,color:#000
   classDef ext fill:#999,stroke:#6b6b6b,color:#fff
-  class SESS,GUARD,TRACK,GATE,CONTRACTLIB,RESULTLIB,STATELIB,GITREF,IO hook
+  class SESS,TRACK,GATE,CONTRACTLIB,RESULTLIB,STATELIB,GITREF,IO hook
   class DEFINE,VERIFY skill
   class REVIEWER agent
   class CONTRACT,RESULT,SSTATE,WT,ERR store
@@ -195,11 +193,20 @@ wins**. Splitting `SessionStart` (preflight + clear-cancel + error banner) or
 `PostToolUse` (edit log + nudge) into separate scripts would race against
 itself. One event, one script.
 
-### The only preventive container
+### No preventive container — `/dod:define` is human-triggered, not guarded
 
-`guard.sh` is the sole container that *prevents*. Everything else is detective —
-it catches the problem after the fact and forces a fix. The guard is what makes
-"contract exists before the first edit" mechanical instead of aspirational.
+**`guard.sh` does not exist and is not planned.** Live-tested 2026-09-17 (see
+§9): the agent cannot be relied on to self-initiate `/dod:define` — a nudge
+(D9) fired correctly and was silently ignored for an entire task. A
+preventive `PreToolUse` gate was considered and rejected twice: once as
+unenforceable (D12's original wording presupposed a "DoD should be open"
+signal that D2 explicitly defers), and once, after the live-test escalation
+made "add it anyway" tempting, on a simpler ground — **F1 is satisfied by
+who is expected to invoke `/dod:define`, not by a lock on `Edit`/`Write`.**
+The **human** runs `/dod:define <task>` explicitly, before handing the task
+to the agent. There is nothing for the agent to forget, because opening the
+contract was never the agent's job. Everything in the diagram above is
+detective (nudge, gate block) because there is nothing left to prevent.
 
 ---
 
@@ -328,7 +335,6 @@ hash differently, the gate would reject every result. One function, one file.
 dod/
 ├── hooks/
 │   ├── session.sh      SessionStart  — preflight · cancel-on-clear · error banner
-│   ├── guard.sh        PreToolUse    — deny edit if no contract
 │   ├── track.sh        PostToolUse   — log edits · nudge
 │   └── gate.sh         Stop          — decision tree
 ├── lib/
@@ -736,7 +742,7 @@ quietly mean "passed the easy ones".
 | D9 | Missing-DoD leak → non-blocking nudge | silence; auto-open |
 | D10 | Requirements are typed `check` or `judgement`; untyped is malformed | prose requirements; checks only |
 | D11 | Gate reads a result keyed to the diff hash; never re-runs the battery itself | gate re-runs all checks |
-| D12 | `PreToolUse` guard denies edits when a DoD is open without a contract | rely on skill step ordering |
+| D12 | **Revised — no `guard.sh`.** `/dod:define` is **human-triggered**, never agent-initiated: the human runs it explicitly before handing off a task. Superseded the original "PreToolUse guard denies edits" wording after two live tests (2026-09-17, scratch repo `dod-e2e-test`) showed prose-only self-initiation is unreliable — one session opened the contract late, a second never opened it at all despite `track.sh`'s nudge firing three times and being silently ignored. A `PreToolUse` guard was considered again at that point and rejected on a simpler ground than the first pass (which only found the original wording unenforceable, per D2): F1 is satisfied by *who* is expected to call `/dod:define`, not by a lock on `Edit`/`Write` — nothing to prevent if the agent was never supposed to self-initiate | rely on skill step ordering (original v1); unconditional PreToolUse deny on all edits until a contract exists (considered, rejected as solving a problem that shouldn't exist once `/dod:define` isn't the agent's job); a signal-based guard requiring D2's deferred auto-detection first (considered, rejected — same false-positive risk D2 already ruled out) |
 | D13 | Auto-detected battery + task-derived requirements | fixed list; derived only |
 | D14 | e2e applicability decided at definition time, with a recorded reason | decided at verify time; reviewer-confirmed exemption |
 | D15 | Round 2 re-runs all checks, delta-scopes judgements | full re-review; failed-only |
@@ -762,7 +768,6 @@ quietly mean "passed the easy ones".
 | Item | Why deferred | Cost when added |
 |---|---|---|
 | Auto-detection of implementation work | Wanted real data on how often the command is forgotten; the nudge (D9) collects it | new trigger path in `track.sh` |
-| `guard.sh` (preventive PreToolUse gate, D12) | Live-tested (2026-09-17, scratch repo `dod-e2e-test`): a session wrote two files with **no contract and no prior `/dod:define` call at all** — F1's "before implementation begins" was violated on the very first edit, not on an amend. D12 as worded ("deny edit if a DoD is open without a contract") presupposes some signal that a DoD *should* be open, which D2 explicitly defers (no auto-detection of implementation work). The only alternative — deny every `Edit`/`Write`/`NotebookEdit` unconditionally until a contract exists — was rejected as too blunt: it would block doc fixes, scratch edits, and any non-task change on friction alone, and doesn't have an escape hatch in the current design. No path-or-content heuristic is acceptable either (same reason D2 deferred auto-detection: false positives). Staying detective-only (D9's nudge + the Stop gate) until a real, non-heuristic "implementation started" signal exists. | needs a genuine signal first, not just implementation effort — open problem, not a scheduled item |
 | Per-repo config for the blocking/advisory threshold | v1 hardcodes `blocking` fails, `advisory` reports | none — `severity` is already in the schema |
 | Extracting the battery detector out of `/dod:define` | YAGNI until a second consumer exists | mechanical move |
 | Headless (`claude -p`) operation | An orchestrator script will drive the harness separately | separate entry point |
