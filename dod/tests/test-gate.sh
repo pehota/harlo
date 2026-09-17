@@ -112,6 +112,9 @@ open_contract "$REPO" "main"
 bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
 BASELINE=$(git -C "$REPO" rev-parse HEAD)
 DH=$(dod_diff_hash "$REPO" "$BASELINE")
+# as /dod:verify would have left behind after resolving a failing check's
+# baseline_verdict earlier in the task — branch 10 must reclaim it on pass.
+dod_baseline_worktree "$REPO" "main" "$BASELINE" >/dev/null
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0}]'
@@ -119,6 +122,11 @@ OUT=$(run_gate "$REPO")
 eq "branch10: all-pass result releases silently" "" "$OUT"
 STATUS_AFTER=$(jq -r '.status' "$REPO/.dod/main/contract.json" 2>/dev/null)
 eq "branch10: status set to passed" "passed" "$STATUS_AFTER"
+if [ -d "$REPO/.dod/main/baseline-worktree" ]; then
+  bad "branch10: tears down the baseline worktree on pass" "still exists"
+else
+  ok "branch10: tears down the baseline worktree on pass"
+fi
 
 # --- branch 8: claimed, failing result matching diff_hash -> block, round++ --
 REPO=$(dod__test_make_repo)
@@ -243,10 +251,22 @@ ESCALATION_AFTER=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
 eq "branch9: state.escalation armed" "armed" "$ESCALATION_AFTER"
 
 # --- branch 6: escalation already armed -> release, status := escalated -----
+# Create a baseline worktree first, as /dod:verify would have on a failing
+# check, so this case also proves branch 6 tears it down — an escalated task
+# is terminal (branch 3 releases every later Stop before branch 6 runs
+# again), so this is the only chance to reclaim it.
+dod_baseline_worktree "$REPO" "main" "$BASELINE" >/dev/null
+[ -d "$REPO/.dod/main/baseline-worktree" ] || bad "branch6 setup: baseline worktree should exist before the escalated Stop" "missing"
+
 OUT3=$(run_gate "$REPO" "p3")
 eq "branch6: escalation-armed turn releases silently" "" "$OUT3"
 STATUS_AFTER=$(jq -r '.status' "$REPO/.dod/main/contract.json" 2>/dev/null)
 eq "branch6: status set to escalated" "escalated" "$STATUS_AFTER"
+if [ -d "$REPO/.dod/main/baseline-worktree" ]; then
+  bad "branch6: tears down the baseline worktree on escalation" "still exists"
+else
+  ok "branch6: tears down the baseline worktree on escalation"
+fi
 
 # --- branch 9 (D26 no-progress), ISOLATED from the budget trigger -----------
 # DOD_ROUND_BUDGET is raised to 5 for this case so round 2 does NOT also

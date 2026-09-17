@@ -127,9 +127,13 @@ dod_baseline_worktree() {
 }
 
 # dod_baseline_worktree_remove <repo_dir> <task_key> — tears down the
-# worktree `dod_baseline_worktree` created, if any. Called on branch 10 (all
-# pass) alongside status:=passed — the design's "tear down worktree" note in
-# §5.1/§6.2's branch-10 row. Safe to call when no worktree exists.
+# worktree `dod_baseline_worktree` created, if any. Called from gate.sh on
+# every terminal-status transition — branch 10 (all pass) alongside
+# status:=passed, per §5.1/§6.2's branch-10 row, AND branch 6 (escalation)
+# alongside status:=escalated. Both are terminal: once status != "open",
+# branch 3 releases every subsequent Stop before branch 6/10 run again, so a
+# worktree not torn down here would never be torn down at all. Safe to call
+# when no worktree exists.
 dod_baseline_worktree_remove() {
   local repo="$1" task_key="$2" wt
   [ -n "$repo" ] && [ -n "$task_key" ] || return 1
