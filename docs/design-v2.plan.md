@@ -236,7 +236,24 @@ Ordered by what most reduces risk:
    design — the contract survives so resuming the same branch later finds
    it still open, per §7.1's "a `/clear` mid-task... cancels it" being
    specific to `/clear`, not every session end.
-8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`.
+8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`:
+   - ~~Waivers.~~ **Done** — `contract.sh`'s `--waivers`/`CONTRACT_WAIVERS`
+     already existed but `contract_read` never set the latter (fixed).
+     `/dod:define` step 3.5 extracts a waiver only from the user's own
+     explicit words (never inferred from task size or shape) and shows it
+     in the confirmation table as `WAIVED` with the user's reason verbatim.
+     `/dod:verify` step 4 checks `CONTRACT_WAIVERS` before running a check's
+     command — a waived id skips the command entirely and records
+     `verdict: "waived"` with the waiver's reason; `result.sh` already
+     tallied `waived`/`na` in `summary` and `gate.sh` already only counts
+     `verdict == "fail"` as blocking, so no gate change was needed. The
+     pass table (step 8) now states every waived/n/a row's reason
+     explicitly, never silently omitting it. Also stripped "Phase N item"
+     / decision-ID references out of both `SKILL.md` files while touching
+     them — build-history bookkeeping has no business being read by the
+     agent as runtime instruction.
+   - e2e requirement (always-present invariant), `/dod:cancel`, amend/
+     `--new` remain undone.
 
 ---
 

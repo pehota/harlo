@@ -108,6 +108,7 @@ contract_read() {
   CONTRACT_SESSION_ID=""
   CONTRACT_BASELINE_SHA=""
   CONTRACT_REQUIREMENTS="[]"
+  CONTRACT_WAIVERS="[]"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -124,6 +125,8 @@ contract_read() {
   CONTRACT_SESSION_ID=$(jq -r '.session_id // ""' "$path" 2>/dev/null)
   CONTRACT_BASELINE_SHA=$(jq -r '.baseline.sha // ""' "$path" 2>/dev/null)
   CONTRACT_REQUIREMENTS="$reqs"
+  CONTRACT_WAIVERS=$(jq -c '.waivers // []' "$path" 2>/dev/null)
+  [ -n "$CONTRACT_WAIVERS" ] || CONTRACT_WAIVERS="[]"
   return 0
 }
 

@@ -32,6 +32,22 @@ eq "round-trip task_key" "main" "$CONTRACT_TASK_KEY"
 eq "round-trip status" "open" "$CONTRACT_STATUS"
 eq "round-trip task" "implement the thing" "$CONTRACT_TASK"
 eq "round-trip baseline_sha" "abc123" "$CONTRACT_BASELINE_SHA"
+eq "round-trip waivers default to empty" "[]" "$CONTRACT_WAIVERS"
+
+# --- waivers round-trip --------------------------------------------------------
+WFILE="$REPO/.dod/main/waived-contract.json"
+contract_write "$WFILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"lint","type":"check","cmd":"eslint .","expect_exit":0,"source":"auto-detected"}]' \
+  --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
+contract_read "$WFILE"
+COUNT=$(printf '%s' "$CONTRACT_WAIVERS" | jq 'length' 2>/dev/null)
+eq "waivers round-trip: one waiver stored" "1" "$COUNT"
+WID=$(printf '%s' "$CONTRACT_WAIVERS" | jq -r '.[0].id' 2>/dev/null)
+eq "waivers round-trip: waiver id" "lint" "$WID"
+WREASON=$(printf '%s' "$CONTRACT_WAIVERS" | jq -r '.[0].reason' 2>/dev/null)
+eq "waivers round-trip: waiver reason" "user: prototype spike" "$WREASON"
 
 # --- malformed input rejected -------------------------------------------------
 BADFILE="$REPO/.dod/main/bad-contract.json"

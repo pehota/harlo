@@ -7,11 +7,9 @@ description: Run the Definition-of-Done checks for the currently open contract a
 
 Runs the contract's checks and judgements against the current changeset and
 writes a `result.json` the gate can trust. Runs `check` requirements
-directly, skipping ones already resolved for this exact diff (Phase 2 item
-6), and spawns `dod-reviewer` for `judgement` requirements (Phase 2 item 2),
-lazily resolving pre-existing failures against a baseline worktree (Phase 2
-item 5). The pass-table's waiver/n/a columns remain a Phase 2 item still to
-land (`docs/design-v2.plan.md`).
+directly, skipping ones already resolved for this exact diff or waived by
+the user, and spawns `dod-reviewer` for `judgement` requirements, lazily
+resolving pre-existing failures against a baseline worktree.
 
 **Run this yourself, without being asked — and without asking.** The moment
 you believe a task covered by an open contract is done, run `/dod:verify` in
@@ -19,9 +17,10 @@ that same turn before you stop. Do not tell the user to run it, do not wait
 for the gate to block first, and do not ask the user whether you should run
 it — not even for a trivial diff (a comment, a rename, a one-line change).
 There is no diff small enough to justify checking in first: asking is the
-same skipped-self-invoke failure mode D28 exists to prevent, just phrased as
-a question instead of silence. A block is the fallback for when this was
-skipped, not the intended trigger, and neither is a permission check.
+same skipped-self-invoke failure mode as never running it at all, just
+phrased as a question instead of silence. A block is the fallback for when
+this was skipped, not the intended trigger, and neither is a permission
+check.
 
 ## Steps
 
@@ -54,7 +53,13 @@ skipped, not the intended trigger, and neither is a permission check.
    when the working tree is unchanged). This value becomes the result's
    trust key.
 
-4. **Run each `check` requirement's command.** First look up the cache:
+4. **Run each `check` requirement's command.** First check whether the
+   contract waives it (`CONTRACT_WAIVERS`, from step 1's `contract_read`):
+   if the requirement's `id` appears there, set `verdict` to `"waived"` and
+   `reason` to the waiver's own `reason` text — do **not** run the command
+   at all, and do not consult or populate the cache for a waived
+   requirement (there is no exit code to cache). Otherwise, look up the
+   cache:
    ```bash
    CACHED=$(state_cache_get ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD")
    ```
@@ -65,9 +70,9 @@ skipped, not the intended trigger, and neither is a permission check.
    `"pass"` if `exit == expect_exit` else `"fail"`, then
    `state_cache_set ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD" "$verdict"`.
    Keep the command's output on a miss — needed for `/dod:verify`'s own
-   summary and, in Phase 2, for `evidence/`.
+   summary.
 
-   **On a failing check only** (D18 — lazy, never eager for passing checks),
+   **On a failing check only** (lazy, never eager for passing checks),
    resolve whether the failure is pre-existing or something this changeset
    introduced:
    ```bash
@@ -135,6 +140,7 @@ skipped, not the intended trigger, and neither is a permission check.
      --round "$((STATE_ROUND + 1))" \
      --requirements '[
        {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
+       {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
        {"id":"review","type":"judgement","verdict":"pass|fail","findings":[...]}
      ]'
    state_set_state ".dod/$TASK_KEY/state.json" "idle"
@@ -150,19 +156,23 @@ skipped, not the intended trigger, and neither is a permission check.
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
    ```
 
-8. **Print the pass table.** One row per requirement: id, verdict, and
-   (checks) command or (judgements) blocking/advisory finding counts. On
-   all-pass, tell the user the DoD is satisfied. On failure, list which
-   requirements failed — for a failing `check` with a `baseline_verdict`,
-   state it plainly ("pre-existing — also fails at baseline" vs "new —
-   passes at baseline, this changeset broke it"), since that distinction is
-   exactly what tells the user whether to expect a fix in scope; for
-   `review`, list every `blocking` finding's file, line, and summary;
-   advisory findings are listed too but flagged as the user's decision,
-   never auto-fixed (per the repo's standing rule: raise non-blocking
-   findings, never silently fix or drop them). The gate's own block message
-   will restate check failures, but the agent should not wait for the block
-   to inform the user.
+8. **Print the pass table.** One row per requirement — **every** requirement,
+   with no exceptions for a waived or not-applicable one: id, verdict, and
+   (checks) command or (judgements) blocking/advisory finding counts. A
+   `"waived"` verdict's row states the waiver's `reason` verbatim, and an
+   `"n/a"` verdict's row states why it doesn't apply — "passed" must never
+   quietly mean "passed the ones that were actually checked." On all-pass
+   (accounting for waived/n/a as satisfied), tell the user the DoD is
+   satisfied. On failure, list which requirements failed — for a failing
+   `check` with a `baseline_verdict`, state it plainly ("pre-existing — also
+   fails at baseline" vs "new — passes at baseline, this changeset broke
+   it"), since that distinction is exactly what tells the user whether to
+   expect a fix in scope; for `review`, list every `blocking` finding's
+   file, line, and summary; advisory findings are listed too but flagged as
+   the user's decision, never auto-fixed (per the repo's standing rule:
+   raise non-blocking findings, never silently fix or drop them). The
+   gate's own block message will restate check failures, but the agent
+   should not wait for the block to inform the user.
 
 ## After verify
 
