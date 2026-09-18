@@ -2,13 +2,14 @@
 #
 # dod/hooks/track.sh — PostToolUse: log edited files, nudge if no DoD open.
 #
-# Two responsibilities in one script (design-v2.md §4 — one event, one
-# script, since Claude Code runs concurrent same-event hooks in parallel with
-# last-write-wins, so splitting this would race against itself):
+# Two responsibilities in one script — one event, one script, since Claude
+# Code runs concurrent same-event hooks in parallel with last-write-wins, so
+# splitting this would race against itself:
 #
-#   1. Contract open -> append an edit record to state.edits (§6.5). This is
-#      what lets gate.sh's branch 5 (D8) detect "edited this prompt without a
-#      latch" without depending on the agent remembering to claim.
+#   1. Contract open -> append an edit record to state.edits. This is what
+#      lets gate.sh's branch 5 (D8: claim = latch armed OR edits-this-prompt
+#      without a latch) detect "edited this prompt without a latch" without
+#      depending on the agent remembering to claim.
 #   2. No contract open -> emit a one-line non-blocking nudge (D9) so the
 #      agent notices a DoD was never opened. Non-blocking: PostToolUse output
 #      is not a permission decision on this event, so this can never wedge a

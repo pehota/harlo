@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# dod/hooks/gate.sh — the Stop decision tree (docs/design-v2.md §5.1, §6.2).
+# dod/hooks/gate.sh — the Stop decision tree.
 #
-# Exit contract (amendment A1 — JSON block, not `exit 2`):
+# Exit contract (block is a JSON stdout object, not `exit 2` — exit 2 renders
+# in the transcript as a hook *error*, which is wrong for a deliberate gate
+# decision; harness errors keep exit 1 so the two stay visibly distinct):
 #   stdout {"decision":"block","reason":"…"} + exit 0  -> block
 #   silent + exit 0                                    -> release (normal)
 #   stderr one line + exit 1                            -> release (harness error)
@@ -11,11 +13,13 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10. Branch 5 now also detects "edited
-# this prompt_id without a latch" via state.edits (track.sh, Phase 2 item 1)
-# — not latch-only as in Phase 1. Branch 4 (expiry) only covers a rebased/
-# force-pushed baseline, not a killed session with untouched history
-# (docs/design-v2.plan.md) — that remains unaddressed.
+# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10. Branch 5 detects both "claimed"
+# (latch armed) and "edited this prompt_id without a latch" via state.edits
+# (track.sh). Branch 4 (expiry) only covers a rebased/force-pushed baseline,
+# not a killed session with untouched history — a session that crashes or is
+# killed leaves the baseline SHA still a perfectly good ancestor of HEAD, just
+# orphaned by the missing SessionEnd; that case has no TTL / liveness check
+# and remains unaddressed.
 #
 # D26: round budget = 2. An identical diff_hash across two failing rounds
 # (no progress) burns the budget immediately, same as reaching round 2 —
@@ -136,10 +140,10 @@ fi
 # commit outside the branch's own history, which is meaningless. Expire
 # rather than silently keep gating: `expired` releases via branch 3 on every
 # later turn, same as `passed`/`cancelled`, and does not resurrect itself.
-# Does NOT address a killed/crashed session with untouched history
-# (docs/design-v2.plan.md) — that baseline is still a perfectly good
-# ancestor, just orphaned by the missing SessionEnd; a separate mechanism,
-# not yet designed, would be needed for that case.
+# Does NOT address a killed/crashed session with untouched history — that
+# baseline is still a perfectly good ancestor, just orphaned by the missing
+# SessionEnd; a separate mechanism, not yet designed, would be needed for
+# that case.
 #
 # `git merge-base --is-ancestor` has three outcomes, not two: exit 0 (is an
 # ancestor), exit 1 (confirmed NOT an ancestor — a real answer), and anything
@@ -165,8 +169,7 @@ fi
 # Latch alone under-blocks (an agent that edits then stops without running
 # /dod:verify would silently skip the gate); "edits since open" over-blocks
 # (a question-only turn on an already-open contract would wrongly gate). The
-# per-prompt_id edit log from track.sh is the middle ground — see design-v2.md
-# §5.1's table.
+# per-prompt_id edit log from track.sh is the middle ground.
 state_read "$STATE_FILE"
 LATCHED="$STATE_LATCHED"
 [ "$LATCHED" = "true" ] || LATCHED="false"

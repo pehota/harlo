@@ -6,10 +6,9 @@
 # round counter and escalation flag the gate's decision tree reads and
 # (only it) mutates.
 #
-# Phase 1 fields: latched, round, escalation, last_failed_diff_hash.
-# Phase 2 adds edits[] (track.sh), state ("idle"|"verifying", this file) and
-# cache{} (this file, Phase 2 item 6) additively — worktree/
-# errors_unacknowledged still land with their own consumers.
+# Fields: latched, round, escalation, last_failed_diff_hash, edits[]
+# (track.sh), state ("idle"|"verifying", this file), cache{} (this file) and
+# errors_unacknowledged (session.sh's error banner).
 #
 # `state` is WORDING-ONLY: gate.sh reads it to pick which block message to
 # print, never to change the block/release decision itself (that stays

@@ -6,10 +6,9 @@
 # gate's trust key: gate.sh reads RESULT_DIFF_HASH and RESULT_BLOCKING_FAIL
 # only through this file's functions.
 #
-# Phase 1 skeleton: check requirements only ("fail" verdict = blocking).
-# Judgement verdicts / severity classification land with the reviewer in
-# Phase 2 (result__validate_requirements already accepts type "judgement"
-# so that phase is additive, not a reshape).
+# Both requirement kinds are live: `check` ("fail" verdict = blocking) and
+# `judgement` (the dod-reviewer agent's verdict, with severity-classified
+# findings — "fail" or any blocking finding = blocking).
 
 RESULT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

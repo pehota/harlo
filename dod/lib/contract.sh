@@ -4,19 +4,17 @@
 #
 # Nothing outside this file may `jq` into contract.json. Schema, reader and
 # writer live together so a shape change is one diff, not a drift risk across
-# files (v2 design §6.3).
+# files.
 #
 # Invariants enforced by contract_validate, contract rejected otherwise:
 #   - every requirement is `check` or `judgement`, never neither;
 #   - every `check` requirement carries `cmd` and `expect_exit`;
 #   - an `e2e` requirement always exists: either `applicable:true` with a
 #     `cmd` (a normal check), or `applicable:false` with a non-empty
-#     `reason`. Never absent (design-v2.md §6.3). The base check-shape rule
-#     exempts `id:"e2e"` when `applicable:false`, since it deliberately
-#     carries `cmd:null`/`expect_exit:null` — contract__validate_e2e enforces
-#     its own shape instead.
-# (Phase 1 skeleton: judgement-specific fields land with the reviewer in
-# Phase 2.)
+#     `reason`. Never absent. The base check-shape rule exempts `id:"e2e"`
+#     when `applicable:false`, since it deliberately carries
+#     `cmd:null`/`expect_exit:null` — contract__validate_e2e enforces its own
+#     shape instead.
 
 CONTRACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

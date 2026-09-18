@@ -110,7 +110,7 @@ contract_write "$LATCH_CFILE" \
 state_read "$LATCH_SFILE"
 eq "contract_write resets a stale latch on amend" "false" "$STATE_LATCHED"
 
-# --- e2e-always-present invariant (design-v2.md §6.3) ------------------------
+# --- e2e-always-present invariant ---------------------------------------------
 
 # applicable:true with a cmd is accepted
 E2E_APPLICABLE_FILE="$REPO/.dod/main/e2e-applicable-contract.json"

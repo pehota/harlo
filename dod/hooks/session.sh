@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# dod/hooks/session.sh — SessionStart + SessionEnd (design-v2.md §4, §7.5).
+# dod/hooks/session.sh — SessionStart + SessionEnd.
 #
-# One script for two events (not one per §4's "one event, one script" rule —
-# that rule is about splitting a SINGLE event across scripts racing in
-# parallel; SessionStart and SessionEnd never fire concurrently with each
-# other, so dispatching on hook_event_name here is safe and avoids a third
+# One script for two events (not one script per event, the usual rule — that
+# rule is about splitting a SINGLE event across scripts racing in parallel;
+# SessionStart and SessionEnd never fire concurrently with each other, so
+# dispatching on hook_event_name here is safe and avoids a third
 # near-duplicate file).
 #
 # Three responsibilities:

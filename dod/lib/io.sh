@@ -4,8 +4,10 @@
 #
 # dod_hook_read: one `jq … | @tsv` pass instead of 8 separate forks (v1's
 # harness-common.sh hc_read_hook_input pattern, collapsed).
-# dod_block/dod_release: the A1 exit contract — block is JSON on stdout +
-# exit 0, never `exit 2` (see docs/design-v2.md §6.2 amendment).
+# dod_block/dod_release: block is JSON on stdout + exit 0, never `exit 2` —
+# exit 2 renders in the transcript as a hook *error*, which is wrong for a
+# deliberate gate decision; harness errors keep exit 1 so the two stay
+# visibly distinct.
 # dod_log: never writes stdout — hook stdout is reserved for dod_block's JSON.
 
 IO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
