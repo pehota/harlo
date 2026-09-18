@@ -203,7 +203,13 @@ Ordered by what most reduces risk:
    before branch 6 runs again (found by review, fixed same session). Tracked
    by the worktree's own presence/sha on disk, not a `state.json` field (see
    design-v2.md §6.5).
-6. Cache on `(diff_hash, cmd)`.
+6. ~~Cache on `(diff_hash, cmd)`.~~ **Done** — `state_cache_get`/
+   `state_cache_set` (`dod/lib/state.sh`), keyed on a hash of the command so
+   `:` in a command can't collide with the diff_hash delimiter, capped at 200
+   entries. `/dod:verify` step 4 checks the cache before running a `check`
+   requirement's command and records the verdict after a miss. No explicit
+   invalidation: a changed diff already changes `diff_hash`, which misses
+   the cache for free (§7.3 of the design doc).
 7. `session.sh` — preflight, cancel-on-clear, error banner.
 8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`.
 

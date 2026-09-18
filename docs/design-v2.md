@@ -521,10 +521,9 @@ dropped. The threshold is hardcoded in v1; see §9.
 ### 6.5 `state.json`
 
 Owned by `lib/state.sh`. Phase 1 fields are only `latched`, `round`,
-`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache`/
-`errors_unacknowledged` below land in Phase 2 (`track.sh`, `/dod:verify`,
-cache, error banner respectively) and don't exist in a Phase-1 file on disk
-yet.
+`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache` (`track.sh`,
+`/dod:verify`, `state_cache_get`/`state_cache_set`, all shipped) and
+`errors_unacknowledged` (error banner, still to come) land in Phase 2.
 
 **`worktree` — deliberately never a `state.json` field.** The shipped
 baseline worktree (`dod_baseline_worktree`, `lib/gitref.sh`) is tracked by

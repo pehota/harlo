@@ -7,10 +7,11 @@ description: Run the Definition-of-Done checks for the currently open contract a
 
 Runs the contract's checks and judgements against the current changeset and
 writes a `result.json` the gate can trust. Runs `check` requirements
-directly and spawns `dod-reviewer` for `judgement` requirements (Phase 2
-item 2), lazily resolving pre-existing failures against a baseline worktree
-(Phase 2 item 5). The cache and the pass-table's waiver/n/a columns remain
-Phase 2 items still to land (`docs/design-v2.plan.md`).
+directly, skipping ones already resolved for this exact diff (Phase 2 item
+6), and spawns `dod-reviewer` for `judgement` requirements (Phase 2 item 2),
+lazily resolving pre-existing failures against a baseline worktree (Phase 2
+item 5). The pass-table's waiver/n/a columns remain a Phase 2 item still to
+land (`docs/design-v2.plan.md`).
 
 **Run this yourself, without being asked.** The moment you believe a task
 covered by an open contract is done, run `/dod:verify` in that same turn
@@ -49,10 +50,18 @@ intended trigger.
    when the working tree is unchanged). This value becomes the result's
    trust key.
 
-4. **Run each `check` requirement's command.** Capture its exit code.
-   `verdict` is `"pass"` if `exit == expect_exit`, else `"fail"`. Keep the
-   command's output — needed for `/dod:verify`'s own summary and, in Phase 2,
-   for `evidence/`.
+4. **Run each `check` requirement's command.** First look up the cache:
+   ```bash
+   CACHED=$(state_cache_get ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD")
+   ```
+   On a hit, reuse `$CACHED` as `verdict` and skip re-running the command —
+   the key is `(diff_hash, cmd)`, so any change to the diff already changes
+   `DIFF_HASH` and misses the cache automatically; nothing to invalidate by
+   hand. On a miss, run the command, capture its exit code, set `verdict` to
+   `"pass"` if `exit == expect_exit` else `"fail"`, then
+   `state_cache_set ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD" "$verdict"`.
+   Keep the command's output on a miss — needed for `/dod:verify`'s own
+   summary and, in Phase 2, for `evidence/`.
 
    **On a failing check only** (D18 — lazy, never eager for passing checks),
    resolve whether the failure is pre-existing or something this changeset

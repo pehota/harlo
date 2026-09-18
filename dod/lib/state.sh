@@ -7,9 +7,9 @@
 # (only it) mutates.
 #
 # Phase 1 fields: latched, round, escalation, last_failed_diff_hash.
-# Phase 2 adds edits[] (track.sh) and state ("idle"|"verifying", this file)
-# additively — cache{}/worktree/errors_unacknowledged still land with their
-# own consumers.
+# Phase 2 adds edits[] (track.sh), state ("idle"|"verifying", this file) and
+# cache{} (this file, Phase 2 item 6) additively — worktree/
+# errors_unacknowledged still land with their own consumers.
 #
 # `state` is WORDING-ONLY: gate.sh reads it to pick which block message to
 # print, never to change the block/release decision itself (that stays
@@ -52,7 +52,8 @@ state__write_body() {
     escalation: "none",
     last_failed_diff_hash: null,
     edits: [],
-    state: "idle"
+    state: "idle",
+    cache: {}
   }' > "$path" 2>/dev/null
 }
 # state_write <path> — (re)writes defaults. Used both to initialise and,
@@ -69,6 +70,7 @@ state_read() {
   STATE_LAST_FAILED_DIFF_HASH=""
   STATE_EDITS="[]"
   STATE_STATE="idle"
+  STATE_CACHE="{}"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -82,6 +84,8 @@ state_read() {
   [ -n "$STATE_EDITS" ] || STATE_EDITS="[]"
   STATE_STATE=$(jq -r '.state // "idle"' "$path" 2>/dev/null)
   [ -n "$STATE_STATE" ] || STATE_STATE="idle"
+  STATE_CACHE=$(jq -c '.cache // {}' "$path" 2>/dev/null)
+  [ -n "$STATE_CACHE" ] || STATE_CACHE="{}"
   return 0
 }
 
@@ -152,4 +156,51 @@ state_has_edit_for_prompt() {
   dod__has_jq || return 1
   jq -e --arg p "$prompt_id" '(.edits // []) | any(.[]; .prompt_id == $p)' \
     "$path" >/dev/null 2>&1
+}
+
+# state_cache_key <diff_hash> <cmd> — the cache map key, "<diff_hash>:<cmd_hash>".
+# cmd is hashed (not stored raw) so a command containing ':' or other odd
+# characters can't collide with the diff_hash delimiter; sha1 chosen only
+# because it's already on every machine this runs on (git needs it), not for
+# any cryptographic property.
+state_cache_key() {
+  local diff_hash="$1" cmd="$2" cmd_hash
+  cmd_hash=$(printf '%s' "$cmd" | sha1sum 2>/dev/null | cut -d' ' -f1)
+  [ -n "$cmd_hash" ] || cmd_hash=$(printf '%s' "$cmd" | cksum 2>/dev/null | cut -d' ' -f1)
+  printf '%s:%s' "$diff_hash" "$cmd_hash"
+}
+
+# state_cache_get <path> <diff_hash> <cmd> — prints the cached verdict
+# ("pass"/"fail") for this (diff_hash, cmd) pair, or nothing + return 1 on a
+# miss. Read-only: no lock needed. Any change to the diff changes diff_hash,
+# so the whole cache is invalidated for free — no explicit eviction on edit.
+state_cache_get() {
+  local path="$1" diff_hash="$2" cmd="$3" key verdict
+  [ -f "$path" ] || return 1
+  dod__has_jq || return 1
+  key=$(state_cache_key "$diff_hash" "$cmd")
+  verdict=$(jq -r --arg k "$key" '(.cache // {})[$k] // empty' "$path" 2>/dev/null)
+  [ -n "$verdict" ] || return 1
+  printf '%s' "$verdict"
+}
+
+# state_cache_set <path> <diff_hash> <cmd> <verdict> — records a check's
+# verdict. Caps the map at 200 entries (oldest-inserted evicted first,
+# jq object key order is insertion order) for the same reason edits[] is
+# capped: only lookups are read back, never history, so unbounded growth
+# would just slow every gate.sh/verify read for no behaviour change.
+state__cache_set_body() {
+  local path="$1" key="$2" verdict="$3" tmp
+  [ -f "$path" ] || state__write_body "$path"
+  dod__has_jq || return 1
+  tmp="${path}.tmp.$$"
+  jq --arg k "$key" --arg v "$verdict" \
+    '.cache = (((.cache // {}) + {($k): $v})
+                | to_entries | .[-200:] | from_entries)' \
+    "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+}
+state_cache_set() {
+  local path="$1" diff_hash="$2" cmd="$3" verdict="$4" key
+  key=$(state_cache_key "$diff_hash" "$cmd")
+  state__locked "$path" state__cache_set_body "$path" "$key" "$verdict"
 }

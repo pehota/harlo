@@ -126,6 +126,40 @@ else
   echo "  SKIP: flock not available, concurrency test skipped"
 fi
 
+# --- cache: get/set + miss/hit --------------------------------------------
+state_write "$SFILE"
+if state_cache_get "$SFILE" "d1" "npm test" >/dev/null 2>&1; then
+  bad "state_cache_get misses on empty cache" "hit"
+else
+  ok "state_cache_get misses on empty cache"
+fi
+
+state_cache_set "$SFILE" "d1" "npm test" "pass"
+GOT=$(state_cache_get "$SFILE" "d1" "npm test")
+eq "state_cache_get hits after state_cache_set" "pass" "$GOT"
+
+if state_cache_get "$SFILE" "d2" "npm test" >/dev/null 2>&1; then
+  bad "state_cache_get misses on a different diff_hash" "hit"
+else
+  ok "state_cache_get misses on a different diff_hash"
+fi
+
+if state_cache_get "$SFILE" "d1" "npm run lint" >/dev/null 2>&1; then
+  bad "state_cache_get misses on a different command" "hit"
+else
+  ok "state_cache_get misses on a different command"
+fi
+
+state_cache_set "$SFILE" "d1" "npm test" "fail"
+GOT=$(state_cache_get "$SFILE" "d1" "npm test")
+eq "state_cache_set overwrites an existing entry" "fail" "$GOT"
+
+# --- cache: key hashing avoids ':' collisions --------------------------------
+state_write "$SFILE"
+state_cache_set "$SFILE" "abc" "echo hi:there" "pass"
+GOT=$(state_cache_get "$SFILE" "abc" "echo hi:there")
+eq "state_cache_get round-trips a command containing ':'" "pass" "$GOT"
+
 echo
 echo "state.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
