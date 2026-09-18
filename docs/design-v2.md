@@ -486,9 +486,8 @@ Owned by `lib/contract.sh`.
 - every requirement is `check` **or** `judgement`, never neither;
 - every `check` carries `cmd` and `expect_exit`;
 - an `e2e` entry **always exists**, either `applicable:true` with a `cmd`, or
-  `applicable:false` **with a reason**. Never absent. (Phase 1: not yet
-  enforced — `contract_validate` currently checks only the first two;
-  `e2e` presence lands with the reviewer in Phase 2.)
+  `applicable:false` **with a reason**. Never absent. Enforced by
+  `contract__validate_e2e` (`dod/lib/contract.sh`), landed in Phase 2 item 8.
 
 **Cross-artefact side effect:** every `contract_write` call also resets the
 sibling `state.json` to defaults (via `state_write`) — a fresh `/dod:define`

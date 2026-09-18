@@ -267,8 +267,20 @@ Ordered by what most reduces risk:
      / decision-ID references out of both `SKILL.md` files while touching
      them — build-history bookkeeping has no business being read by the
      agent as runtime instruction.
-   - e2e requirement (always-present invariant), `/dod:cancel`, amend/
-     `--new` remain undone.
+   - ~~e2e requirement (always-present invariant).~~ **Done** —
+     `contract__validate_e2e` (`dod/lib/contract.sh`) enforces exactly one
+     `id:"e2e"` requirement, either `applicable:true` with a `cmd`, or
+     `applicable:false` with a non-empty `reason`; the base check-shape rule
+     in `contract__validate_requirements` exempts `id:"e2e"` when
+     `applicable:false` (it deliberately carries `cmd:null`/`expect_exit:null`).
+     `/dod:define` step 3.4 decides applicability at definition time (D14,
+     not deferred to the reviewer) and step 4's confirmation table always
+     shows an e2e row. `/dod:verify` step 4 short-circuits an inapplicable
+     e2e straight to `verdict:"n/a"` with the contract's reason, never
+     attempting to run its null `cmd`. Covered by `dod/tests/test-contract.sh`
+     (applicable/inapplicable accepted; missing entry, applicable-with-no-cmd,
+     and inapplicable-with-no/empty-reason all rejected).
+   - `/dod:cancel`, amend/`--new` remain undone.
 
 ---
 
