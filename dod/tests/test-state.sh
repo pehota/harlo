@@ -49,6 +49,11 @@ state_arm_latch "$SFILE"
 state_read "$SFILE"
 eq "state_arm_latch sets latched" "true" "$STATE_LATCHED"
 
+state_disarm_latch "$SFILE"
+state_read "$SFILE"
+eq "state_disarm_latch clears latched" "false" "$STATE_LATCHED"
+
+state_arm_latch "$SFILE"
 state_bump_round "$SFILE"
 state_read "$SFILE"
 eq "state_bump_round increments round" "1" "$STATE_ROUND"

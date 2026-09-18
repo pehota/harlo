@@ -190,6 +190,15 @@ fi
 ROUND_AFTER=$(jq -r '.round' "$REPO/.dod/main/state.json" 2>/dev/null)
 eq "branch8: round incremented" "1" "$ROUND_AFTER"
 
+# --- issue #33: latch consumed by a block must not re-claim a later --------
+# question-only turn. Sequence: /dod:verify claims + fails (block, as above),
+# then a NEW prompt_id with zero edits and no re-claim must release silently
+# instead of falling through branch 5 into branch 7/8 on the stale result.
+LATCH_AFTER=$(jq -r '.latched' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "issue33 setup: gate disarms the latch after consuming it for the block" "false" "$LATCH_AFTER"
+OUT_Q=$(run_gate "$REPO" "p-question-only")
+eq "issue33: question-only turn after a block releases silently (N1)" "" "$OUT_Q"
+
 # --- branch 7 result stale (diff changed after result written) -> block ------
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
@@ -227,6 +236,9 @@ DH=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+# same stop_hook_active=true recursion as OUT1 (same turn) — the latch
+# read by OUT1 was NOT disarmed (stop_hook_active guard), so it's still
+# claimed here without a re-claim call, matching real recursive Stop.
 OUT2=$(run_gate "$REPO" "p1" "true")
 if is_block "$OUT2"; then
   ok "A2: different block category still blocks under stop_hook_active"
@@ -276,6 +288,9 @@ DH2=$(dod_diff_hash "$REPO" "$BASELINE")
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH2" --baseline-sha "$BASELINE" --round 2 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+# real /dod:verify re-arms the latch on every run (step 7) — round 1's block
+# consumed and disarmed it (issue #33 fix), so round 2 must re-claim too.
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
 OUT2=$(run_gate "$REPO" "p2")
 if is_block "$OUT2"; then
   ok "branch9: budget-exhausted round blocks"
@@ -302,6 +317,9 @@ eq "branch9: state.escalation armed" "armed" "$ESCALATION_AFTER"
 dod_baseline_worktree "$REPO" "main" "$BASELINE" >/dev/null
 [ -d "$REPO/.dod/main/baseline-worktree" ] || bad "branch6 setup: baseline worktree should exist before the escalated Stop" "missing"
 
+# escalation is checked at branch 6, downstream of branch 5's CLAIMED gate —
+# real usage reaches this only via another /dod:verify call, which re-arms.
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
 OUT3=$(run_gate "$REPO" "p3")
 eq "branch6: escalation-armed turn releases silently" "" "$OUT3"
 STATUS_AFTER=$(jq -r '.status' "$REPO/.dod/main/contract.json" 2>/dev/null)
@@ -334,6 +352,7 @@ DOD_ROUND_BUDGET=5 run_gate "$REPO" "p1" >/dev/null
 result_write "$REPO/.dod/main/result.json" \
   --diff-hash "$DH" --baseline-sha "$BASELINE" --round 2 \
   --requirements '[{"id":"tests","type":"check","verdict":"fail","cmd":"false","exit":1}]'
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
 OUT_NP=$(DOD_ROUND_BUDGET=5 run_gate "$REPO" "p2")
 if is_block "$OUT_NP"; then
   ok "branch9 (D26): no-progress round blocks even though round < budget"

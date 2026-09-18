@@ -298,7 +298,8 @@ flowchart TB
 ```
 
 **Gate writes only:** `state.round`, `state.last_failed_diff_hash`,
-`contract.status`. Nothing else. It is otherwise read-only.
+`state.latched` (disarm-only, branch 8 — issue #33), `contract.status`.
+Nothing else. It is otherwise read-only.
 `state.escalation` is written only once L6/L9's Phase-2 escalation branches
 exist — Phase 1 never sets it.
 

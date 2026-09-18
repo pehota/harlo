@@ -102,6 +102,22 @@ state__mutate() { state__locked "$1" state__mutate_body "$1" "$2"; }
 
 state_arm_latch() { state__mutate "$1" '.latched = true'; }
 
+# state_disarm_latch <path> — clears latched back to false. Sole caller is
+# gate.sh's branch 8, right before it re-blocks on failing findings with the
+# contract still "open": that round's claim has been fully judged, so the
+# latch must not survive into the NEXT Stop and wrongly claim a later,
+# unrelated question-only turn (issue #33 — a contract that failed
+# verification once stayed "claimed" forever, since nothing else ever
+# cleared the latch outside a contract amend, re-blocking on the stale
+# result instead of releasing per N1). Not called at branch 5 itself or at
+# branch 9/10 — branch 9/10 flip contract.status away from "open", so
+# branch 3 shields every later turn regardless of the latch, and branch 5
+# must not disarm mid a stop_hook_active recursion (branch 1/A2's loop
+# guard needs the latch to keep reading as claimed across those
+# re-invocations of the SAME Stop). Edits still re-arm CLAIMED for their own
+# prompt_id via state_has_edit_for_prompt, independently of the latch.
+state_disarm_latch() { state__mutate "$1" '.latched = false'; }
+
 state_bump_round() { state__mutate "$1" '.round = ((.round // 0) + 1)'; }
 
 # state_set_state <path> <"idle"|"verifying"> — wording-only signal for

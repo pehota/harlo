@@ -265,6 +265,16 @@ if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
     gate__block "escalate" "${ESCALATE_HEADLINE} ${ESCALATE_REASON}. Report the unresolved findings to the user, then stop. Do not attempt another fix."
   fi
 
+  # Disarm the latch here: this round's claim has been fully judged (failed)
+  # and the contract stays open for another round, unlike branch 9/10 where
+  # contract.status leaves "open" and branch 3 shields every later turn
+  # regardless of the latch. Without this, the latch (armed once by
+  # /dod:verify and otherwise never cleared) stays true forever, so the
+  # NEXT Stop — even a question-only turn with zero edits — reads
+  # CLAIMED=true at branch 5, skips it, and re-hits this same stale result
+  # (issue #33 / N1 violation). A real re-run of /dod:verify re-arms the
+  # latch itself (its step 7), so this never under-blocks a genuine retry.
+  state_disarm_latch "$STATE_FILE"
   gate__block "findings" "verification result for this changeset has ${RESULT_BLOCKING_FAIL} failing requirement(s) — fix them, run /dod:verify, then stop again."
 fi
 
