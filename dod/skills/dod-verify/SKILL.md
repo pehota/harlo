@@ -13,11 +13,15 @@ lazily resolving pre-existing failures against a baseline worktree (Phase 2
 item 5). The pass-table's waiver/n/a columns remain a Phase 2 item still to
 land (`docs/design-v2.plan.md`).
 
-**Run this yourself, without being asked.** The moment you believe a task
-covered by an open contract is done, run `/dod:verify` in that same turn
-before you stop — never tell the user to run it and never wait for the gate
-to block first. A block is the fallback for when this was skipped, not the
-intended trigger.
+**Run this yourself, without being asked — and without asking.** The moment
+you believe a task covered by an open contract is done, run `/dod:verify` in
+that same turn before you stop. Do not tell the user to run it, do not wait
+for the gate to block first, and do not ask the user whether you should run
+it — not even for a trivial diff (a comment, a rename, a one-line change).
+There is no diff small enough to justify checking in first: asking is the
+same skipped-self-invoke failure mode D28 exists to prevent, just phrased as
+a question instead of silence. A block is the fallback for when this was
+skipped, not the intended trigger, and neither is a permission check.
 
 ## Steps
 
