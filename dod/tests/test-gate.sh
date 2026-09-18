@@ -1,7 +1,6 @@
 #!/bin/bash
 #
-# Tests for dod/hooks/gate.sh — one case per branch: 0,1,2,3,5,6,7,8,9,10.
-# Branch 4 (expiry) remains Phase 2 (design-v2.plan.md item 5).
+# Tests for dod/hooks/gate.sh — one case per branch: 0,1,2,3,4,5,6,7,8,9,10.
 #
 # Idiom (ported from v1's dod-gate.sh suite): assert block via parsed JSON
 # (`jq -e '.decision == "block"'`), assert release via EMPTY stdout.
@@ -40,6 +39,32 @@ open_contract() {
 REPO=$(dod__test_make_repo)
 OUT=$(run_gate "$REPO")
 eq "branch2: no contract releases silently" "" "$OUT"
+
+# --- branch 4: baseline SHA not an ancestor of HEAD -> expire, release -------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+# Rewrite history so the recorded baseline sha drops off HEAD's ancestry:
+# amend the root commit into a brand new one, orphaning the original.
+git -C "$REPO" commit -q --amend -m "rewritten root"
+OUT=$(run_gate "$REPO")
+eq "branch4: expired baseline releases silently" "" "$OUT"
+contract_read "$REPO/.dod/main/contract.json"
+eq "branch4: contract status becomes expired" "expired" "$CONTRACT_STATUS"
+
+# --- branch 4: a later Stop on an already-expired contract stays released ----
+OUT=$(run_gate "$REPO")
+eq "branch4: subsequent Stop on expired contract still releases (via branch 3)" "" "$OUT"
+
+# --- branch 4: baseline still an ancestor (normal case) -> does not expire ---
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+echo "more" >> "$REPO/root.txt"
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m "a later, ancestor-preserving commit"
+OUT=$(run_gate "$REPO")
+eq "branch4: baseline still ancestor, no claim/edits -> releases via branch5, not expiry" "" "$OUT"
+contract_read "$REPO/.dod/main/contract.json"
+eq "branch4: contract status stays open when baseline is still an ancestor" "open" "$CONTRACT_STATUS"
 
 # --- branch 5: contract open, no claim, no edits -> release, silent ----------
 REPO=$(dod__test_make_repo)

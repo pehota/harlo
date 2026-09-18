@@ -190,10 +190,19 @@ Ordered by what most reduces risk:
    already uses for `/dod:verify`, not a hard lock on `Edit`/`Write`.
    Numbering below is unchanged so history stays legible; treat this slot as
    permanently skipped, not "next."
-4. ~~Escalation: branches 4, 6, 9 + the two-step release.~~ **Done** — branches
-   6 and 9 shipped (`dod/hooks/gate.sh`, D21 two-step release, D26 budget=2
-   + no-progress brake). Branch 4 (baseline-not-ancestor expiry) is a
-   separate mechanism, still Phase 2 item 5.
+4. ~~Escalation: branches 4, 6, 9 + the two-step release.~~ **Done** —
+   branches 6 and 9 shipped (`dod/hooks/gate.sh`, D21 two-step release, D26
+   budget=2 + no-progress brake). Branch 4 (baseline-not-ancestor expiry)
+   also shipped, live-tested 2026-09-18: `dod_is_ancestor` wired into
+   `gate.sh` right after the status check, sets `contract.status :=
+   "expired"` and tears down the baseline worktree. **Scope note found by
+   the same live test:** branch 4 only fires when history is *rewritten*
+   under the baseline (rebase, force-push, `commit --amend`) — a
+   killed/crashed session with an untouched baseline is a still-ancestor,
+   perfectly valid SHA, so branch 4 never fires for it and the contract
+   stays `open` forever. That is a separate, still-undesigned mechanism (no
+   TTL / no-session-liveness-check exists), deliberately left open —
+   not part of this item's scope.
 5. ~~Baseline worktree + pre-existing-failure resolution.~~ **Done** —
    `dod_baseline_worktree`/`dod_baseline_worktree_remove` (`dod/lib/gitref.sh`,
    D18), invoked lazily from `/dod:verify` step 4 on a failing check only,

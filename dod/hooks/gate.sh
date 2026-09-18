@@ -11,10 +11,11 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Branches shipped: 0,1,2,3,5,6,7,8,9,10. Branch 5 now also detects "edited
+# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10. Branch 5 now also detects "edited
 # this prompt_id without a latch" via state.edits (track.sh, Phase 2 item 1)
-# — not latch-only as in Phase 1. Branch 4 (expiry) remains Phase 2
-# (docs/design-v2.plan.md item 5).
+# — not latch-only as in Phase 1. Branch 4 (expiry) only covers a rebased/
+# force-pushed baseline, not a killed session with untouched history
+# (docs/design-v2.plan.md) — that remains unaddressed.
 #
 # D26: round budget = 2. An identical diff_hash across two failing rounds
 # (no progress) burns the budget immediately, same as reaching round 2 —
@@ -123,6 +124,25 @@ contract_read "$CONTRACT_FILE" || {
 
 # --- branch 3: status != open -> release, silent -----------------------------
 if [ "$CONTRACT_STATUS" != "open" ]; then
+  gate__clear_last_block
+  dod_release
+  exit 0
+fi
+
+# --- branch 4: baseline SHA no longer an ancestor of HEAD -> expire ----------
+# A rebase, force-push, or history rewrite can move HEAD such that the
+# recorded baseline is no longer reachable from it — the diff hash's "vs
+# baseline" comparison (dod_diff_hash) would then be comparing against a
+# commit outside the branch's own history, which is meaningless. Expire
+# rather than silently keep gating: `expired` releases via branch 3 on every
+# later turn, same as `passed`/`cancelled`, and does not resurrect itself.
+# Does NOT address a killed/crashed session with untouched history
+# (docs/design-v2.plan.md) — that baseline is still a perfectly good
+# ancestor, just orphaned by the missing SessionEnd; a separate mechanism,
+# not yet designed, would be needed for that case.
+if ! dod_is_ancestor "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA" "$HEAD_SHA"; then
+  contract_set_status "$CONTRACT_FILE" "expired"
+  dod_baseline_worktree_remove "$PROJECT_DIR" "$TASK_KEY"
   gate__clear_last_block
   dod_release
   exit 0

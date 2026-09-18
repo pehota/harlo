@@ -227,11 +227,11 @@ above), not overlooked.
 ### 5.1 `gate.sh` — the decision tree
 
 > **Phase status** (`docs/design-v2.plan.md`): this diagram is the **full v2
-> end-state**. Shipped: L2, L3, L5, L6, the diff-hash branch, L7, L8, L9
+> end-state**. Shipped: L2, L3, L4, L5, L6, the diff-hash branch, L7, L8, L9
 > (both arms — round++ and the budget/no-progress escalation arm). **Not
-> shipped:** L4 (expiry) and L1 as a standalone top-level branch.
+> shipped:** L1 as a standalone top-level branch (see below).
 > `gate.sh`'s own header comment names the shipped branches as
-> "0,1,2,3,5,6,7,8,9,10" (its own internal numbering, not this diagram's
+> "0,1,2,3,4,5,6,7,8,9,10" (its own internal numbering, not this diagram's
 > L-labels) and says so explicitly. One concrete gap against this diagram:
 > - `stop_hook_active` is **not** an early top-level check (L1). It's
 >   consulted only inside the block-emitting helper (`gate__block`, the A2
@@ -247,7 +247,10 @@ above), not overlooked.
 > takes L6, sets `contract.status := escalated`, and releases silently —
 > it does not block again. `status=escalated` then keeps every later turn
 > released via L3 (status != open), same as `passed`/`cancelled`. L4
-> (baseline-not-ancestor / expiry) still does not exist.
+> (baseline-not-ancestor / expiry) is shipped: it only fires when history is
+> rewritten under the baseline (rebase, force-push, `commit --amend`) —
+> **not** for a killed/crashed session with untouched history
+> (`docs/design-v2.plan.md`), which is a different, still-unaddressed gap.
 
 ```mermaid
 flowchart TB
@@ -257,8 +260,8 @@ flowchart TB
   L2 -->|no| R2["EXIT 0 — no DoD open"]
   L2 -->|yes| L3{"status == open?"}
   L3 -->|no| R3["EXIT 0 — passed/cancelled"]
-  L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?<br/>(Phase 2)"}
-  L4 -->|no| R4["status := expired<br/>EXIT 0 — stale"]
+  L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?"}
+  L4 -->|no| R4["status := expired · teardown worktree<br/>EXIT 0 — stale"]
   L4 -->|yes| L5{"latched OR<br/>edits this prompt_id?"}
   L5 -->|neither| R5["EXIT 0 — question turn"]
   L5 -->|yes| L6{"escalation == armed?<br/>(Phase 2)"}
@@ -276,9 +279,9 @@ flowchart TB
   classDef blk fill:#f8cecc,stroke:#b85450,color:#000
   classDef err fill:#ffe6cc,stroke:#d79b00,color:#000
   classDef p2 fill:#fff2cc,stroke:#d6b656,color:#000
-  class R2,R3,R5,R10 rel
+  class R2,R3,R5,R10,R4 rel
   class B7,B8 blk
-  class L4,R4,L6,R6,L9,B9 p2
+  class L6,R6,L9,B9 p2
   class R_ERR err
 ```
 
@@ -391,10 +394,11 @@ silent + exit 0                                    → release (normal operation
 stderr one line + exit 1                           → release (harness error, noisy)
 ```
 
-**Phase status:** branches 0, 2, 3, 5, 6, 7, 8, 9, 10 are shipped. Branch 1
-is shipped but not as a standalone check — see the A2 note below. **Branch 4
-does not exist in the code yet** (Phase 2 per `docs/design-v2.plan.md`) —
-`status` never becomes `expired`.
+**Phase status:** branches 0, 2, 3, 4, 5, 6, 7, 8, 9, 10 are shipped. Branch 1
+is shipped but not as a standalone check — see the A2 note below. Branch 4
+covers only a rewritten-history baseline (rebase, force-push, amend) — a
+killed/crashed session with untouched history (`docs/design-v2.plan.md`)
+is a different, still-unaddressed gap; `status` does not expire for that case.
 
 | # | Branch | exit | stdout/stderr → agent | state writes | shipped? |
 |---|---|---|---|---|---|
@@ -402,7 +406,7 @@ does not exist in the code yet** (Phase 2 per `docs/design-v2.plan.md`) —
 | 1 | `stop_hook_active` | 0 | — | — | yes, folded into `gate__block`'s A2 brake, not a standalone check |
 | 2 | no contract | 0 | — | — | yes |
 | 3 | status ≠ open | 0 | — | — | yes |
-| 4 | baseline not ancestor | 0 | — | `status=expired` | **no — Phase 2** |
+| 4 | baseline not ancestor | 0 | — | `status=expired`, worktree torn down | yes |
 | 5 | no claim, no edits | 0 | — | — | yes |
 | 6 | `escalation=armed` | 0 | — | `status=escalated` | yes |
 | 7 | result missing/stale | 0 | stdout JSON: `block-no-result.txt` | — | yes |
