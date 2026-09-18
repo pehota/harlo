@@ -8,23 +8,48 @@
 #
 # Invariants enforced by contract_validate, contract rejected otherwise:
 #   - every requirement is `check` or `judgement`, never neither;
-#   - every `check` requirement carries `cmd` and `expect_exit`.
-# (Phase 1 skeleton: only these two; the e2e-always-present invariant and
-# judgement-specific fields land with the reviewer in Phase 2.)
+#   - every `check` requirement carries `cmd` and `expect_exit`;
+#   - an `e2e` requirement always exists: either `applicable:true` with a
+#     `cmd` (a normal check), or `applicable:false` with a non-empty
+#     `reason`. Never absent (design-v2.md §6.3). The base check-shape rule
+#     exempts `id:"e2e"` when `applicable:false`, since it deliberately
+#     carries `cmd:null`/`expect_exit:null` — contract__validate_e2e enforces
+#     its own shape instead.
+# (Phase 1 skeleton: judgement-specific fields land with the reviewer in
+# Phase 2.)
 
 CONTRACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 dod__has_jq() { command -v jq >/dev/null 2>&1; }
 
 # contract__validate_requirements <json_array> — 0 if every element is a
-# valid check or judgement requirement, 1 otherwise.
+# valid check or judgement requirement AND the e2e-always-present invariant
+# holds, 1 otherwise.
 contract__validate_requirements() {
   local reqs="$1"
   dod__has_jq || return 1
   printf '%s' "$reqs" | jq -e '
     all(.[];
-      (.type == "check" and (.cmd != null) and (.expect_exit != null))
+      (.id == "e2e" and .type == "check" and .applicable == false)
+      or (.type == "check" and (.cmd != null) and (.expect_exit != null))
       or (.type == "judgement")
+    )
+  ' >/dev/null 2>&1 || return 1
+  contract__validate_e2e "$reqs"
+}
+
+# contract__validate_e2e <json_array> — an "e2e" requirement must exist,
+# either applicable:true with a cmd (an ordinary check), or applicable:false
+# with a non-empty reason. Never absent, never applicable with no cmd, never
+# inapplicable with no reason.
+contract__validate_e2e() {
+  local reqs="$1"
+  dod__has_jq || return 1
+  printf '%s' "$reqs" | jq -e '
+    (map(select(.id == "e2e")) | length) == 1
+    and (map(select(.id == "e2e"))[0] as $e2e |
+      ($e2e.applicable == true and $e2e.cmd != null)
+      or ($e2e.applicable == false and (($e2e.reason // "") | length) > 0)
     )
   ' >/dev/null 2>&1
 }

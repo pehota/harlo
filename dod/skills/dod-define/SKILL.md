@@ -33,6 +33,18 @@ safety net for when you fail, not the plan.
    detected, ask the user for the test command — do not guess a command that
    might not exist.
 
+3.4. **Decide e2e applicability, right now, with a recorded reason.** Every
+   contract carries an `e2e` requirement — never absent. Decide at definition
+   time (not later, not left to the reviewer): does this task add or change
+   a user-facing flow? If yes, set `applicable:true` and give it a `cmd` (the
+   project's e2e runner, e.g. `npm run e2e`, `playwright test` — detect it
+   the same way as step 3, or ask if none is detectable and the task truly
+   needs one). If no — a pure refactor, an internal tooling change, docs,
+   test-only changes — set `applicable:false` with a short concrete `reason`
+   ("pure refactor, no user-facing change", "internal harness script, no
+   e2e flow exists"). Never leave `e2e` out of the requirements array and
+   never fabricate a reason that doesn't hold up.
+
 3.5. **Extract waivers from the user's own words.** A waiver excuses a
    specific requirement from blocking, on the user's authority alone — it is
    never something the agent decides for itself. Only recognise a waiver
@@ -57,6 +69,7 @@ safety net for when you fail, not the plan.
    | Verification | Expected Result | Why This Verification |
    |---|---|---|
    | <cmd>         | exit 0           | <one clause: detected/task-stated/protocol> |
+   | e2e (<cmd> or N/A) | exit 0 or N/A | <applicable: task-stated reason / inapplicable: your reason from step 3.4> |
    | independent code review | no blocking findings | protocol-required |
    | lint          | WAIVED           | user: prototype spike |
 
@@ -64,10 +77,14 @@ safety net for when you fail, not the plan.
    ```
 
    The review row is **always present** — every contract carries a
-   `judgement` requirement for `dod-reviewer`, not just check commands. A
-   waived requirement (step 3.5) still gets its own row — "Expected Result"
-   reads `WAIVED` and "Why This Verification" carries the user's own reason
-   verbatim, never omitted from the table just because it won't block.
+   `judgement` requirement for `dod-reviewer`, not just check commands. The
+   e2e row is likewise **always present** (step 3.4) — if inapplicable, its
+   "Expected Result" reads `N/A` and "Why This Verification" carries your
+   recorded reason, never silently dropped from the table because it isn't a
+   real command. A waived requirement (step 3.5) still gets its own row —
+   "Expected Result" reads `WAIVED` and "Why This Verification" carries the
+   user's own reason verbatim, never omitted from the table just because it
+   won't block.
 
    One row per requirement. "Why This Verification" is never blank — say
    where the requirement came from (`auto-detected` from step 3,
@@ -116,9 +133,17 @@ safety net for when you fail, not the plan.
      --baseline-sha "$HEAD_SHA" \
      --requirements '[
        {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"},
+       {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>"},
        {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}
      ]' \
      --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
+   ```
+   If e2e is inapplicable (step 3.4), its entry takes this shape instead —
+   `cmd` and `expect_exit` **both `null`**, `applicable:false`, and a
+   non-empty `reason`; never mix an `applicable:true`/`false` field with the
+   other branch's `cmd`/`expect_exit` shape, `contract_write` rejects it:
+   ```
+   {"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why it doesn't apply>"}
    ```
    Omit `--waivers` (or pass `'[]'`) when step 3.5 found none — do not
    fabricate an empty-reason waiver just to fill the flag.

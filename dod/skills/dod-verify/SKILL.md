@@ -53,8 +53,16 @@ check.
    when the working tree is unchanged). This value becomes the result's
    trust key.
 
-4. **Run each `check` requirement's command.** First check whether the
-   contract waives it (`CONTRACT_WAIVERS`, from step 1's `contract_read`):
+4. **Run each `check` requirement's command.** First, the `e2e` requirement
+   specifically: if its `applicable` field is `false`, set `verdict` to
+   `"n/a"` and `reason` to its recorded `reason` from the contract — do
+   **not** attempt to run its `cmd` (it's `null` by construction) and do not
+   consult or populate the cache for it. If `applicable` is `true`, treat it
+   like any other check requirement from here on.
+
+   For every other `check` requirement (and an applicable `e2e`), check
+   whether the contract waives it (`CONTRACT_WAIVERS`, from step 1's
+   `contract_read`):
    if the requirement's `id` appears there, set `verdict` to `"waived"` and
    `reason` to the waiver's own `reason` text — do **not** run the command
    at all, and do not consult or populate the cache for a waived

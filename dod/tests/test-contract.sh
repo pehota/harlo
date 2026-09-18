@@ -19,7 +19,7 @@ contract_write "$CFILE" \
   --task-source "argument" \
   --session-id "sid-1" \
   --baseline-sha "abc123" \
-  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}]'
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"},{"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}]'
 
 if [ -f "$CFILE" ]; then
   ok "contract_write creates the file"
@@ -39,7 +39,7 @@ WFILE="$REPO/.dod/main/waived-contract.json"
 contract_write "$WFILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
   --baseline-sha "abc" \
-  --requirements '[{"id":"lint","type":"check","cmd":"eslint .","expect_exit":0,"source":"auto-detected"}]' \
+  --requirements '[{"id":"lint","type":"check","cmd":"eslint .","expect_exit":0,"source":"auto-detected"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]' \
   --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
 contract_read "$WFILE"
 COUNT=$(printf '%s' "$CONTRACT_WAIVERS" | jq 'length' 2>/dev/null)
@@ -97,7 +97,7 @@ LATCH_SFILE="$LATCH_DIR/state.json"
 contract_write "$LATCH_CFILE" \
   --task-key "latch-test" --task "first pass" --task-source "argument" \
   --session-id "s" --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
+  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]'
 state_arm_latch "$LATCH_SFILE"
 state_read "$LATCH_SFILE"
 eq "latch-test setup: latched after arming" "true" "$STATE_LATCHED"
@@ -106,9 +106,76 @@ eq "latch-test setup: latched after arming" "true" "$STATE_LATCHED"
 contract_write "$LATCH_CFILE" \
   --task-key "latch-test" --task "amended task" --task-source "argument" \
   --session-id "s" --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"}]'
+  --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]'
 state_read "$LATCH_SFILE"
 eq "contract_write resets a stale latch on amend" "false" "$STATE_LATCHED"
+
+# --- e2e-always-present invariant (design-v2.md §6.3) ------------------------
+
+# applicable:true with a cmd is accepted
+E2E_APPLICABLE_FILE="$REPO/.dod/main/e2e-applicable-contract.json"
+if contract_write "$E2E_APPLICABLE_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":"npm run e2e","expect_exit":0,"source":"task","applicable":true,"reason":"adds user-facing flow"}]'; then
+  ok "contract_write accepts e2e applicable:true with a cmd"
+else
+  bad "contract_write accepts e2e applicable:true with a cmd" "rejected"
+fi
+
+# applicable:false with a non-empty reason is accepted
+E2E_INAPPLICABLE_FILE="$REPO/.dod/main/e2e-inapplicable-contract.json"
+if contract_write "$E2E_INAPPLICABLE_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"pure refactor"}]'; then
+  ok "contract_write accepts e2e applicable:false with a reason"
+else
+  bad "contract_write accepts e2e applicable:false with a reason" "rejected"
+fi
+
+# missing e2e entry entirely is rejected
+E2E_MISSING_FILE="$REPO/.dod/main/e2e-missing-contract.json"
+if contract_write "$E2E_MISSING_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"}]'; then
+  bad "contract_write rejects a requirements array with no e2e entry" "accepted"
+else
+  ok "contract_write rejects a requirements array with no e2e entry"
+fi
+
+# applicable:true but no cmd is rejected
+E2E_NOCMD_FILE="$REPO/.dod/main/e2e-nocmd-contract.json"
+if contract_write "$E2E_NOCMD_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true}]'; then
+  bad "contract_write rejects e2e applicable:true with no cmd" "accepted"
+else
+  ok "contract_write rejects e2e applicable:true with no cmd"
+fi
+
+# applicable:false but empty/missing reason is rejected
+E2E_NOREASON_FILE="$REPO/.dod/main/e2e-noreason-contract.json"
+if contract_write "$E2E_NOREASON_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":""}]'; then
+  bad "contract_write rejects e2e applicable:false with empty reason" "accepted"
+else
+  ok "contract_write rejects e2e applicable:false with empty reason"
+fi
+
+E2E_NOREASONFIELD_FILE="$REPO/.dod/main/e2e-noreasonfield-contract.json"
+if contract_write "$E2E_NOREASONFIELD_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false}]'; then
+  bad "contract_write rejects e2e applicable:false with missing reason field" "accepted"
+else
+  ok "contract_write rejects e2e applicable:false with missing reason field"
+fi
 
 echo
 echo "contract.sh: $PASS passed, $FAIL failed"
