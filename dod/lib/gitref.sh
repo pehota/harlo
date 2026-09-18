@@ -77,11 +77,33 @@ dod_diff_hash() {
 }
 
 # dod_is_ancestor <repo_dir> <ancestor_sha> <descendant_sha> — 0 if ancestor
-# is reachable from descendant, 1 otherwise (including unknown SHAs).
+# is reachable from descendant, 1 otherwise (including unknown SHAs, and any
+# other git-call failure — see dod_is_ancestor_status if the caller needs to
+# tell those apart).
 dod_is_ancestor() {
   local repo="$1" anc="$2" desc="$3"
   [ -n "$anc" ] && [ -n "$desc" ] || return 1
   git -C "$repo" merge-base --is-ancestor "$anc" "$desc" 2>/dev/null
+}
+
+# dod_is_ancestor_status <repo_dir> <ancestor_sha> <descendant_sha> — prints
+# git's raw `merge-base --is-ancestor` exit code (0, 1, or, on failure —
+# unresolvable SHA, a shallow clone missing the needed history, a transient
+# git I/O error — typically 128) and returns it too. Callers that must not
+# conflate "confirmed not an ancestor" (exactly 1) with "the git call itself
+# failed" (anything else non-zero) use this instead of dod_is_ancestor's
+# collapsed boolean — see gate.sh branch 4, which must fail-open on the
+# latter rather than silently expiring a perfectly good contract.
+dod_is_ancestor_status() {
+  local repo="$1" anc="$2" desc="$3"
+  if [ -z "$anc" ] || [ -z "$desc" ]; then
+    printf '1'
+    return 1
+  fi
+  git -C "$repo" merge-base --is-ancestor "$anc" "$desc" 2>/dev/null
+  local code=$?
+  printf '%s' "$code"
+  return "$code"
 }
 
 # dod_baseline_worktree <repo_dir> <task_key> <baseline_sha> — ensures a

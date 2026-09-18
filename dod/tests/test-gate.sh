@@ -66,6 +66,25 @@ eq "branch4: baseline still ancestor, no claim/edits -> releases via branch5, no
 contract_read "$REPO/.dod/main/contract.json"
 eq "branch4: contract status stays open when baseline is still an ancestor" "open" "$CONTRACT_STATUS"
 
+# --- branch 4: git-call failure (not a confirmed non-ancestor) -> fail-open --
+# A malformed baseline sha makes `git merge-base --is-ancestor` error out
+# (exit 128), not cleanly answer "no" (exit 1). This must NOT be treated as
+# "history rewritten" — it must route through branch 0's fail-open, leaving
+# contract.json untouched.
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+jq '.baseline.sha = "not-a-valid-sha-at-all!!"' "$REPO/.dod/main/contract.json" > "$REPO/.dod/main/contract.json.tmp"
+mv "$REPO/.dod/main/contract.json.tmp" "$REPO/.dod/main/contract.json"
+ERR=$(run_gate "$REPO" 2>&1 >/dev/null)
+RC=$(run_gate "$REPO" >/dev/null 2>&1; echo $?)
+case "$ERR" in
+  *"dod gate error"*) ok "branch4: git-call failure logs 'dod gate error' on stderr" ;;
+  *) bad "branch4: git-call failure logs 'dod gate error' on stderr" "$ERR" ;;
+esac
+eq "branch4: git-call failure exits 1" "1" "$RC"
+contract_read "$REPO/.dod/main/contract.json"
+eq "branch4: git-call failure leaves contract status unchanged (open)" "open" "$CONTRACT_STATUS"
+
 # --- branch 5: contract open, no claim, no edits -> release, silent ----------
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"

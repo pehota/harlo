@@ -251,6 +251,17 @@ above), not overlooked.
 > rewritten under the baseline (rebase, force-push, `commit --amend`) —
 > **not** for a killed/crashed session with untouched history
 > (`docs/design-v2.plan.md`), which is a different, still-unaddressed gap.
+> L4 also distinguishes a *confirmed* non-ancestor from a failed git call:
+> `git merge-base --is-ancestor` exits 1 only when it definitively answers
+> "no" — any other non-zero exit (typically 128: unresolvable SHA, a shallow
+> clone missing the needed history, a transient git I/O error) means the
+> check itself failed, and only that confirmed-1 case expires the contract.
+> A failed check instead fail-opens through the same machinery as E0
+> (`dod_fail_open` + `EXIT 1`), leaving `contract.json` untouched — a harness
+> failure must never be recorded as a definitive terminal status (§7.4).
+> `dod/lib/gitref.sh`'s `dod_is_ancestor_status` exposes the raw exit code
+> for this; `dod_is_ancestor` itself keeps its collapsed boolean contract for
+> callers that don't need the distinction.
 
 ```mermaid
 flowchart TB
@@ -261,7 +272,8 @@ flowchart TB
   L2 -->|yes| L3{"status == open?"}
   L3 -->|no| R3["EXIT 0 — passed/cancelled"]
   L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?"}
-  L4 -->|no| R4["status := expired · teardown worktree<br/>EXIT 0 — stale"]
+  L4 -->|confirmed no, exit 1| R4["status := expired · teardown worktree<br/>EXIT 0 — stale"]
+  L4 -->|git call failed, exit != 0/1| R4E["append errors.log<br/>EXIT 1 (noisy release)<br/>contract untouched"]
   L4 -->|yes| L5{"latched OR<br/>edits this prompt_id?"}
   L5 -->|neither| R5["EXIT 0 — question turn"]
   L5 -->|yes| L6{"escalation == armed?<br/>(Phase 2)"}

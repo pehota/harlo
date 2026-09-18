@@ -203,6 +203,21 @@ Ordered by what most reduces risk:
    stays `open` forever. That is a separate, still-undesigned mechanism (no
    TTL / no-session-liveness-check exists), deliberately left open —
    not part of this item's scope.
+   **Hardened 2026-09-18** (found by `completion-harness:dod-reviewer` on
+   commit ea6bcaa): `dod_is_ancestor`'s boolean contract collapsed `git
+   merge-base --is-ancestor`'s exit 1 ("confirmed not an ancestor") and any
+   other non-zero exit (typically 128 — a bad/unresolvable SHA, a shallow
+   clone missing the needed history, a transient git I/O error) into the
+   same "non-zero" bucket, so `gate.sh` branch 4 silently expired a
+   perfectly good open contract on a harness failure with no error logged
+   (violating §7.4's fail-open discipline). Fixed by adding
+   `dod_is_ancestor_status` (`dod/lib/gitref.sh`), which exposes the raw
+   exit code; `gate.sh` now branches three ways — exit 1 expires, exit 0
+   proceeds, anything else routes through `dod_fail_open` + `exit 1`,
+   leaving `contract.json` untouched. Covered by
+   `dod/tests/test-gitref.sh` (all three exit codes) and
+   `dod/tests/test-gate.sh` (a malformed-SHA case proving the contract
+   stays `open` and stderr carries `dod gate error`).
 5. ~~Baseline worktree + pre-existing-failure resolution.~~ **Done** —
    `dod_baseline_worktree`/`dod_baseline_worktree_remove` (`dod/lib/gitref.sh`,
    D18), invoked lazily from `/dod:verify` step 4 on a failing check only,

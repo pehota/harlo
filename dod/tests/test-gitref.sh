@@ -129,6 +129,25 @@ else
   ok "is_ancestor false for unknown sha"
 fi
 
+# --- dod_is_ancestor_status: distinguishes "not an ancestor" (1) from -------
+# "the git call failed" (non-0, non-1, typically 128 for a malformed SHA)
+dod_is_ancestor_status "$REPO5" "$ROOT_SHA" "$HEAD_SHA" >/dev/null
+eq "is_ancestor_status exit 0 for root -> head" "0" "$?"
+
+dod_is_ancestor_status "$REPO5" "$HEAD_SHA" "$ROOT_SHA" >/dev/null
+eq "is_ancestor_status exit 1 for confirmed non-ancestor" "1" "$?"
+
+# A malformed SHA (not even valid git object syntax) makes merge-base error
+# out rather than cleanly answer "no" — verified here to actually produce a
+# non-1 exit on this system before gate.sh relies on the distinction.
+dod_is_ancestor_status "$REPO5" "not-a-valid-sha-at-all!!" "$HEAD_SHA" >/dev/null
+STATUS_BAD_SHA=$?
+if [ "$STATUS_BAD_SHA" -ne 0 ] && [ "$STATUS_BAD_SHA" -ne 1 ]; then
+  ok "is_ancestor_status non-1/0 exit for malformed sha (git call failure)"
+else
+  bad "is_ancestor_status non-1/0 exit for malformed sha (git call failure)" "$STATUS_BAD_SHA"
+fi
+
 # --- dod_baseline_worktree ---------------------------------------------------
 REPO6=$(dod__test_make_repo)
 BASELINE6=$(git -C "$REPO6" rev-parse HEAD)

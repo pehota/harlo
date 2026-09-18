@@ -140,12 +140,25 @@ fi
 # (docs/design-v2.plan.md) — that baseline is still a perfectly good
 # ancestor, just orphaned by the missing SessionEnd; a separate mechanism,
 # not yet designed, would be needed for that case.
-if ! dod_is_ancestor "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA" "$HEAD_SHA"; then
+#
+# `git merge-base --is-ancestor` has three outcomes, not two: exit 0 (is an
+# ancestor), exit 1 (confirmed NOT an ancestor — a real answer), and anything
+# else, typically 128 (the call itself failed: unresolvable SHA, a shallow
+# clone missing the needed history, a transient git I/O error). Only exit 1
+# means "expire" — any other failure must fail-open (branch 0's machinery)
+# rather than silently flipping a perfectly good open contract to a terminal
+# status with no error logged anywhere.
+dod_is_ancestor_status "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA" "$HEAD_SHA" >/dev/null
+ANCESTOR_STATUS=$?
+if [ "$ANCESTOR_STATUS" -eq 1 ]; then
   contract_set_status "$CONTRACT_FILE" "expired"
   dod_baseline_worktree_remove "$PROJECT_DIR" "$TASK_KEY"
   gate__clear_last_block
   dod_release
   exit 0
+elif [ "$ANCESTOR_STATUS" -ne 0 ]; then
+  dod_fail_open "$ERRLOG" "dod_is_ancestor_status failed (exit $ANCESTOR_STATUS) for baseline $CONTRACT_BASELINE_SHA vs HEAD $HEAD_SHA"
+  exit 1
 fi
 
 # --- branch 5: claimed OR edited this prompt (D8) -----------------------------
