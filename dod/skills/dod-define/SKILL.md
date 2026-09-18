@@ -45,6 +45,52 @@ safety net for when you fail, not the plan.
    e2e flow exists"). Never leave `e2e` out of the requirements array and
    never fabricate a reason that doesn't hold up.
 
+3.4.5. **Think through what "done" actually means for this task before
+   drafting requirements — this is reasoning, not a checklist.** Before
+   writing the requirements array, work through it in your own words: what
+   would a careful engineer check before calling this task complete? Is
+   there a relevant doc, ADR, or design note that defines correct behavior
+   here? Does similar code already exist elsewhere in the repo whose
+   pattern this should follow or whose test approach this should mirror?
+   Once deployed/running, what would "working" look like — is there a
+   runbook, deploy doc, or monitoring reference worth checking, even if the
+   answer turns out to be "not applicable"? What edge cases would get
+   missed by "it compiles and the existing tests pass"?
+
+   This is deliberately open-ended — do not treat it as a fixed checklist
+   of sources to grep every time; the point is judgement about *this* task,
+   not mechanical coverage. The mechanical checks (step 3's test command,
+   lint, build) stay auto-detected and deterministic regardless — this step
+   only shapes the `judgement`/`scenario`-type requirements and their
+   `rationale`, never the mechanical battery.
+
+   Record a short `rationale` on every requirement you add or derive here
+   (see step 6) — one clause naming what you found or considered, even
+   "considered, not applicable: <why>". The confirmation table (step 4)
+   surfaces this so the user can judge whether the reasoning was
+   substantive, not just present.
+
+3.4.6. **Decide scenario-test applicability, independently of e2e.** Every
+   contract carries a `scenario` requirement — never absent, same as `e2e`,
+   with the identical shape (`applicable:true`+`cmd`, or
+   `applicable:false`+`reason`). This asks a different question than e2e:
+   does this task change *behavior* observable to a caller or user (not
+   just "is there an e2e runner in this repo")? If yes, set
+   `applicable:true` with `cmd` naming the test file/command the
+   implementing agent must write and run — a genuine functional/scenario
+   test that exercises the changed behavior the way a human engineer would
+   manually verify it, not a mocked-out unit test. Its `rationale` (step
+   3.4.5) should name the specific behavior it exercises, since that's what
+   `dod-reviewer` (the `review` judgement requirement, which already reads
+   every requirement's `rationale`) checks the test against — whether it's
+   a real scenario test or a token one is a code-review judgement call, not
+   a second judgement requirement; don't add one. If the task is a pure
+   refactor, internal tooling with no behavior change, docs-only, or
+   genuinely has no observable behavior to exercise, set `applicable:false`
+   with a concrete `reason`. A task can be `e2e: applicable:false` and
+   `scenario: applicable:true` at the same time (e.g. a library API change
+   with no e2e stack to run it in) — decide each on its own terms.
+
 3.5. **Extract waivers from the user's own words.** A waiver excuses a
    specific requirement from blocking, on the user's authority alone — it is
    never something the agent decides for itself. Only recognise a waiver
@@ -70,6 +116,7 @@ safety net for when you fail, not the plan.
    |---|---|---|
    | <cmd>         | exit 0           | <one clause: detected/task-stated/protocol> |
    | e2e (<cmd> or N/A) | exit 0 or N/A | <applicable: task-stated reason / inapplicable: your reason from step 3.4> |
+   | scenario test (<cmd> or N/A) | exit 0 or N/A | <applicable: what behavior it exercises / inapplicable: your reason from step 3.4.6> |
    | independent code review | no blocking findings | protocol-required |
    | lint          | WAIVED           | user: prototype spike |
 
@@ -81,10 +128,17 @@ safety net for when you fail, not the plan.
    e2e row is likewise **always present** (step 3.4) — if inapplicable, its
    "Expected Result" reads `N/A` and "Why This Verification" carries your
    recorded reason, never silently dropped from the table because it isn't a
-   real command. A waived requirement (step 3.5) still gets its own row —
-   "Expected Result" reads `WAIVED` and "Why This Verification" carries the
-   user's own reason verbatim, never omitted from the table just because it
-   won't block.
+   real command. The scenario-test row is **always present** too (step
+   3.4.6), same N/A treatment when inapplicable — it is a distinct decision
+   from e2e, not a duplicate of it. A waived requirement (step 3.5) still
+   gets its own row — "Expected Result" reads `WAIVED` and "Why This
+   Verification" carries the user's own reason verbatim, never omitted from
+   the table just because it won't block.
+
+   "Why This Verification" doubles as the row's `rationale` (step 3.4.5) —
+   for `judgement`/`scenario` rows this should reflect actual reasoning
+   about the task, not a generic label; a thin or boilerplate reason here is
+   the signal to push back and adjust, not just accept.
 
    One row per requirement. "Why This Verification" is never blank — say
    where the requirement came from (`auto-detected` from step 3,
@@ -134,6 +188,7 @@ safety net for when you fail, not the plan.
      --requirements '[
        {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"},
        {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>"},
+       {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","rationale":"<what you reasoned through in step 3.4.5>"},
        {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}
      ]' \
      --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
@@ -145,6 +200,19 @@ safety net for when you fail, not the plan.
    ```
    {"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why it doesn't apply>"}
    ```
+   `scenario` follows the identical shape rules as `e2e` — `applicable:true`
+   needs `cmd`/`expect_exit`, `applicable:false` needs `cmd:null`/
+   `expect_exit:null` plus a non-empty `reason`. `contract__validate_scenario`
+   enforces this the same way `contract__validate_e2e` does for `e2e` —
+   `contract_write` rejects a contract missing `scenario` or with the wrong
+   shape, same as it already does for `e2e`.
+
+   `rationale` (step 3.4.5) is optional but expected on every
+   `judgement`/`scenario` requirement, and welcome on `check` requirements
+   too when the reasoning isn't obvious from `source` alone — it is
+   advisory only, not schema-validated, so a missing one won't fail
+   `contract_write`, but an empty one defeats the point of step 3.4.5.
+
    Omit `--waivers` (or pass `'[]'`) when step 3.5 found none — do not
    fabricate an empty-reason waiver just to fill the flag.
 

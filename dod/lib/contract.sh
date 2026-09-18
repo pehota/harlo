@@ -15,6 +15,16 @@
 #     when `applicable:false`, since it deliberately carries
 #     `cmd:null`/`expect_exit:null` — contract__validate_e2e enforces its own
 #     shape instead.
+#   - a `scenario` requirement always exists, same rule and same exemption,
+#     enforced by contract__validate_scenario. Distinct decision from e2e
+#     (behavior-change signal, not runner-availability signal) — see
+#     dod-define/SKILL.md step 3.4.6.
+#
+# `rationale` (optional, string, any requirement) is advisory only — not
+# validated or enforced here. It carries the "why this requirement" the
+# agent reasoned through at define-time, so the human confirming the table
+# and any later reader can judge whether that reasoning was substantive.
+# Its absence never fails validation; do not add a presence check for it.
 
 CONTRACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -28,12 +38,13 @@ contract__validate_requirements() {
   dod__has_jq || return 1
   printf '%s' "$reqs" | jq -e '
     all(.[];
-      (.id == "e2e" and .type == "check" and .applicable == false)
+      ((.id == "e2e" or .id == "scenario") and .type == "check" and .applicable == false)
       or (.type == "check" and (.cmd != null) and (.expect_exit != null))
       or (.type == "judgement")
     )
   ' >/dev/null 2>&1 || return 1
-  contract__validate_e2e "$reqs"
+  contract__validate_e2e "$reqs" || return 1
+  contract__validate_scenario "$reqs"
 }
 
 # contract__validate_e2e <json_array> — an "e2e" requirement must exist,
@@ -48,6 +59,22 @@ contract__validate_e2e() {
     and (map(select(.id == "e2e"))[0] as $e2e |
       ($e2e.applicable == true and $e2e.cmd != null)
       or ($e2e.applicable == false and (($e2e.reason // "") | length) > 0)
+    )
+  ' >/dev/null 2>&1
+}
+
+# contract__validate_scenario <json_array> — a "scenario" requirement must
+# exist, same rule as e2e: applicable:true with a cmd, or applicable:false
+# with a non-empty reason. Never absent, never applicable with no cmd,
+# never inapplicable with no reason.
+contract__validate_scenario() {
+  local reqs="$1"
+  dod__has_jq || return 1
+  printf '%s' "$reqs" | jq -e '
+    (map(select(.id == "scenario")) | length) == 1
+    and (map(select(.id == "scenario"))[0] as $sc |
+      ($sc.applicable == true and $sc.cmd != null)
+      or ($sc.applicable == false and (($sc.reason // "") | length) > 0)
     )
   ' >/dev/null 2>&1
 }
@@ -139,6 +166,16 @@ contract_read() {
 
   local reqs
   reqs=$(jq -c '.requirements // []' "$path" 2>/dev/null)
+
+  # Back-compat: a contract written before `scenario` became a required
+  # requirement (this plugin version) has no such entry. Synthesize an
+  # implicit applicable:false on read rather than rejecting the whole
+  # contract — contract_write already enforces scenario on every NEW
+  # write, this only tolerates contracts that predate that enforcement.
+  if ! printf '%s' "$reqs" | jq -e 'any(.[]; .id == "scenario")' >/dev/null 2>&1; then
+    reqs=$(printf '%s' "$reqs" | jq -c '. + [{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"legacy-contract","applicable":false,"reason":"contract predates the scenario requirement"}]')
+  fi
+
   contract__validate_requirements "$reqs" || return 1
 
   CONTRACT_TASK_KEY=$(jq -r '.task_key // ""' "$path" 2>/dev/null)

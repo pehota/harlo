@@ -32,7 +32,7 @@ open_contract() {
   contract_write "$repo/.dod/$key/contract.json" \
     --task-key "$key" --task "do the thing" --task-source "argument" \
     --session-id "sid-1" --baseline-sha "$(git -C "$repo" rev-parse HEAD)" \
-    --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]'
+    --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]'
 }
 
 # --- branch 2: no contract -> release, silent --------------------------------
