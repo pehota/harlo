@@ -351,7 +351,7 @@ hash differently, the gate would reject every result. One function, one file.
 ```
 dod/
 ├── hooks/
-│   ├── session.sh      SessionStart  — preflight · cancel-on-clear · error banner
+│   ├── session.sh      SessionStart + SessionEnd — preflight · cancel-on-clear · error banner
 │   ├── track.sh        PostToolUse   — log edits · nudge
 │   └── gate.sh         Stop          — decision tree
 ├── lib/

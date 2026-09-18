@@ -210,7 +210,23 @@ Ordered by what most reduces risk:
    requirement's command and records the verdict after a miss. No explicit
    invalidation: a changed diff already changes `diff_hash`, which misses
    the cache for free (§7.3 of the design doc).
-7. `session.sh` — preflight, cancel-on-clear, error banner.
+7. ~~`session.sh` — preflight, cancel-on-clear, error banner.~~ **Done** —
+   `dod/hooks/session.sh`, registered on both `SessionStart` and
+   `SessionEnd` (one script, dispatching on `hook_event_name`; the two
+   events never fire concurrently with each other so this doesn't hit the
+   §4 "one event, one script" race). Preflight checks `git`/`jq`, gated by
+   a marker file keyed to `plugin.json`'s version so it's paid once per
+   version (N3). Cancel-on-clear fires on `SessionStart` with
+   `source == "clear"`: an **open** contract on the current branch is set
+   `cancelled` and its baseline worktree torn down; a contract already
+   `passed`/`cancelled`/`escalated` is left alone. Error banner: a
+   `systemMessage` naming the count of `.dod/errors.log` lines appended
+   since the last acknowledged read (line-count marker, not content diff —
+   simplest thing that satisfies "print once, don't nag forever"). Bare
+   `SessionEnd` (e.g. closing the terminal, not `/clear`) is a no-op by
+   design — the contract survives so resuming the same branch later finds
+   it still open, per §7.1's "a `/clear` mid-task... cancels it" being
+   specific to `/clear`, not every session end.
 8. Waivers, e2e requirement, `/dod:cancel`, amend/`--new`.
 
 ---
