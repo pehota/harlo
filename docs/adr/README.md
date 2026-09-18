@@ -13,6 +13,7 @@
   HEAD-keyed verification result *and* a clean product surface cover the changeset;
   establishes the asymmetry rule that an agent-authored signal may only tighten the gate.
 
-> **All ADRs above are marked `review: needed`.** They record decisions for the
-> implementation that [`../design-v2.md`](../design-v2.md) redesigns. Revisit
-> them once the new harness has been built and exercised — not before.
+> **All ADRs above are marked `superseded`.** They record decisions for the
+> pre-v2 `dod/` implementation (recoverable at tag `dod-v1-final`), which
+> [`../design-v2.md`](../design-v2.md) replaced end-to-end. Kept for the
+> reasoning they capture, not as a description of current behaviour.

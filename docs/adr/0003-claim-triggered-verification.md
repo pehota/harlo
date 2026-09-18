@@ -1,7 +1,16 @@
 ---
-status: accepted
-review: needed — may be superseded by the harness redesign in docs/design-v2.md
+status: superseded
+superseded-by: docs/design-v2.md
 ---
+
+> **Superseded.** The mechanism described here (`dod-complete-task.sh`,
+> `dod-gate.sh`, `dod-user-turn.sh`, `task-dod/`) was replaced end-to-end by
+> the `dod/` plugin — see [`design-v2.md`](../design-v2.md) §5.1/§6.2 for the
+> current gate, and §6.5/D8 for the current claim-latch design (the
+> `state.edits` abandonment guard this ADR's "Update" sections were reasoning
+> toward). The asymmetry rule and the `UserPromptSubmit`-is-not-a-user-signal
+> finding both carried forward into the current design unchanged. Kept as
+> historical record; do not use it as a description of current behaviour.
 
 # Verification is triggered by an explicit claim, not inferred from a stopping agent
 

@@ -1,9 +1,13 @@
 # DoD Harness — Design v2
 
-> **Status:** Phase 1 (walking skeleton, `docs/design-v2.plan.md`) shipped and
-> in use — `contract.sh`/`result.sh`/`state.sh`/`gitref.sh`/`io.sh`, `gate.sh`,
-> both skills. This document remains the full v2 end-state spec; sections
-> below are annotated where Phase 1 diverges or defers to Phase 2.
+> **Status:** Phase 1 and Phase 2 (`docs/design-v2.plan.md`) both shipped and
+> in use — libs (`contract.sh`/`result.sh`/`state.sh`/`gitref.sh`/`io.sh`),
+> all three hooks (`gate.sh`, `track.sh`, `session.sh`), both skills, the
+> `dod-reviewer` agent, escalation, the baseline worktree, the check cache,
+> waivers, and the e2e-always-present invariant. Only `/dod:cancel`/`--new`
+> were cut (YAGNI, see plan.md Phase 2 item 8) and auto-detection of
+> implementation work remains deferred (§9). This document remains the full
+> v2 end-state spec; sections below are annotated where they diverge.
 > **Supersedes:** [`design.md`](design.md) and the pre-v2 `dod/` implementation
 > (recoverable at tag `dod-v1-final`).
 
@@ -26,8 +30,8 @@ This harness makes the Definition of Done a **structural forcing function**.
   agent believes it's done ──▶ self-triggers /dod:verify (D28) ──▶ result
                                                   │                   │
                                                   ├── all pass ─────▶ done
-                                                  └── failures ─────▶ fix → verify (max 2 rounds, Phase 2)
-                                                                        └── exhausted ──▶ escalate to user (Phase 2)
+                                                  └── failures ─────▶ fix → verify (max 2 rounds)
+                                                                        └── exhausted ──▶ escalate to user
 
   (Stop GATE is the fallback if the agent skips self-verify — not the
    intended trigger. It blocks on: no contract confirmed / no matching
@@ -536,10 +540,11 @@ dropped. The threshold is hardcoded in v1; see §9.
 
 ### 6.5 `state.json`
 
-Owned by `lib/state.sh`. Phase 1 fields are only `latched`, `round`,
-`escalation`, `last_failed_diff_hash` — `edits`/`state`/`cache` (`track.sh`,
-`/dod:verify`, `state_cache_get`/`state_cache_set`, all shipped) and
-`errors_unacknowledged` (error banner, still to come) land in Phase 2.
+Owned by `lib/state.sh`. All fields below are shipped: `latched`, `round`,
+`escalation`, `last_failed_diff_hash`, `edits` (`track.sh`), `state`
+(`/dod:verify`'s in-progress marker), `cache`
+(`state_cache_get`/`state_cache_set`), and `errors_unacknowledged`
+(`session.sh`'s error banner).
 
 **`worktree` — deliberately never a `state.json` field.** The shipped
 baseline worktree (`dod_baseline_worktree`, `lib/gitref.sh`) is tracked by

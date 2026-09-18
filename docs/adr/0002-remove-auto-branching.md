@@ -1,7 +1,13 @@
 ---
-status: accepted
-review: needed — may be superseded by the harness redesign in docs/design-v2.md
+status: superseded
+superseded-by: docs/design-v2.md
 ---
+
+> **Superseded.** `docs/design-v2.md`'s `dod/` plugin never had auto-branching
+> to begin with — this ADR's decision (branching is not the DoD gate's job)
+> was carried forward by simply not building it. Kept as historical record of
+> the reasoning; the mechanisms it references (`auto-branch.sh`,
+> `done-config.json`) no longer exist.
 
 # Auto-branching is removed, not merely defaulted off
 

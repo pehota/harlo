@@ -1,7 +1,14 @@
 ---
-status: accepted
-review: needed — may be superseded by the harness redesign in docs/design-v2.md
+status: superseded
+superseded-by: docs/design-v2.md
 ---
+
+> **Superseded.** The mechanism described here (`.claude/.harness/task-dod/`,
+> `dod-collect`, `done-state`) was replaced by the `dod/` plugin's
+> `contract.json`/`result.json` pair — see [`design-v2.md`](../design-v2.md).
+> Kept as historical record of the reasoning that motivated a first-class,
+> append-only DoD artifact; do not use it as a description of current
+> behaviour.
 
 # The Definition of Done is fixed at task start, not assembled at `/done`
 
