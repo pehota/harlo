@@ -280,7 +280,19 @@ Ordered by what most reduces risk:
      attempting to run its null `cmd`. Covered by `dod/tests/test-contract.sh`
      (applicable/inapplicable accepted; missing entry, applicable-with-no-cmd,
      and inapplicable-with-no/empty-reason all rejected).
-   - `/dod:cancel`, amend/`--new` remain undone.
+   - ~~`/dod:cancel`, amend/`--new`.~~ **Cut, not built** — YAGNI, confirmed
+     2026-09-18: the user has never needed manual cancellation; `/clear`
+     already cancels an open contract (`session.sh` cancel-on-clear, item 7),
+     and re-running `/dod:define` for unrelated work already overwrites the
+     open contract via the amend path. `--new` was never implemented as a
+     distinct code path either — `contract_write` always overwrites
+     unconditionally (sole owner, no read-merge-write), so "amend" and
+     "`--new`" were mechanically identical; the only place they could have
+     differed (whether an amend re-snapshots HEAD or keeps the original
+     baseline) was undecided prose, not a real gap forcing the split. Revisit
+     only if a real need surfaces — abandoning a task mid-work without
+     `/clear` and without immediately starting new work is the one scenario
+     `--new`-as-amend doesn't cover.
 
 ---
 

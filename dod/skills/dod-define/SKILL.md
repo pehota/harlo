@@ -169,6 +169,6 @@ safety net for when you fail, not the plan.
 
 Amend it: re-run steps 2–4 (capture, detect, **confirm the table again** — an
 amend changes what "done" means, so it needs the same confirmation a fresh
-open does) before `contract_write` for the same `task_key`. `--new` (explicit
-user request) instead opens a fresh task, replacing the file outright, same
-confirmation gate.
+open does) before `contract_write` for the same `task_key`. There is no
+separate "fresh task" flag — amend always overwrites the existing contract
+for this `task_key`, same confirmation gate either way.

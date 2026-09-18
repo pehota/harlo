@@ -701,8 +701,7 @@ never accepted as the evidence that it was fixed.
 | Event | Behaviour |
 |---|---|
 | `/dod:define [task]` | Opens a DoD. Task from the argument, else derived from conversation. |
-| `/dod:define` while one is open | **Amends** the open contract. `--new` forces a fresh task. |
-| `/dod:cancel` | Closes the DoD, tears down the worktree. |
+| `/dod:define` while one is open | **Amends** the open contract, overwriting it for the same `task_key`. |
 | `/clear` or session end | DoD cancelled (`SessionStart source=clear`, `SessionEnd`). |
 | Pass, then a follow-up request | **New task** — the baseline must move. |
 | Baseline SHA no longer an ancestor of HEAD | Expires with a warning; does not gate. |
