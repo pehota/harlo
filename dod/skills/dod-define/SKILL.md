@@ -7,7 +7,9 @@ description: Open a Definition-of-Done contract for the current task before impl
 
 Opens a DoD contract for the current task. Every contract carries the
 detected test command plus a `judgement` requirement for an independent
-review, and any waivers the user stated in free text.
+review, and any waivers the user stated in free text. `dod/base-dod.md`
+is the baseline this skill folds in on every run — see step 3.4.7 for the
+documentation item.
 
 **Run this yourself, before your first edit, every time.** Not optional,
 not a fallback — the moment a task's shape is clear, call this before
@@ -91,6 +93,23 @@ safety net for when you fail, not the plan.
    `scenario: applicable:true` at the same time (e.g. a library API change
    with no e2e stack to run it in) — decide each on its own terms.
 
+3.4.7. **Decide documentation applicability, per `dod/base-dod.md`.** Every
+   contract carries a `docs` requirement — never absent, same as `e2e`/
+   `scenario`, structurally enforced by `contract__validate_docs`. Its shape
+   differs from `e2e`/`scenario`: `applicable:true` needs a non-empty
+   `doc_paths` array (not `cmd`/`expect_exit` — docs isn't machine-run), or
+   `applicable:false` needs a non-empty `reason`. Does this task change
+   anything a doc, README, ADR, or design note describes: behavior, a
+   command's shape, a config option, an architecture decision? If yes, set
+   `applicable:true` and list every doc path that must be updated in
+   `doc_paths`. If no — pure refactor, internal fix with no documented
+   surface — set `applicable:false` with a concrete reason ("no doc
+   describes this internal helper", "pure refactor, no behavior or
+   interface change"). Whether the listed doc(s) were actually, correctly
+   updated is checked by the `review` judgement requirement (`dod-reviewer`
+   reads `doc_paths` off the contract) — `docs` itself only pins down which
+   paths that check applies to, never left for the reviewer to guess.
+
 3.5. **Extract waivers from the user's own words.** A waiver excuses a
    specific requirement from blocking, on the user's authority alone — it is
    never something the agent decides for itself. Only recognise a waiver
@@ -118,6 +137,7 @@ safety net for when you fail, not the plan.
    | e2e (<cmd> or N/A) | exit 0 or N/A | <applicable: task-stated reason / inapplicable: your reason from step 3.4> |
    | scenario test (<cmd> or N/A) | exit 0 or N/A | <applicable: what behavior it exercises / inapplicable: your reason from step 3.4.6> |
    | independent code review | no blocking findings | protocol-required |
+   | docs (<doc_paths> or N/A) | updated, confirmed by review / N/A | <applicable: which doc(s) and why / inapplicable: your reason from step 3.4.7> |
    | lint          | WAIVED           | user: prototype spike |
 
    Does this look right? (yes / adjust / cancel)
@@ -130,7 +150,12 @@ safety net for when you fail, not the plan.
    recorded reason, never silently dropped from the table because it isn't a
    real command. The scenario-test row is **always present** too (step
    3.4.6), same N/A treatment when inapplicable — it is a distinct decision
-   from e2e, not a duplicate of it. A waived requirement (step 3.5) still
+   from e2e, not a duplicate of it. The docs row is **always present** too
+   (step 3.4.7, per `dod/base-dod.md`), structurally enforced the same way
+   as e2e/scenario — if inapplicable, "Expected Result" reads `N/A` and
+   "Why This Verification" carries your recorded reason; if applicable, its
+   verdict is decided by the `review` judgement checking `doc_paths` were
+   actually updated, never left implicit. A waived requirement (step 3.5) still
    gets its own row — "Expected Result" reads `WAIVED` and "Why This
    Verification" carries the user's own reason verbatim, never omitted from
    the table just because it won't block.
@@ -189,7 +214,8 @@ safety net for when you fail, not the plan.
        {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"},
        {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>"},
        {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","rationale":"<what you reasoned through in step 3.4.5>"},
-       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"}
+       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"},
+       {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["<doc path 1>","<doc path 2>"],"reason":"<why these docs need updating>"}
      ]' \
      --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
    ```
@@ -206,6 +232,18 @@ safety net for when you fail, not the plan.
    enforces this the same way `contract__validate_e2e` does for `e2e` —
    `contract_write` rejects a contract missing `scenario` or with the wrong
    shape, same as it already does for `e2e`.
+
+   `docs` has its own shape (step 3.4.7): `applicable:true` needs a
+   non-empty `doc_paths` array — `cmd`/`expect_exit` stay `null` even when
+   applicable, since nothing runs it. `applicable:false` needs
+   `cmd:null`/`expect_exit:null` plus a non-empty `reason`, same as
+   e2e/scenario's inapplicable branch:
+   ```
+   {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why no doc needs updating>"}
+   ```
+   `contract__validate_docs` enforces this — `contract_write` rejects a
+   contract missing `docs`, with an empty `doc_paths` while
+   `applicable:true`, or a missing/empty `reason` while `applicable:false`.
 
    `rationale` (step 3.4.5) is optional but expected on every
    `judgement`/`scenario` requirement, and welcome on `check` requirements

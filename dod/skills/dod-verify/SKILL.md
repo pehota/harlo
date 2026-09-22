@@ -61,6 +61,20 @@ check.
    `applicable` is `true`, treat it like any other check requirement from
    here on.
 
+   `docs` is handled differently — it never has a `cmd`, applicable or not.
+   If `applicable` is `false`, set `verdict` to `"n/a"` and `reason` to its
+   recorded `reason`, same as e2e/scenario. If `applicable` is `true`, do
+   **not** attempt to run anything for it here — its verdict is decided in
+   step 5 by whether `dod-reviewer` confirms every path in its `doc_paths`
+   was actually updated; carry `doc_paths` through to the reviewer call
+   unchanged (it's already part of `$CONTRACT_REQUIREMENTS`) and set `docs`'s
+   final `verdict` from the reviewer's findings: `"fail"` if any finding in
+   the reviewer's `findings` array carries `requirement_id: "docs"` with
+   `severity: "blocking"`, else `"pass"`. Use `requirement_id` for this
+   check, never infer it from a finding's `file` path matching a
+   `doc_paths` entry — the field exists precisely so attribution doesn't
+   depend on string matching.
+
    For every other `check` requirement (and an applicable `e2e` or
    `scenario`), check
    whether the contract waives it (`CONTRACT_WAIVERS`, from step 1's
@@ -151,7 +165,8 @@ check.
      --requirements '[
        {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
        {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
-       {"id":"review","type":"judgement","verdict":"pass|fail","findings":[...]}
+       {"id":"review","type":"judgement","verdict":"pass|fail","findings":[...]},
+       {"id":"docs","type":"check","verdict":"pass|fail|n/a","doc_paths":[...]}
      ]'
    state_set_state ".dod/$TASK_KEY/state.json" "idle"
    ```
@@ -178,7 +193,11 @@ check.
    fails at baseline" vs "new — passes at baseline, this changeset broke
    it"), since that distinction is exactly what tells the user whether to
    expect a fix in scope; for `review`, list every `blocking` finding's
-   file, line, and summary; advisory findings are listed too but flagged as
+   file, line, and summary; for `docs`, its own row states its verdict
+   plainly — `n/a` with the contract's reason if inapplicable, `pass` if
+   the reviewer confirmed every `doc_paths` entry was updated, `fail` with
+   which path(s) the reviewer found missing or stale if not (`dod/base-dod.md`,
+   `dod-define` step 3.4.7); advisory findings are listed too but flagged as
    the user's decision, never auto-fixed (per the repo's standing rule:
    raise non-blocking findings, never silently fix or drop them). The
    gate's own block message will restate check failures, but the agent

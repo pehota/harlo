@@ -52,7 +52,13 @@ facts support.
    already catches (format, style, unused vars, type errors) — those are
    `check` requirements, not yours. Spend judgment on logic errors, broken
    invariants, missing coverage, security, and spec conformance against
-   `task` and `requirements`.
+   `task` and `requirements`. If a `docs` requirement in `requirements` is
+   `applicable:true`, check every path in its `doc_paths` was actually,
+   correctly updated for this changeset (see `dod/base-dod.md`) — a missing
+   or stale required update is `blocking` (spec violation on the `docs`
+   requirement), not a mere doc-wording nit. Name the specific `doc_paths`
+   entry as the finding's `file`, and set `requirement_id: "docs"` on it —
+   do not leave attribution to be inferred from the file path alone.
 5. **Be exhaustive.** Enumerate every issue, not just the first few. If the
    changeset is too large to cover fully, say so plainly rather than silently
    truncating — name what you did not reach.
@@ -87,7 +93,8 @@ facts support.
   "findings": [
     { "id": "f1", "severity": "blocking", "file": "src/a.ts", "line": 42,
       "summary": "one sentence",
-      "failure_scenario": "concrete inputs/state -> wrong output or crash" }
+      "failure_scenario": "concrete inputs/state -> wrong output or crash",
+      "requirement_id": "review" }
   ],
   "reconfirm": [
     { "id": "f1", "status": "fixed", "evidence": "src/a.ts:42 now guards null" }
@@ -98,7 +105,14 @@ facts support.
 
 - `findings` — every issue found this pass (empty array if none). `id` is a
   short stable slug you invent (`f1`, `f2`, ...) — round 2 references it if
-  raised again in `reconfirm`.
+  raised again in `reconfirm`. `requirement_id` names which contract
+  requirement this finding belongs to — `"review"` for a general finding, or
+  the `id` of another requirement (e.g. `"docs"`) when the finding is
+  specifically about that requirement's own subject matter (a `doc_paths`
+  entry missing or stale, a `scenario` test that doesn't actually exercise
+  the claimed behavior). `/dod:verify` uses this field, not prose matching,
+  to decide whether a finding also fails that other requirement's own
+  verdict — never guess the attribution from file paths or summary text.
 - `reconfirm` — `delta_reconfirm` mode only; omit entirely in `full` mode.
   One entry per input `reconfirm[]` item, same `id`.
 - `verdict` — `"fail"` if any `blocking` finding exists in `findings`, OR any

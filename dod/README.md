@@ -4,14 +4,18 @@ Task-DoD lifecycle plugin: the agent records an explicit completion claim,
 and the Stop gate blocks until a verification result covers the changeset.
 
 Full design: [`docs/design-v2.md`](../docs/design-v2.md).
+Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
 
 ## Usage
 
 - `/dod:define [task]` — open a DoD contract before implementation starts.
-  Self-invoked by the agent; run it yourself if it forgets.
+  Self-invoked by the agent; run it yourself if it forgets. Always decides
+  test/e2e/scenario/docs/review applicability per `base-dod.md` and shows a
+  confirmation table before writing anything.
 - `/dod:verify` — run the contract's checks and independent review, write a
   result. Self-invoked by the agent; run it yourself if the gate blocks
-  asking for it.
+  asking for it. The independent review also confirms every path in an
+  applicable `docs` requirement's `doc_paths` was actually updated.
 
 ## Manual escape hatch
 

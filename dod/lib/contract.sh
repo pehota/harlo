@@ -19,6 +19,14 @@
 #     enforced by contract__validate_scenario. Distinct decision from e2e
 #     (behavior-change signal, not runner-availability signal) — see
 #     dod-define/SKILL.md step 3.4.6.
+#   - a `docs` requirement always exists: either `applicable:true` with a
+#     non-empty `doc_paths` array (which doc(s) must be updated), or
+#     `applicable:false` with a non-empty `reason`. Never a `cmd` — unlike
+#     e2e/scenario, docs is not machine-run; `doc_paths` is what dod-reviewer
+#     checks against. Exempted from the base check-shape rule the same way
+#     e2e/scenario are (it never carries real `cmd`/`expect_exit`, even when
+#     applicable), enforced by contract__validate_docs. See
+#     dod-define/SKILL.md step 3.4.7 and dod/base-dod.md.
 #
 # `rationale` (optional, string, any requirement) is advisory only — not
 # validated or enforced here. It carries the "why this requirement" the
@@ -39,12 +47,14 @@ contract__validate_requirements() {
   printf '%s' "$reqs" | jq -e '
     all(.[];
       ((.id == "e2e" or .id == "scenario") and .type == "check" and .applicable == false)
+      or (.id == "docs" and .type == "check")
       or (.type == "check" and (.cmd != null) and (.expect_exit != null))
       or (.type == "judgement")
     )
   ' >/dev/null 2>&1 || return 1
   contract__validate_e2e "$reqs" || return 1
-  contract__validate_scenario "$reqs"
+  contract__validate_scenario "$reqs" || return 1
+  contract__validate_docs "$reqs"
 }
 
 # contract__validate_e2e <json_array> — an "e2e" requirement must exist,
@@ -75,6 +85,22 @@ contract__validate_scenario() {
     and (map(select(.id == "scenario"))[0] as $sc |
       ($sc.applicable == true and $sc.cmd != null)
       or ($sc.applicable == false and (($sc.reason // "") | length) > 0)
+    )
+  ' >/dev/null 2>&1
+}
+
+# contract__validate_docs <json_array> — a "docs" requirement must exist,
+# either applicable:true with a non-empty doc_paths array, or
+# applicable:false with a non-empty reason. Never absent, never applicable
+# with an empty/missing doc_paths, never inapplicable with no reason.
+contract__validate_docs() {
+  local reqs="$1"
+  dod__has_jq || return 1
+  printf '%s' "$reqs" | jq -e '
+    (map(select(.id == "docs")) | length) == 1
+    and (map(select(.id == "docs"))[0] as $d |
+      ($d.applicable == true and (($d.doc_paths // []) | length) > 0)
+      or ($d.applicable == false and (($d.reason // "") | length) > 0)
     )
   ' >/dev/null 2>&1
 }
@@ -174,6 +200,13 @@ contract_read() {
   # write, this only tolerates contracts that predate that enforcement.
   if ! printf '%s' "$reqs" | jq -e 'any(.[]; .id == "scenario")' >/dev/null 2>&1; then
     reqs=$(printf '%s' "$reqs" | jq -c '. + [{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"legacy-contract","applicable":false,"reason":"contract predates the scenario requirement"}]')
+  fi
+
+  # Back-compat: a contract written before `docs` became a required
+  # requirement (this plugin version) has no such entry. Synthesize an
+  # implicit applicable:false on read, same rationale as scenario above.
+  if ! printf '%s' "$reqs" | jq -e 'any(.[]; .id == "docs")' >/dev/null 2>&1; then
+    reqs=$(printf '%s' "$reqs" | jq -c '. + [{"id":"docs","type":"check","source":"legacy-contract","applicable":false,"reason":"contract predates the docs requirement"}]')
   fi
 
   contract__validate_requirements "$reqs" || return 1
