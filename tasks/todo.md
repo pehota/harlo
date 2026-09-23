@@ -34,3 +34,25 @@ Branch: `main`. Baseline: `9a22e74`.
 
 ## Review
 _(filled at the end)_
+
+---
+
+# works_when-driven DoD definition + reviewer-only pass table
+
+## Item 1 — define chain, `proves`, root relay
+- [x] A. `dod-verify` SKILL: settle own observations / implementer notes before verify (fix bug → delegate; else drop); never hint the reviewer
+- [x] B. `dod-verify` SKILL pass table: findings only from reviewer `findings[]`
+- [x] C. `dod-define` SKILL: capture/clarify → Q1 `works_when` → Q2 find & list proofs; `proves` replaces `rationale`; table opens with "It works when:" + Proves column
+- [x] C. `contract.sh`: `--works-when` + `proves` required on write; legacy (no works_when / rationale-only) still reads
+- [x] C. `dod-reviewer` + verify reviewer input: `works_when`; judge each `proves`
+- [x] D. Docs: `docs/design-v2.md` (§5.2, §6.3, §6.7, §7.6, D30), `dod/base-dod.md`, `dod/README.md`
+- [x] Tests: `test-contract.sh` (works_when + proves cases), fixtures in gate/prompt/session/track
+- [x] Scenario tests `dod/tests/scenario/` (root-relay; define a/b/c), baseline fail → after 3/3
+
+## Review
+- Baseline (39b65b7 skill text): root-relay 0/3 (root added its own findings); define (a) 0/3, (b) 0/3, (c) 0/3 — all fail.
+- After: root-relay 3/3; define (a) 3/3, (b) 3/3, (c) 3/3. (b) needed a skill fix: ambiguity test = "can works_when be concrete without guessing?".
+- `bash run-tests.sh`: all 36 suites passed. Scenario tests stay out of it (glob is `dod/tests/test-*.sh`, non-recursive).
+
+## Future (out of scope)
+- Specialised subagent for Q1 (derive `works_when`) and for Q2 (find/list proofs).
