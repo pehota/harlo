@@ -60,6 +60,21 @@ tracked files under `completion-harness/tests/` that source the real bundle
 scripts directly, so no install step is needed. Run a single suite with `bash
 completion-harness/tests/test-<name>.sh`.
 
+**Host isolation:** `run-tests.sh` and each suite's `test-helpers.sh` (plus
+`completion-harness/tests/test-gate.sh`, which sources no helper and carries
+its own copy) unset inherited repo-local git env (`git rev-parse
+--local-env-vars`: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …). Git hooks
+export it (a push from a linked worktree sets `GIT_DIR`), and it overrides the
+fixtures' `git -C <tmpdir>`, so the suites would otherwise commit, branch,
+configure and add worktrees in *this* repo. Prove it on demand — clones the
+checkout to a temp dir, runs `run-tests.sh` and one suite per unset site
+directly there with that env exported, and diffs the clone's git state (not
+part of `run-tests.sh`):
+
+```
+bash test-host-isolation.sh
+```
+
 **Run tests on push:** enable the tracked `pre-push` hook (installs alongside the
 repo's existing hooks; `core.hooksPath` is deliberately not used so those keep
 working):
