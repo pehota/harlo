@@ -5,11 +5,10 @@ description: Open a Definition-of-Done contract for the current task before impl
 
 # /dod:define
 
-Opens a DoD contract for the current task. Every contract carries the
-detected test command plus a `judgement` requirement for an independent
-review, and any waivers the user stated in free text. `dod/base-dod.md`
-is the baseline this skill folds in on every run — see step 3.4.7 for the
-documentation item.
+Opens a DoD contract for the current task. The whole definition follows one
+chain: **agree the task → "how will we know it works?" (`works_when`) →
+"how do we prove that?" (the requirements, each a proof of `works_when`)**.
+`dod/base-dod.md` lists the proofs every contract carries.
 
 **Run this yourself, before your first edit, every time.** Not optional,
 not a fallback — the moment a task's shape is clear, call this before
@@ -24,96 +23,70 @@ safety net for when you fail, not the plan.
    If not, refuse and say why — do not open a contract outside a git repo.
    Confirm `jq` is on PATH; if missing, refuse and name the install command.
 
-2. **Task capture.** If the user gave task text as an argument, use it
-   verbatim (`task_source: "argument"`). Otherwise derive one sentence from
-   the current conversation (`task_source: "conversation"`).
+2. **Capture the task — and decide whether it is clear.** If the user gave
+   task text as an argument, use it verbatim (`task_source: "argument"`).
+   Otherwise derive one sentence from the current conversation
+   (`task_source: "conversation"`). Then decide: could two careful engineers
+   read it and build different things (what changes, where, what "better"
+   means)? Test: can you write step 3's `works_when` as a concrete, checkable
+   outcome without guessing? A relative target with no measure ("shorter",
+   "faster", "less annoying", "cleaner") fails that test. If it fails, ask
+   the user concrete clarifying questions and stop — no table, no contract —
+   until the task is clear and agreed. If the conversation already settled
+   it, proceed without re-asking.
 
-3. **Detect the test command.** Look for, in order: `package.json` `scripts.test`
-   (`npm test` / the project's package manager equivalent), a `Makefile` `test`
-   target (`make test`), `cargo test` (`Cargo.toml` present), `pytest`
-   (`pyproject.toml` / `setup.py` present). Use the first match. If nothing is
-   detected, ask the user for the test command — do not guess a command that
-   might not exist.
+3. **Q1 — "How will we know it works?"** From the agreed task, write
+   `works_when`: one sentence, "It works when <concrete observable outcome>"
+   — what a user or caller would see, not which files change. Everything
+   below is a proof of this sentence.
 
-3.4. **Decide e2e applicability, right now, with a recorded reason.** Every
-   contract carries an `e2e` requirement — never absent. Decide at definition
-   time (not later, not left to the reviewer): does this task add or change
-   a user-facing flow? If yes, set `applicable:true` and give it a `cmd` (the
-   project's e2e runner, e.g. `npm run e2e`, `playwright test` — detect it
-   the same way as step 3, or ask if none is detectable and the task truly
-   needs one). If no — a pure refactor, an internal tooling change, docs,
-   test-only changes — set `applicable:false` with a short concrete `reason`
-   ("pure refactor, no user-facing change", "internal harness script, no
-   e2e flow exists"). Never leave `e2e` out of the requirements array and
-   never fabricate a reason that doesn't hold up.
+4. **Q2 — "How do we prove that?"** Find what the repo offers — build, app
+   start, test runner, e2e stack, docs, review — and list the proofs. Every
+   requirement gets a non-empty `proves`: one clause naming which part of
+   `works_when` it proves. This is judgement about *this* task: what would a
+   careful engineer check before calling it done, which edge cases would
+   "it compiles and the tests pass" miss? The mechanical checks stay
+   auto-detected and deterministic regardless.
 
-3.4.5. **Think through what "done" actually means for this task before
-   drafting requirements — this is reasoning, not a checklist.** Before
-   writing the requirements array, work through it in your own words: what
-   would a careful engineer check before calling this task complete? Is
-   there a relevant doc, ADR, or design note that defines correct behavior
-   here? Does similar code already exist elsewhere in the repo whose
-   pattern this should follow or whose test approach this should mirror?
-   Once deployed/running, what would "working" look like — is there a
-   runbook, deploy doc, or monitoring reference worth checking, even if the
-   answer turns out to be "not applicable"? What edge cases would get
-   missed by "it compiles and the existing tests pass"?
+   - **Prerequisite — it builds/starts, so it is testable at all.** If the
+     repo has a build or start step, it runs green before anything else can
+     prove anything; fold it into the checks.
+   - **Logic — tests (`tests`).** Look for, in order: `package.json`
+     `scripts.test` (`npm test` / the project's package manager equivalent),
+     a `Makefile` `test` target (`make test`), `cargo test` (`Cargo.toml`
+     present), `pytest` (`pyproject.toml` / `setup.py` present). Use the
+     first match. If nothing is detected, ask the user — do not guess a
+     command that might not exist.
+   - **Outcome — observe `works_when` directly (`e2e`, `scenario`).** Both
+     are always present, decided now, never left to the reviewer:
+     `applicable:true` with a `cmd`, or `applicable:false` with a concrete
+     `reason`. `e2e`: does the task add or change a user-facing flow, and is
+     there an e2e runner (`npm run e2e`, `playwright test` — detect or ask)?
+     `scenario`, decided independently: its `cmd` names the functional test
+     the implementer must write and run — one that exercises the changed
+     behavior the way a human would check it and observes the `works_when`
+     outcome, not a mocked-out unit test. Agent, prompt and skill text IS
+     observable behavior: prove it with a headless before/after run of the
+     instructions. Mark `scenario` `applicable:false` only when another row
+     already fully proves `works_when`, and say which. A task can be `e2e`
+     N/A and `scenario` applicable at once.
+   - **Described — docs (`docs`).** Does the task change anything a doc,
+     README, ADR, or design note describes (behavior, a command's shape, a
+     config option, an architecture decision)? If yes, `applicable:true` with
+     every such path in `doc_paths`; if no, `applicable:false` with a
+     concrete reason. Whether they were correctly updated is the review's
+     call (`dod-reviewer` reads `doc_paths`).
+   - **Independent — review (`review`).** Always present: a `judgement`
+     requirement for `dod-reviewer`, which also judges whether each `proves`
+     genuinely proves `works_when`.
 
-   This is deliberately open-ended — do not treat it as a fixed checklist
-   of sources to grep every time; the point is judgement about *this* task,
-   not mechanical coverage. The mechanical checks (step 3's test command,
-   lint, build) stay auto-detected and deterministic regardless — this step
-   only shapes the `judgement`/`scenario`-type requirements and their
-   `rationale`, never the mechanical battery.
+   Never leave `e2e`, `scenario` or `docs` out, and never fabricate a reason
+   that doesn't hold up.
 
-   Record a short `rationale` on every requirement you add or derive here
-   (see step 6) — one clause naming what you found or considered, even
-   "considered, not applicable: <why>". The confirmation table (step 4)
-   surfaces this so the user can judge whether the reasoning was
-   substantive, not just present.
-
-3.4.6. **Decide scenario-test applicability, independently of e2e.** Every
-   contract carries a `scenario` requirement — never absent, same as `e2e`,
-   with the identical shape (`applicable:true`+`cmd`, or
-   `applicable:false`+`reason`). This asks a different question than e2e:
-   does this task change *behavior* observable to a caller or user (not
-   just "is there an e2e runner in this repo")? If yes, set
-   `applicable:true` with `cmd` naming the test file/command the
-   implementing agent must write and run — a genuine functional/scenario
-   test that exercises the changed behavior the way a human engineer would
-   manually verify it, not a mocked-out unit test. Its `rationale` (step
-   3.4.5) should name the specific behavior it exercises, since that's what
-   `dod-reviewer` (the `review` judgement requirement, which already reads
-   every requirement's `rationale`) checks the test against — whether it's
-   a real scenario test or a token one is a code-review judgement call, not
-   a second judgement requirement; don't add one. If the task is a pure
-   refactor, internal tooling with no behavior change, docs-only, or
-   genuinely has no observable behavior to exercise, set `applicable:false`
-   with a concrete `reason`. A task can be `e2e: applicable:false` and
-   `scenario: applicable:true` at the same time (e.g. a library API change
-   with no e2e stack to run it in) — decide each on its own terms.
-
-3.4.7. **Decide documentation applicability, per `dod/base-dod.md`.** Every
-   contract carries a `docs` requirement — never absent, same as `e2e`/
-   `scenario`, structurally enforced by `contract__validate_docs`. Its shape
-   differs from `e2e`/`scenario`: `applicable:true` needs a non-empty
-   `doc_paths` array (not `cmd`/`expect_exit` — docs isn't machine-run), or
-   `applicable:false` needs a non-empty `reason`. Does this task change
-   anything a doc, README, ADR, or design note describes: behavior, a
-   command's shape, a config option, an architecture decision? If yes, set
-   `applicable:true` and list every doc path that must be updated in
-   `doc_paths`. If no — pure refactor, internal fix with no documented
-   surface — set `applicable:false` with a concrete reason ("no doc
-   describes this internal helper", "pure refactor, no behavior or
-   interface change"). Whether the listed doc(s) were actually, correctly
-   updated is checked by the `review` judgement requirement (`dod-reviewer`
-   reads `doc_paths` off the contract) — `docs` itself only pins down which
-   paths that check applies to, never left for the reviewer to guess.
-
-3.5. **Extract waivers from the user's own words.** A waiver excuses a
+5. **Extract waivers from the user's own words.** A waiver excuses a
    specific requirement from blocking, on the user's authority alone — it is
    never something the agent decides for itself. Only recognise a waiver
-   when the user's task text (or a reply during confirmation, step 4)
+   when the user's task text (or a reply during confirmation, step 6)
    explicitly names a requirement and excuses it — "skip lint for this, it's
    a prototype spike," "don't bother with e2e, pure refactor," "waive the
    review, I've already eyeballed it." Silence about a requirement is not a
@@ -124,54 +97,36 @@ safety net for when you fail, not the plan.
    agent-invented, and is load-bearing for the pass table (step 8 of
    `/dod:verify`) and any later audit of why a requirement didn't gate.
 
-4. **Present the verification table and wait for confirmation — this
+6. **Present the verification table and wait for confirmation — this
    blocks.** Before writing anything, show the user exactly what will
    decide "done", using this template:
 
    ```
-   Here's how I will verify the task is done:
+   It works when: <works_when>
 
-   | Verification | Expected Result | Why This Verification |
+   Here's how I will prove it:
+
+   | Verification | Expected Result | Proves |
    |---|---|---|
-   | <cmd>         | exit 0           | <one clause: detected/task-stated/protocol> |
-   | e2e (<cmd> or N/A) | exit 0 or N/A | <applicable: task-stated reason / inapplicable: your reason from step 3.4> |
-   | scenario test (<cmd> or N/A) | exit 0 or N/A | <applicable: what behavior it exercises / inapplicable: your reason from step 3.4.6> |
-   | independent code review | no blocking findings | protocol-required |
-   | docs (<doc_paths> or N/A) | updated, confirmed by review / N/A | <applicable: which doc(s) and why / inapplicable: your reason from step 3.4.7> |
-   | lint          | WAIVED           | user: prototype spike |
+   | <test cmd> (auto-detected) | exit 0 | <which part of works_when> |
+   | e2e (<cmd> or N/A) | exit 0 or N/A | <proves / N/A: your reason> |
+   | scenario test (<cmd> or N/A) | exit 0 or N/A | <proves / N/A: which row already proves works_when> |
+   | docs (<doc_paths> or N/A) | updated, confirmed by review / N/A | <proves / N/A: your reason> |
+   | independent code review | no blocking findings | <proves> |
+   | lint | WAIVED | user: prototype spike |
 
    Does this look right? (yes / adjust / cancel)
    ```
 
-   The review row is **always present** — every contract carries a
-   `judgement` requirement for `dod-reviewer`, not just check commands. The
-   e2e row is likewise **always present** (step 3.4) — if inapplicable, its
-   "Expected Result" reads `N/A` and "Why This Verification" carries your
-   recorded reason, never silently dropped from the table because it isn't a
-   real command. The scenario-test row is **always present** too (step
-   3.4.6), same N/A treatment when inapplicable — it is a distinct decision
-   from e2e, not a duplicate of it. The docs row is **always present** too
-   (step 3.4.7, per `dod/base-dod.md`), structurally enforced the same way
-   as e2e/scenario — if inapplicable, "Expected Result" reads `N/A` and
-   "Why This Verification" carries your recorded reason; if applicable, its
-   verdict is decided by the `review` judgement checking `doc_paths` were
-   actually updated, never left implicit. A waived requirement (step 3.5) still
-   gets its own row — "Expected Result" reads `WAIVED` and "Why This
-   Verification" carries the user's own reason verbatim, never omitted from
-   the table just because it won't block.
-
-   "Why This Verification" doubles as the row's `rationale` (step 3.4.5) —
-   for `judgement`/`scenario` rows this should reflect actual reasoning
-   about the task, not a generic label; a thin or boilerplate reason here is
-   the signal to push back and adjust, not just accept.
-
-   One row per requirement. "Why This Verification" is never blank — say
-   where the requirement came from (`auto-detected` from step 3,
-   `task`-stated, `protocol`-required, or the user's waiver text). Do **not**
-   proceed to step 5 (baseline recording) or step 6 (contract write) until
-   the user replies. `yes` (or equivalent) continues; a correction updates
-   the requirements **and waivers** and re-shows the table; `cancel` aborts —
-   no baseline is recorded and no contract is written.
+   One row per requirement, `e2e`/`scenario`/`docs`/review always present
+   (N/A rows carry their reason, never dropped). "Proves" is the row's
+   `proves` and is never blank; a waived row (step 5) carries the user's
+   reason verbatim. A thin or boilerplate "Proves" is the signal to push back
+   and adjust, not just accept. Do **not** proceed to step 7 (baseline) or
+   step 8 (contract write) until the user replies. `yes` (or equivalent)
+   continues; a correction updates `works_when`, the requirements **and
+   waivers** and re-shows the table; `cancel` aborts — no baseline is
+   recorded and no contract is written.
 
    **Why this blocks:** a printed "Contract Opened" table that nobody has to
    look at is a formality, not a check — exactly as ignorable as no
@@ -188,14 +143,14 @@ safety net for when you fail, not the plan.
    realize a contract should exist (a follow-up `/dod:define` after the fact),
    say so plainly rather than silently back-dating the baseline.
 
-5. **Record the baseline**, immediately after confirmation, immediately
+7. **Record the baseline**, immediately after confirmation, immediately
    before writing the contract:
    ```
    HEAD_SHA=$(git rev-parse HEAD)
    ```
    Minimise the window between snapshotting HEAD and allowing edits.
 
-6. **Write the contract** via `dod/lib/contract.sh`'s `contract_write` — do
+8. **Write the contract** via `dod/lib/contract.sh`'s `contract_write` — do
    not construct or edit `contract.json` any other way (N6: `contract.sh` is
    the sole owner):
 
@@ -209,22 +164,23 @@ safety net for when you fail, not the plan.
      --task "<task text>" \
      --task-source "argument|conversation" \
      --session-id "<session id if known, else empty>" \
+     --works-when "It works when <observable outcome>" \
      --baseline-sha "$HEAD_SHA" \
      --requirements '[
-       {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected"},
-       {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>"},
-       {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","rationale":"<what you reasoned through in step 3.4.5>"},
-       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"},
-       {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["<doc path 1>","<doc path 2>"],"reason":"<why these docs need updating>"}
+       {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected","proves":"<which part of works_when>"},
+       {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>","proves":"<...>"},
+       {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","proves":"<the works_when outcome it observes>"},
+       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol","proves":"<...>"},
+       {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["<doc path 1>","<doc path 2>"],"reason":"<why these docs need updating>","proves":"<...>"}
      ]' \
      --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
    ```
-   If e2e is inapplicable (step 3.4), its entry takes this shape instead —
+   If e2e is inapplicable (step 4), its entry takes this shape instead —
    `cmd` and `expect_exit` **both `null`**, `applicable:false`, and a
    non-empty `reason`; never mix an `applicable:true`/`false` field with the
    other branch's `cmd`/`expect_exit` shape, `contract_write` rejects it:
    ```
-   {"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why it doesn't apply>"}
+   {"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why it doesn't apply>","proves":"n/a: <reason>"}
    ```
    `scenario` follows the identical shape rules as `e2e` — `applicable:true`
    needs `cmd`/`expect_exit`, `applicable:false` needs `cmd:null`/
@@ -233,37 +189,34 @@ safety net for when you fail, not the plan.
    `contract_write` rejects a contract missing `scenario` or with the wrong
    shape, same as it already does for `e2e`.
 
-   `docs` has its own shape (step 3.4.7): `applicable:true` needs a
+   `docs` has its own shape (step 4): `applicable:true` needs a
    non-empty `doc_paths` array — `cmd`/`expect_exit` stay `null` even when
    applicable, since nothing runs it. `applicable:false` needs
    `cmd:null`/`expect_exit:null` plus a non-empty `reason`, same as
    e2e/scenario's inapplicable branch:
    ```
-   {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why no doc needs updating>"}
+   {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"<why no doc needs updating>","proves":"n/a: <reason>"}
    ```
    `contract__validate_docs` enforces this — `contract_write` rejects a
    contract missing `docs`, with an empty `doc_paths` while
    `applicable:true`, or a missing/empty `reason` while `applicable:false`.
 
-   `rationale` (step 3.4.5) is optional but expected on every
-   `judgement`/`scenario` requirement, and welcome on `check` requirements
-   too when the reasoning isn't obvious from `source` alone — it is
-   advisory only, not schema-validated, so a missing one won't fail
-   `contract_write`, but an empty one defeats the point of step 3.4.5.
+   `--works-when` and a non-empty `proves` on every requirement (an N/A one
+   included) are required — `contract_write` rejects the contract otherwise.
 
-   Omit `--waivers` (or pass `'[]'`) when step 3.5 found none — do not
+   Omit `--waivers` (or pass `'[]'`) when step 5 found none — do not
    fabricate an empty-reason waiver just to fill the flag.
 
-7. **Confirm the contract is open** with a short one-line note (SHA + "ready
-   to start") — the verification table already shown in step 4 is the
+9. **Confirm the contract is open** with a short one-line note (SHA + "ready
+   to start") — the verification table already shown in step 6 is the
    substance; don't repeat it. **Then start implementing the task
-   immediately, in this same turn.** The user's "yes" in step 4 approved both
+   immediately, in this same turn.** The user's "yes" in step 6 approved both
    the verification list AND starting work — it is not a separate go-ahead
    you wait to be asked for again. Do not stop and hand control back after
    writing the contract; the contract write is a means to the task, not the
    task itself.
 
-8. **Tell the agent, not the user, to verify.** State plainly: when you
+10. **Tell the agent, not the user, to verify.** State plainly: when you
    believe this task is done, run `/dod:verify` yourself before you stop — do
    not tell the user to run it and do not wait for them to ask. The Stop gate
    will block and name the reason if you skip this, but don't rely on the
@@ -273,7 +226,8 @@ safety net for when you fail, not the plan.
 
 ## If a contract is already open for this branch
 
-Amend it: re-run steps 2–4 (capture, detect, **confirm the table again** — an
+Amend it: re-run steps 2–6 (capture, `works_when`, proofs, waivers,
+**confirm the table again** — an
 amend changes what "done" means, so it needs the same confirmation a fresh
 open does) before `contract_write` for the same `task_key`. There is no
 separate "fresh task" flag — amend always overwrites the existing contract

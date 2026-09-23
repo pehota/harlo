@@ -324,11 +324,12 @@ itself each time it blocks.
 ```
   ┌─ preflight assert ──── deps present · is a git repo · no open DoD (or amend)
   ├─ task capture ──────── argument if given, else derive from conversation
-  │                        record task_source (objection window is the
-  │                        confirmation gate below, not a separate print)
+  │                        record task_source; ambiguous → clarify with the
+  │                        user and stop, settled → proceed without re-asking
+  ├─ works_when (Q1) ───── "how will we know it works?" → "It works when …"
   ├─ protocol loader ───── DoD protocol floor + CLAUDE.md chain
-  ├─ battery detector ──── package.json / Makefile / cargo / … → check commands
-  ├─ requirement synth ─── task-derived requirements + e2e applicability decision
+  ├─ proof finder (Q2) ─── "how do we prove that?" → build/start · tests ·
+  │                        e2e/scenario · docs · review, each with `proves`
   ├─ waiver extractor ──── free text in the user's prompt → waivers[]
   ├─ schema validator ──── reject malformed · reject vague-without-check
   ├─ confirmation gate ──── print the verification table · BLOCK on yes/adjust/cancel (D29)
@@ -469,19 +470,23 @@ Owned by `lib/contract.sh`.
   "task": "<task text>",
   "task_source": "argument",               // argument | conversation
   "session_id": "…",                       // metadata only, never a key
+  "works_when": "It works when <observable outcome>",
   "baseline": { "sha": "a1b2c3", "dirty_files": ["README.md"] },
   "waivers": [ { "id": "lint", "reason": "user: prototype spike" } ],
   "requirements": [
     { "id": "build",  "type": "check", "cmd": "pnpm build",
-      "expect_exit": 0, "source": "auto-detected" },
+      "expect_exit": 0, "source": "auto-detected",
+      "proves": "it is testable at all" },
     { "id": "tests",  "type": "check", "cmd": "pnpm test",
-      "expect_exit": 0, "source": "protocol" },
+      "expect_exit": 0, "source": "protocol",
+      "proves": "invite logic accepts/rejects the right inputs" },
     { "id": "e2e",    "type": "check", "cmd": "pnpm e2e --grep invite",
       "expect_exit": 0, "source": "task",
-      "applicable": true, "reason": "adds user-facing interaction" },
+      "applicable": true, "reason": "adds user-facing interaction",
+      "proves": "a user can send an invite end to end" },
     { "id": "review", "type": "judgement", "agent": "dod-reviewer",
       "prompt_ref": "review.md", "schema_ref": "review.schema.json",
-      "source": "protocol" }
+      "source": "protocol", "proves": "independent check of all of it" }
   ]
 }
 ```
@@ -492,7 +497,11 @@ Owned by `lib/contract.sh`.
 - every `check` carries `cmd` and `expect_exit`;
 - an `e2e` entry **always exists**, either `applicable:true` with a `cmd`, or
   `applicable:false` **with a reason**. Never absent. Enforced by
-  `contract__validate_e2e` (`dod/lib/contract.sh`), landed in Phase 2 item 8.
+  `contract__validate_e2e` (`dod/lib/contract.sh`), landed in Phase 2 item 8;
+- on write, a non-empty `works_when` and a non-empty `proves` on every
+  requirement (which part of `works_when` it proves). `proves` replaces the
+  earlier advisory `rationale`; a legacy contract without `works_when`, or
+  with `rationale` instead of `proves`, still reads.
 
 **Cross-artefact side effect:** every `contract_write` call also resets the
 sibling `state.json` to defaults (via `state_write`) — a fresh `/dod:define`
@@ -663,6 +672,7 @@ mode           : full | delta_reconfirm
 delta_from     : <round-1 diff hash>            (delta mode only)
 reconfirm      : [ { id, file, line, summary } ] (delta mode only)
 task           : <contract.task>
+works_when     : <contract.works_when>
 requirements   : <contract.requirements>
 ```
 
@@ -670,7 +680,8 @@ requirements   : <contract.requirements>
 
 - Run `git diff {{baseline_sha}}...HEAD` **yourself**. Do not read any summary
   of the changes produced by another agent.
-- Judge against `task` and `requirements` only.
+- Judge against `task` and `requirements` only — including whether each
+  requirement's `proves` genuinely proves `works_when`.
 - Classify every finding `blocking` or `advisory`. `blocking` = bug, security
   hole, broken behaviour, spec violation. Everything else is `advisory`.
 - In `delta_reconfirm` mode: review the delta **and** separately re-check each
@@ -791,6 +802,13 @@ read would alter the diff hash and force re-verification.
 The table names **every waiver and every `n/a` exemption**. "Passed" must never
 quietly mean "passed the easy ones".
 
+The findings it shows come **only** from the reviewer's `findings[]`. The root
+agent never adds its own, and never promotes implementer notes, reviewer prose
+outside `findings[]`, or its own observations into findings or user decisions.
+Those are settled **before** `/dod:verify`: a suspected bug or spec violation is
+fixed first; anything else is dropped. Neither is passed to `dod-reviewer` as a
+hint — that would bias the independent review.
+
 ---
 
 ## 8. Decision log
@@ -826,6 +844,7 @@ quietly mean "passed the easy ones".
 | D27 | Schema + reader + writer of each artefact share one file | central schema dir with separate accessors |
 | D28 | `/dod:define` and `/dod:verify` instruct the agent to self-trigger verification the moment it believes a task is done, in the same turn — the gate block is the fallback, not the intended path | rely on the Stop-gate block as the only prompt to verify |
 | D29 | **Reverses D4.** `/dod:define`'s verification table blocks on user confirmation (yes/adjust/cancel) before `contract_write` runs, using a fixed template (Verification / Expected Result / Why This Verification per row). The block covers implementation edits too, not just the contract write — no edit toward the task before the user replies. Confirmation is a single gate, not two: "yes" approves the list AND starts implementation in the same turn — the agent does not stop after `contract_write` and wait to be told to begin | keep D4's silent-print; a status label ("Contract Opened") with no content the user has to read; gate only the file write, allow the agent to start coding while the table sits unanswered; treat confirmation and "begin work" as two separate approvals |
+| D30 | Definition is one chain: agree the task (clarify if ambiguous, don't re-ask if settled) → "how will we know it works?" (`works_when`, required) → "how do we prove that?" (the requirements, each with a required `proves`). The D29 table opens with "It works when:" and its third column is "Proves". Agent/prompt/skill text counts as observable behavior, so `scenario` is N/A only when another row already fully proves `works_when` | an optional free-text `rationale` per requirement; deciding scenario applicability on "is there runnable code" |
 
 ---
 

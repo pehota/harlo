@@ -22,6 +22,15 @@ phrased as a question instead of silence. A block is the fallback for when
 this was skipped, not the intended trigger, and neither is a permission
 check.
 
+**Settle your own observations first.** Before running `/dod:verify`,
+handle every note an implementer subagent returned and everything you
+noticed yourself about the changeset: a suspected bug or spec violation →
+fix it (delegate the fix) before verifying; everything else (polish,
+wording, "could mention", anything the checks or the reviewer already
+cover) → drop it. None of it reaches the user as a finding or a decision,
+and none of it is passed to `dod-reviewer` as a hint — that would bias the
+independent review.
+
 ## Steps
 
 1. **Load the contract.** Assert `status == "open"`:
@@ -129,6 +138,7 @@ check.
    baseline_sha : $CONTRACT_BASELINE_SHA
    mode         : full
    task         : $CONTRACT_TASK
+   works_when   : $CONTRACT_WORKS_WHEN
    requirements : $CONTRACT_REQUIREMENTS
    ```
 
@@ -143,6 +153,7 @@ check.
    delta_from   : <prior result's diff_hash>
    reconfirm    : <prior round's review findings with severity "blocking">
    task         : $CONTRACT_TASK
+   works_when   : $CONTRACT_WORKS_WHEN
    requirements : $CONTRACT_REQUIREMENTS
    ```
 
@@ -197,9 +208,13 @@ check.
    plainly — `n/a` with the contract's reason if inapplicable, `pass` if
    the reviewer confirmed every `doc_paths` entry was updated, `fail` with
    which path(s) the reviewer found missing or stale if not (`dod/base-dod.md`,
-   `dod-define` step 3.4.7); advisory findings are listed too but flagged as
+   `dod-define` step 4); advisory findings are listed too but flagged as
    the user's decision, never auto-fixed (per the repo's standing rule:
    raise non-blocking findings, never silently fix or drop them). The
+   findings you show come **only** from the reviewer's `findings[]` — never
+   add your own, and never promote implementer notes, reviewer prose outside
+   `findings[]`, or your own observations into findings or user decisions
+   (those were settled before verify, see above). The
    gate's own block message will restate check failures, but the agent
    should not wait for the block to inform the user.
 
