@@ -210,7 +210,9 @@ independent review.
    which path(s) the reviewer found missing or stale if not (`dod/base-dod.md`,
    `dod-define` step 4); advisory findings are listed too but flagged as
    the user's decision, never auto-fixed (per the repo's standing rule:
-   raise non-blocking findings, never silently fix or drop them). The
+   raise non-blocking findings, never silently fix or drop them — this
+   applies to the reviewer's `findings[]`; your own observations were
+   already settled, fixed or dropped, before verify). The
    findings you show come **only** from the reviewer's `findings[]` — never
    add your own, and never promote implementer notes, reviewer prose outside
    `findings[]`, or your own observations into findings or user decisions

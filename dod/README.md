@@ -17,7 +17,9 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
 - `/dod:verify` — run the contract's checks and independent review, write a
   result. Self-invoked by the agent; run it yourself if the gate blocks
   asking for it. The independent review also confirms every path in an
-  applicable `docs` requirement's `doc_paths` was actually updated.
+  applicable `docs` requirement's `doc_paths` was actually updated. The pass
+  table shows only the reviewer's findings; the agent's own observations
+  are settled — fixed or dropped — before verify runs.
 
 ## Manual escape hatch
 
