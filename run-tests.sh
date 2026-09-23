@@ -14,6 +14,15 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 
+# Host isolation: a git hook exports repo-local env (a pre-push from a linked
+# worktree sets GIT_DIR; see `git rev-parse --local-env-vars`). Inherited, it
+# overrides every fixture's `git -C <tmpdir>` and the suites write into THIS
+# repo (commits, branches, config, worktrees). Drop it before any suite runs.
+# The suites' test-helpers.sh repeat this for direct runs;
+# test-host-isolation.sh proves it.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 fail=0
 total=0
 

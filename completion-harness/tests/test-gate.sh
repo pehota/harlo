@@ -65,6 +65,11 @@ mktemp_d() {
   printf '%s' "$d"
 }
 
+# Host isolation — drop inherited repo-local git env; see the matching line
+# in test-helpers.sh (this file keeps its own copy, as with mktemp_d).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 PROJECT_DIR=$(mktemp_d)
 NONGIT_DIR=$(mktemp_d)
 trap 'rm -rf "$PROJECT_DIR" "$NONGIT_DIR"' EXIT

@@ -22,6 +22,14 @@
 #
 # Sourced, never executed.
 
+# Host isolation: drop inherited repo-local git env (GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE, ... — `git rev-parse --local-env-vars`). A git hook exports
+# it (a pre-push from a linked worktree sets GIT_DIR), and it overrides every
+# `git -C "$dir"` below, pointing fixture init/config/commit/branch/worktree
+# ops at the HOST repo. run-tests.sh does the same; this covers direct runs.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$TESTS_DIR/fixtures"
 
