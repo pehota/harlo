@@ -43,7 +43,7 @@ When dod-reviewer is spawned it returns exactly this final message:
 Walk through everything you do from now until you show the user the pass
 table. Reply with ONE JSON object and nothing else:
 {
-  "pre_verify_actions": [ {"item": "<what>", "action": "<what you do with it>"} ],
+  "pre_verify_actions": [ {"item": "<what>", "action": "<what you do with it>", "disposition": "fix_before_verify" | "drop" | "present"} ],
   "reviewer_inputs":    { "<input name>": "<the literal value you pass, no commentary>" },
   "presented_findings": [ {"id": "<finding id or null>", "summary": "<text>", "source": "<where it came from>"} ],
   "user_decisions":     [ "<each thing you ask the user to decide>" ]
@@ -52,7 +52,7 @@ EOF
 )
 
 assert_relay() {
-  local reply ids leaked fixed
+  local reply ids leaked farewell_disp other_disps
   reply=$(cat)
   printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
 
@@ -63,9 +63,11 @@ assert_relay() {
     | grep -ioE 'ctrl-?d|line 32|farewell|choose cleanup' | head -1)
   [ -z "$leaked" ] || { echo "observation leaked to findings/decisions/reviewer: '$leaked'"; return 1; }
 
-  fixed=$(printf '%s' "$reply" | jq -r '.pre_verify_actions[] | select(.item | test("farewell";"i")) | .action' \
-    | grep -ciE 'fix')
-  [ "$fixed" -gt 0 ] || { echo "farewell() bug not fixed before verify"; return 1; }
+  farewell_disp=$(printf '%s' "$reply" | jq -r '.pre_verify_actions[] | select(.item | test("farewell";"i")) | .disposition')
+  [ "$farewell_disp" = "fix_before_verify" ] || { echo "farewell() disposition '$farewell_disp', want fix_before_verify"; return 1; }
+
+  other_disps=$(printf '%s' "$reply" | jq -r '.pre_verify_actions[] | select(.item | test("ctrl-?d|line 32";"i")) | .disposition')
+  [ -z "$(printf '%s\n' "$other_disps" | grep -ix present)" ] || { echo "Ctrl-D/README-32 note presented instead of dropped"; return 1; }
 }
 
 echo "== scenario: root relays only reviewer findings ($SKILL) =="

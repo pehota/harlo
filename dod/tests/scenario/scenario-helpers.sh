@@ -6,7 +6,8 @@
 # Not a run-tests.sh suite: run-tests.sh globs dod/tests/test-*.sh only, and
 # these call a real model (slow, costs tokens). Run by hand:
 #   bash dod/tests/scenario/test-<x>.sh [SKILL_PATH]
-# Baseline: git show HEAD:dod/skills/<x>/SKILL.md > /tmp/base.md, pass it.
+# Baseline: git show 39b65b7:dod/skills/<x>/SKILL.md > /tmp/base.md, pass it
+# (39b65b7 is the last commit before the works_when/relay change).
 #
 # Sourced, never executed.
 

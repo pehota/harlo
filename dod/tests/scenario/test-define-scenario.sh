@@ -5,7 +5,7 @@
 #   (a) settled task, skill-text change: records works_when, every
 #       requirement states what it `proves`, and the scenario test is NOT
 #       marked N/A — agent-instruction text is observable behavior.
-#   (b) ambiguous task ("shorten" — to what?), nothing discussed yet:
+#   (b) ambiguous task ("rework" — to what end?), nothing discussed yet:
 #       clarifies with the user first, writes no contract.
 #   (c) the same ambiguous task, already settled in the conversation: does
 #       not re-ask, proceeds to works_when + requirements.
@@ -58,13 +58,13 @@ $REPO_FACTS
 
 $REPLY_SHAPE"
 
-PROMPT_B="/dod:define shorten the Stop gate's block message
+PROMPT_B="/dod:define rework the Stop gate's block message
 
 $REPO_FACTS
 
 $REPLY_SHAPE"
 
-PROMPT_C="/dod:define shorten the Stop gate's block message
+PROMPT_C="/dod:define rework the Stop gate's block message
 
 Earlier in this conversation:
   user:  The Stop gate's block message is too long: when a check fails it
