@@ -18,7 +18,7 @@
 #   - a `scenario` requirement always exists, same rule and same exemption,
 #     enforced by contract__validate_scenario. Distinct decision from e2e
 #     (behavior-change signal, not runner-availability signal) — see
-#     dod-define/SKILL.md step 3.4.6.
+#     dod-define/SKILL.md step 4.
 #   - a `docs` requirement always exists: either `applicable:true` with a
 #     non-empty `doc_paths` array (which doc(s) must be updated), or
 #     `applicable:false` with a non-empty `reason`. Never a `cmd` — unlike
@@ -26,13 +26,15 @@
 #     checks against. Exempted from the base check-shape rule the same way
 #     e2e/scenario are (it never carries real `cmd`/`expect_exit`, even when
 #     applicable), enforced by contract__validate_docs. See
-#     dod-define/SKILL.md step 3.4.7 and dod/base-dod.md.
-#
-# `rationale` (optional, string, any requirement) is advisory only — not
-# validated or enforced here. It carries the "why this requirement" the
-# agent reasoned through at define-time, so the human confirming the table
-# and any later reader can judge whether that reasoning was substantive.
-# Its absence never fails validation; do not add a presence check for it.
+#     dod-define/SKILL.md step 4 and dod/base-dod.md.
+#   - a top-level `works_when` always exists on write: a non-empty string,
+#     the one-sentence answer to "how will we know it works?" that every
+#     requirement is a proof of. Enforced by contract_write only — see
+#     contract_read for why a legacy contract without one is still readable.
+#   - every requirement carries a non-empty `proves` string on write: which
+#     part of `works_when` it proves (dod-define step 4). Enforced by
+#     contract__validate_proves from contract_write only — a legacy contract
+#     carrying the old advisory `rationale` instead still reads.
 
 CONTRACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -105,8 +107,16 @@ contract__validate_docs() {
   ' >/dev/null 2>&1
 }
 
+# contract__validate_proves <json_array> — every requirement has a
+# non-empty `proves` string.
+contract__validate_proves() {
+  local reqs="$1"
+  dod__has_jq || return 1
+  printf '%s' "$reqs" | jq -e 'all(.[]; ((.proves // "") | type == "string" and length > 0))' >/dev/null 2>&1
+}
+
 # contract_write <path> --task-key K --task T --task-source S --session-id ID
-#                        --baseline-sha SHA [--dirty-files JSON_ARR]
+#                        --works-when W --baseline-sha SHA [--dirty-files JSON_ARR]
 #                        --requirements JSON_ARR [--waivers JSON_ARR]
 # Validates before writing. Returns 1 and writes nothing on failure.
 #
@@ -121,7 +131,7 @@ contract__validate_docs() {
 # itself.
 contract_write() {
   local path="$1"; shift
-  local task_key="" task="" task_source="" session_id="" baseline_sha=""
+  local task_key="" task="" task_source="" session_id="" works_when="" baseline_sha=""
   local dirty_files="[]" requirements="[]" waivers="[]"
 
   while [ $# -gt 0 ]; do
@@ -130,6 +140,7 @@ contract_write() {
       --task) task="$2"; shift 2 ;;
       --task-source) task_source="$2"; shift 2 ;;
       --session-id) session_id="$2"; shift 2 ;;
+      --works-when) works_when="$2"; shift 2 ;;
       --baseline-sha) baseline_sha="$2"; shift 2 ;;
       --dirty-files) dirty_files="$2"; shift 2 ;;
       --requirements) requirements="$2"; shift 2 ;;
@@ -139,7 +150,9 @@ contract_write() {
   done
 
   dod__has_jq || return 1
+  [ -n "$works_when" ] || return 1
   contract__validate_requirements "$requirements" || return 1
+  contract__validate_proves "$requirements" || return 1
 
   mkdir -p "$(dirname "$path")" 2>/dev/null
 
@@ -148,6 +161,7 @@ contract_write() {
     --arg task "$task" \
     --arg task_source "$task_source" \
     --arg session_id "$session_id" \
+    --arg works_when "$works_when" \
     --arg baseline_sha "$baseline_sha" \
     --argjson dirty_files "$dirty_files" \
     --argjson requirements "$requirements" \
@@ -159,6 +173,7 @@ contract_write() {
       task: $task,
       task_source: $task_source,
       session_id: $session_id,
+      works_when: $works_when,
       baseline: { sha: $baseline_sha, dirty_files: $dirty_files },
       waivers: $waivers,
       requirements: $requirements
@@ -175,6 +190,9 @@ contract_write() {
 
 # contract_read <path> — sets CONTRACT_* globals. Returns 1 on missing file,
 # malformed JSON, or a validation failure, without setting stale globals.
+# A contract written before `works_when`/`proves` existed reads back with
+# CONTRACT_WORKS_WHEN="" (and its requirements as-is) rather than being
+# rejected — same back-compat stance as the scenario/docs synthesis below.
 contract_read() {
   local path="$1"
   CONTRACT_TASK_KEY=""
@@ -182,6 +200,7 @@ contract_read() {
   CONTRACT_TASK=""
   CONTRACT_TASK_SOURCE=""
   CONTRACT_SESSION_ID=""
+  CONTRACT_WORKS_WHEN=""
   CONTRACT_BASELINE_SHA=""
   CONTRACT_REQUIREMENTS="[]"
   CONTRACT_WAIVERS="[]"
@@ -216,6 +235,7 @@ contract_read() {
   CONTRACT_TASK=$(jq -r '.task // ""' "$path" 2>/dev/null)
   CONTRACT_TASK_SOURCE=$(jq -r '.task_source // ""' "$path" 2>/dev/null)
   CONTRACT_SESSION_ID=$(jq -r '.session_id // ""' "$path" 2>/dev/null)
+  CONTRACT_WORKS_WHEN=$(jq -r '.works_when // ""' "$path" 2>/dev/null)
   CONTRACT_BASELINE_SHA=$(jq -r '.baseline.sha // ""' "$path" 2>/dev/null)
   CONTRACT_REQUIREMENTS="$reqs"
   CONTRACT_WAIVERS=$(jq -c '.waivers // []' "$path" 2>/dev/null)

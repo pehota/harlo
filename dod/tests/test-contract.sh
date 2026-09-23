@@ -14,7 +14,7 @@ CFILE="$REPO/.dod/main/contract.json"
 
 # Shared fixture: e2e/scenario/docs all inapplicable, for tests that don't
 # care about those three and just need a valid requirements array.
-NA3='{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}'
+NA3='{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"}'
 
 # --- round trip --------------------------------------------------------------
 contract_write "$CFILE" \
@@ -22,8 +22,8 @@ contract_write "$CFILE" \
   --task "implement the thing" \
   --task-source "argument" \
   --session-id "sid-1" \
-  --baseline-sha "abc123" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3,{\"id\":\"review\",\"type\":\"judgement\",\"agent\":\"dod-reviewer\",\"source\":\"protocol\"}]"
+  --works-when "test fixture" --baseline-sha "abc123" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3,{\"id\":\"review\",\"type\":\"judgement\",\"agent\":\"dod-reviewer\",\"source\":\"protocol\",\"proves\":\"test fixture\"}]"
 
 if [ -f "$CFILE" ]; then
   ok "contract_write creates the file"
@@ -38,12 +38,61 @@ eq "round-trip task" "implement the thing" "$CONTRACT_TASK"
 eq "round-trip baseline_sha" "abc123" "$CONTRACT_BASELINE_SHA"
 eq "round-trip waivers default to empty" "[]" "$CONTRACT_WAIVERS"
 
+# --- works_when: required, non-empty, round-trips ---------------------------
+WW_FILE="$REPO/.dod/main/works-when-contract.json"
+WW_REQS="[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"
+if contract_write "$WW_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --baseline-sha "abc" --requirements "$WW_REQS"; then
+  bad "contract_write rejects a contract without works_when" "accepted"
+else
+  ok "contract_write rejects a contract without works_when"
+fi
+if contract_write "$WW_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --works-when "" --baseline-sha "abc" --requirements "$WW_REQS"; then
+  bad "contract_write rejects an empty works_when" "accepted"
+else
+  ok "contract_write rejects an empty works_when"
+fi
+contract_write "$WW_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --works-when "the CLI prints hello" --baseline-sha "abc" --requirements "$WW_REQS"
+contract_read "$WW_FILE"
+eq "works_when round-trips via contract_read" "the CLI prints hello" "$CONTRACT_WORKS_WHEN"
+
+# --- proves: required, non-empty on every requirement, round-trips ----------
+PR_FILE="$REPO/.dod/main/proves-contract.json"
+if contract_write "$PR_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --works-when "w" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"; then
+  bad "contract_write rejects a requirement without proves" "accepted"
+else
+  ok "contract_write rejects a requirement without proves"
+fi
+if contract_write "$PR_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --works-when "w" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"\"},$NA3]"; then
+  bad "contract_write rejects an empty proves" "accepted"
+else
+  ok "contract_write rejects an empty proves"
+fi
+contract_write "$PR_FILE" \
+  --task-key "main" --task "x" --task-source "argument" --session-id "s" \
+  --works-when "w" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"hello logic holds\"},$NA3]"
+contract_read "$PR_FILE"
+PROVES=$(printf '%s' "$CONTRACT_REQUIREMENTS" | jq -r '.[] | select(.id == "tests") | .proves' 2>/dev/null)
+eq "proves round-trips via contract_read" "hello logic holds" "$PROVES"
+
 # --- waivers round-trip --------------------------------------------------------
 WFILE="$REPO/.dod/main/waived-contract.json"
 contract_write "$WFILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"lint\",\"type\":\"check\",\"cmd\":\"eslint .\",\"expect_exit\":0,\"source\":\"auto-detected\"},$NA3]" \
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"lint\",\"type\":\"check\",\"cmd\":\"eslint .\",\"expect_exit\":0,\"source\":\"auto-detected\",\"proves\":\"test fixture\"},$NA3]" \
   --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
 contract_read "$WFILE"
 COUNT=$(printf '%s' "$CONTRACT_WAIVERS" | jq 'length' 2>/dev/null)
@@ -66,8 +115,8 @@ fi
 UNTYPED_FILE="$REPO/.dod/main/untyped-contract.json"
 if contract_write "$UNTYPED_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"mystery","source":"protocol"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"mystery","source":"protocol","proves":"test fixture"}]'; then
   bad "contract_write rejects a requirement with neither type" "accepted"
 else
   ok "contract_write rejects a requirement with neither type"
@@ -82,8 +131,8 @@ fi
 NOCMD_FILE="$REPO/.dod/main/nocmd-contract.json"
 if contract_write "$NOCMD_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","expect_exit":0,"source":"protocol"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","expect_exit":0,"source":"protocol","proves":"test fixture"}]'; then
   bad "contract_write rejects a check requirement missing cmd" "accepted"
 else
   ok "contract_write rejects a check requirement missing cmd"
@@ -100,8 +149,8 @@ LATCH_SFILE="$LATCH_DIR/state.json"
 
 contract_write "$LATCH_CFILE" \
   --task-key "latch-test" --task "first pass" --task-source "argument" \
-  --session-id "s" --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"
+  --session-id "s" --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"
 state_arm_latch "$LATCH_SFILE"
 state_read "$LATCH_SFILE"
 eq "latch-test setup: latched after arming" "true" "$STATE_LATCHED"
@@ -109,8 +158,8 @@ eq "latch-test setup: latched after arming" "true" "$STATE_LATCHED"
 # amend: contract_write runs again for the same task_key
 contract_write "$LATCH_CFILE" \
   --task-key "latch-test" --task "amended task" --task-source "argument" \
-  --session-id "s" --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"
+  --session-id "s" --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"true\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"
 state_read "$LATCH_SFILE"
 eq "contract_write resets a stale latch on amend" "false" "$STATE_LATCHED"
 
@@ -120,8 +169,8 @@ eq "contract_write resets a stale latch on amend" "false" "$STATE_LATCHED"
 E2E_APPLICABLE_FILE="$REPO/.dod/main/e2e-applicable-contract.json"
 if contract_write "$E2E_APPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":\"npm run e2e\",\"expect_exit\":0,\"source\":\"task\",\"applicable\":true,\"reason\":\"adds user-facing flow\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":\"npm run e2e\",\"expect_exit\":0,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":true,\"reason\":\"adds user-facing flow\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   ok "contract_write accepts e2e applicable:true with a cmd"
 else
   bad "contract_write accepts e2e applicable:true with a cmd" "rejected"
@@ -131,8 +180,8 @@ fi
 E2E_INAPPLICABLE_FILE="$REPO/.dod/main/e2e-inapplicable-contract.json"
 if contract_write "$E2E_INAPPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"; then
   ok "contract_write accepts e2e applicable:false with a reason"
 else
   bad "contract_write accepts e2e applicable:false with a reason" "rejected"
@@ -142,8 +191,8 @@ fi
 E2E_MISSING_FILE="$REPO/.dod/main/e2e-missing-contract.json"
 if contract_write "$E2E_MISSING_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"test fixture"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"}]'; then
   bad "contract_write rejects a requirements array with no e2e entry" "accepted"
 else
   ok "contract_write rejects a requirements array with no e2e entry"
@@ -153,8 +202,8 @@ fi
 E2E_NOCMD_FILE="$REPO/.dod/main/e2e-nocmd-contract.json"
 if contract_write "$E2E_NOCMD_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":true},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":true},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   bad "contract_write rejects e2e applicable:true with no cmd" "accepted"
 else
   ok "contract_write rejects e2e applicable:true with no cmd"
@@ -164,8 +213,8 @@ fi
 E2E_NOREASON_FILE="$REPO/.dod/main/e2e-noreason-contract.json"
 if contract_write "$E2E_NOREASON_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   bad "contract_write rejects e2e applicable:false with empty reason" "accepted"
 else
   ok "contract_write rejects e2e applicable:false with empty reason"
@@ -174,8 +223,8 @@ fi
 E2E_NOREASONFIELD_FILE="$REPO/.dod/main/e2e-noreasonfield-contract.json"
 if contract_write "$E2E_NOREASONFIELD_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"protocol\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   bad "contract_write rejects e2e applicable:false with missing reason field" "accepted"
 else
   ok "contract_write rejects e2e applicable:false with missing reason field"
@@ -188,8 +237,8 @@ fi
 SCENARIO_APPLICABLE_FILE="$REPO/.dod/main/scenario-applicable-contract.json"
 if contract_write "$SCENARIO_APPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":\"npm run scenario\",\"expect_exit\":0,\"source\":\"task\",\"applicable\":true,\"reason\":\"changes observable behavior\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":\"npm run scenario\",\"expect_exit\":0,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":true,\"reason\":\"changes observable behavior\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   ok "contract_write accepts scenario applicable:true with a cmd"
 else
   bad "contract_write accepts scenario applicable:true with a cmd" "rejected"
@@ -198,8 +247,8 @@ fi
 SCENARIO_INAPPLICABLE_FILE="$REPO/.dod/main/scenario-inapplicable-contract.json"
 if contract_write "$SCENARIO_INAPPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"; then
   ok "contract_write accepts scenario applicable:false with a reason"
 else
   bad "contract_write accepts scenario applicable:false with a reason" "rejected"
@@ -208,8 +257,8 @@ fi
 SCENARIO_MISSING_FILE="$REPO/.dod/main/scenario-missing-contract.json"
 if contract_write "$SCENARIO_MISSING_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"}]'; then
   bad "contract_write rejects a requirements array with no scenario entry" "accepted"
 else
   ok "contract_write rejects a requirements array with no scenario entry"
@@ -218,8 +267,8 @@ fi
 SCENARIO_NOCMD_FILE="$REPO/.dod/main/scenario-nocmd-contract.json"
 if contract_write "$SCENARIO_NOCMD_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":true},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":true},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   bad "contract_write rejects scenario applicable:true with no cmd" "accepted"
 else
   ok "contract_write rejects scenario applicable:true with no cmd"
@@ -228,8 +277,8 @@ fi
 SCENARIO_NOREASON_FILE="$REPO/.dod/main/scenario-noreason-contract.json"
 if contract_write "$SCENARIO_NOREASON_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"e2e\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"},{\"id\":\"scenario\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"\"},{\"id\":\"docs\",\"type\":\"check\",\"cmd\":null,\"expect_exit\":null,\"source\":\"task\",\"proves\":\"test fixture\",\"applicable\":false,\"reason\":\"test fixture\"}]"; then
   bad "contract_write rejects scenario applicable:false with empty reason" "accepted"
 else
   ok "contract_write rejects scenario applicable:false with empty reason"
@@ -242,8 +291,8 @@ fi
 DOCS_APPLICABLE_FILE="$REPO/.dod/main/docs-applicable-contract.json"
 if contract_write "$DOCS_APPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["README.md"],"reason":"changes documented behavior"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":true,"doc_paths":["README.md"],"reason":"changes documented behavior"}]'; then
   ok "contract_write accepts docs applicable:true with doc_paths"
 else
   bad "contract_write accepts docs applicable:true with doc_paths" "rejected"
@@ -255,8 +304,8 @@ eq "docs applicable round-trips doc_paths" "README.md" "$DOCS_PATHS"
 DOCS_INAPPLICABLE_FILE="$REPO/.dod/main/docs-inapplicable-contract.json"
 if contract_write "$DOCS_INAPPLICABLE_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\"},$NA3]"; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements "[{\"id\":\"tests\",\"type\":\"check\",\"cmd\":\"npm test\",\"expect_exit\":0,\"source\":\"protocol\",\"proves\":\"test fixture\"},$NA3]"; then
   ok "contract_write accepts docs applicable:false with a reason"
 else
   bad "contract_write accepts docs applicable:false with a reason" "rejected"
@@ -265,8 +314,8 @@ fi
 DOCS_MISSING_FILE="$REPO/.dod/main/docs-missing-contract.json"
 if contract_write "$DOCS_MISSING_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"}]'; then
   bad "contract_write rejects a requirements array with no docs entry" "accepted"
 else
   ok "contract_write rejects a requirements array with no docs entry"
@@ -275,8 +324,8 @@ fi
 DOCS_EMPTYPATHS_FILE="$REPO/.dod/main/docs-emptypaths-contract.json"
 if contract_write "$DOCS_EMPTYPATHS_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":[]}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":true,"doc_paths":[]}]'; then
   bad "contract_write rejects docs applicable:true with empty doc_paths" "accepted"
 else
   ok "contract_write rejects docs applicable:true with empty doc_paths"
@@ -285,8 +334,8 @@ fi
 DOCS_NOPATHSFIELD_FILE="$REPO/.dod/main/docs-nopathsfield-contract.json"
 if contract_write "$DOCS_NOPATHSFIELD_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":true}]'; then
   bad "contract_write rejects docs applicable:true with missing doc_paths field" "accepted"
 else
   ok "contract_write rejects docs applicable:true with missing doc_paths field"
@@ -295,8 +344,8 @@ fi
 DOCS_NOREASON_FILE="$REPO/.dod/main/docs-noreason-contract.json"
 if contract_write "$DOCS_NOREASON_FILE" \
   --task-key "main" --task "x" --task-source "argument" --session-id "s" \
-  --baseline-sha "abc" \
-  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":false,"reason":""}]'; then
+  --works-when "test fixture" --baseline-sha "abc" \
+  --requirements '[{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","proves":"test fixture","applicable":false,"reason":""}]'; then
   bad "contract_write rejects docs applicable:false with empty reason" "accepted"
 else
   ok "contract_write rejects docs applicable:false with empty reason"
@@ -338,6 +387,37 @@ DOCS_COUNT=$(printf '%s' "$CONTRACT_REQUIREMENTS" | jq '[.[] | select(.id == "do
 eq "contract_read synthesizes exactly one docs entry" "1" "$DOCS_COUNT"
 DOCS_APPLICABLE=$(printf '%s' "$CONTRACT_REQUIREMENTS" | jq -r '.[] | select(.id == "docs") | .applicable' 2>/dev/null)
 eq "contract_read synthesizes docs as applicable:false" "false" "$DOCS_APPLICABLE"
+
+# --- contract_read tolerates a legacy contract with rationale, no proves ----
+# Written before `works_when`/`proves` existed: `rationale` instead of
+# `proves`, no top-level works_when. Must still read — proves is enforced on
+# write only.
+LEGACY_RAT_FILE="$REPO/.dod/main/legacy-rationale-contract.json"
+cat > "$LEGACY_RAT_FILE" <<'EOF'
+{
+  "version": 1,
+  "task_key": "main",
+  "status": "open",
+  "task": "legacy task",
+  "task_source": "argument",
+  "session_id": "s",
+  "baseline": { "sha": "abc", "dirty_files": [] },
+  "waivers": [],
+  "requirements": [
+    {"id":"tests","type":"check","cmd":"npm test","expect_exit":0,"source":"protocol","rationale":"legacy why"},
+    {"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"legacy fixture"},
+    {"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"legacy fixture","rationale":"legacy why"},
+    {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol"},
+    {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","applicable":false,"reason":"legacy fixture"}
+  ]
+}
+EOF
+if contract_read "$LEGACY_RAT_FILE"; then
+  ok "contract_read accepts a legacy rationale-only contract"
+else
+  bad "contract_read accepts a legacy rationale-only contract" "rejected"
+fi
+eq "legacy rationale-only contract reads works_when as empty" "" "$CONTRACT_WORKS_WHEN"
 
 echo
 echo "contract.sh: $PASS passed, $FAIL failed"
