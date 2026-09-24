@@ -9,6 +9,9 @@
 #       clarifies with the user first, writes no contract.
 #   (c) the same ambiguous task, already settled in the conversation: does
 #       not re-ask, proceeds to works_when + requirements.
+#   (a)+(c) also: dod-context-collector is spawned first — once the task is
+#       clear, before works_when — its verdict is relayed above the table,
+#       and contract_write carries it as --brief. (b) spawns nothing.
 #
 # Usage: bash dod/tests/scenario/test-define-scenario.sh [DOD_DEFINE_SKILL_PATH]
 
@@ -32,6 +35,9 @@ Repo facts (you have no tools in this exercise — describe, don't execute):
 - Test command: `bash run-tests.sh` (the user confirmed it). No lint, no build.
 - No e2e stack exists.
 - docs/design-v2.md describes the define/verify flows and the Stop gate.
+- Available subagent types: dod-reviewer, dod-context-collector. If you spawn
+  dod-context-collector, assume its final message is
+  {"applicable":true,"path":".dod/main/brief.md"}. The task key is "main".
 EOF
 )
 
@@ -41,9 +47,16 @@ confirmation table — the contract_write call you would make once the user
 answers "yes" to it (assume that yes; step 6's wait is honoured by the
 table). "clarifying_questions" holds any questions you ask before showing a
 table ([] if none). If you stop at questions, confirmation_table and
-contract_write are null; if you show a table, contract_write is required. Reply
-with ONE JSON object and nothing else:
+contract_write are null; if you show a table, contract_write is required.
+"actions_in_order" lists everything you do this turn, in order, one short
+entry each (e.g. "ask clarifying questions", "spawn <agent type>", "write
+works_when", "show confirmation table", "contract_write"). "spawned_agents"
+lists every subagent you spawn this turn, in order ([] if none). Reply with
+ONE JSON object and nothing else:
 {
+  "actions_in_order": [ "..." ],
+  "spawned_agents": [ {"agent": "<subagent type>", "inputs": { "<name>": "<value>" }} ],
+  "text_above_table": "<the line(s) you print directly above \"It works when\", or null>",
   "clarifying_questions": [ "..." ],
   "confirmation_table": [ {"verification": "...", "expected_result": "...", "proves": "..."} ] | null,
   "contract_write": { "<flag, e.g. --task>": <value exactly as you would pass it> } | null
@@ -106,11 +119,27 @@ define__assert_proofs() {
   [ "$blank" -eq 0 ] || { echo "$blank table rows with empty proves"; return 1; }
 }
 
+# define__assert_collector — (a)/(c): dod-context-collector spawned first,
+# before works_when; its verdict shown above the table and passed as --brief.
+define__assert_collector() {
+  local reply="$1" first ic iw brief
+  first=$(printf '%s' "$reply" | jq -r '.spawned_agents[0].agent // ""')
+  [ "$first" = "dod-context-collector" ] || { echo "first spawned agent '$first', want dod-context-collector"; return 1; }
+  ic=$(printf '%s' "$reply" | jq '[.actions_in_order // [] | to_entries[] | select(.value | test("context.collector"; "i")) | .key] | first // -1')
+  iw=$(printf '%s' "$reply" | jq '[.actions_in_order // [] | to_entries[] | select((.value | test("works.when"; "i")) and (.value | test("context.collector"; "i") | not)) | .key] | first // -1')
+  [ "$ic" -ge 0 ] || { echo "collector spawn not in actions_in_order"; return 1; }
+  [ "$iw" -ge 0 ] && [ "$ic" -lt "$iw" ] || { echo "collector spawned at action $ic, works_when at $iw — want before"; return 1; }
+  brief=$(printf '%s' "$reply" | jq -c '(.contract_write // {})["--brief"] // empty | if type == "string" then fromjson else . end' 2>/dev/null)
+  [ "$(printf '%s' "$brief" | jq -r '.path // ""' 2>/dev/null)" = ".dod/main/brief.md" ] || { echo "contract_write --brief is '$brief', want the collector's verdict"; return 1; }
+  printf '%s' "$reply" | jq -r '.text_above_table // ""' | grep -q '\.dod/main/brief\.md' || { echo "brief path not shown above the table"; return 1; }
+}
+
 assert_settled_skill_change() {
   local reply reqs sc_app sc_cmd
   reply=$(cat)
   printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
   define__assert_proofs "$reply" || return 1
+  define__assert_collector "$reply" || return 1
 
   reqs=$(define__reqs "$reply")
   sc_app=$(printf '%s' "$reqs" | jq -r '.[] | select(.id == "scenario") | .applicable')
@@ -127,13 +156,15 @@ assert_ambiguous_clarifies() {
   cw=$(printf '%s' "$reply" | jq -r '.contract_write // empty | tostring')
   [ "$nq" -gt 0 ] || { echo "no clarifying questions on an ambiguous task"; return 1; }
   [ -z "$cw" ] || { echo "wrote a contract before clarifying"; return 1; }
+  [ "$(printf '%s' "$reply" | jq '.spawned_agents // [] | length')" -eq 0 ] || { echo "spawned a subagent on an unclear task"; return 1; }
 }
 
 assert_settled_ambiguous() {
   local reply
   reply=$(cat)
   printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
-  define__assert_proofs "$reply"
+  define__assert_proofs "$reply" || return 1
+  define__assert_collector "$reply"
 }
 
 fail=0

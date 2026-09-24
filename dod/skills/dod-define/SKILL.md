@@ -35,6 +35,24 @@ safety net for when you fail, not the plan.
    until the task is clear and agreed. If the conversation already settled
    it, proceed without re-asking.
 
+   **The moment the task is agreed — and not before — spawn
+   `dod-context-collector`**, before you write `works_when`. Use the `Task`
+   tool with `subagent_type: dod-context-collector` (or the equivalent agent
+   invocation for this environment), in the background, with:
+   ```
+   task       : <the agreed task text>
+   brief_path : .dod/<TASK_KEY>/brief.md     (TASK_KEY=$(dod_task_key "$PWD"))
+   ```
+   It writes the context brief — the project standards and domain invariants
+   relevant to this task — and returns one line of JSON:
+   `{"applicable":true,"path":"..."}` or `{"applicable":false,"reason":"..."}`.
+   That line is the brief's verdict; you relay it unchanged. **Never write,
+   edit or summarise the brief yourself, and never declare it N/A yourself**
+   — a fresh agent collects it so the implementer never picks which
+   standards apply to its own work. Continue with steps 3-5 while it runs;
+   await its verdict before step 6. If it returns no valid verdict, spawn it
+   again — never substitute your own. An unclear task spawns nothing.
+
 3. **Q1 — "How will we know it works?"** From the agreed task, write
    `works_when`: one sentence, "It works when <concrete observable outcome>"
    — what a user or caller would see, not which files change. Everything
@@ -97,11 +115,19 @@ safety net for when you fail, not the plan.
    agent-invented, and is load-bearing for the pass table (step 8 of
    `/dod:verify`) and any later audit of why a requirement didn't gate.
 
+   A `review` waiver never skips the review: it sets the **review depth** to
+   `scope` — `dod-reviewer` runs the scope check only. You may *propose* it
+   (e.g. for a one-line change), but only the user's own words create it,
+   recorded like any waiver: `{"id":"review","reason":"user: <their
+   words>"}` (`contract_write` rejects a `review` waiver without the
+   `user: ` prefix).
+
 6. **Present the verification table and wait for confirmation — this
    blocks.** Before writing anything, show the user exactly what will
    decide "done", using this template:
 
    ```
+   Context brief: <brief path>   |   Context brief: N/A: <collector's reason>
    It works when: <works_when>
 
    Here's how I will prove it:
@@ -118,6 +144,8 @@ safety net for when you fail, not the plan.
    Does this look right? (yes / adjust / cancel)
    ```
 
+   The "Context brief" line relays the collector's verdict (step 2)
+   verbatim — its path, or `N/A:` with its reason.
    One row per requirement, `e2e`/`scenario`/`docs`/review always present
    (N/A rows carry their reason, never dropped). "Proves" is the row's
    `proves` and is never blank; a waived row (step 5) carries the user's
@@ -166,6 +194,7 @@ safety net for when you fail, not the plan.
      --session-id "<session id if known, else empty>" \
      --works-when "It works when <observable outcome>" \
      --baseline-sha "$HEAD_SHA" \
+     --brief '<the collector's verdict JSON from step 2, unchanged>' \
      --requirements '[
        {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected","proves":"<which part of works_when>"},
        {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>","proves":"<...>"},
@@ -203,6 +232,8 @@ safety net for when you fail, not the plan.
 
    `--works-when` and a non-empty `proves` on every requirement (an N/A one
    included) are required — `contract_write` rejects the contract otherwise.
+   So is `--brief`: `{"applicable":true,"path":".dod/<key>/brief.md"}` (the
+   file must exist and be non-empty) or `{"applicable":false,"reason":"..."}`.
 
    Omit `--waivers` (or pass `'[]'`) when step 5 found none — do not
    fabricate an empty-reason waiver just to fill the flag.
@@ -210,7 +241,10 @@ safety net for when you fail, not the plan.
 9. **Confirm the contract is open** with a short one-line note (SHA + "ready
    to start") — the verification table already shown in step 6 is the
    substance; don't repeat it. **Then start implementing the task
-   immediately, in this same turn.** The user's "yes" in step 6 approved both
+   immediately, in this same turn.** Before your first edit, read the
+   context brief (if applicable), and pass its path to **every** implementer
+   subagent you delegate to, with the instruction to read it before editing
+   and to follow the standards, invariants and idioms it cites. The user's "yes" in step 6 approved both
    the verification list AND starting work — it is not a separate go-ahead
    you wait to be asked for again. Do not stop and hand control back after
    writing the contract; the contract write is a means to the task, not the
@@ -232,3 +266,15 @@ amend changes what "done" means, so it needs the same confirmation a fresh
 open does) before `contract_write` for the same `task_key`. There is no
 separate "fresh task" flag — amend always overwrites the existing contract
 for this `task_key`, same confirmation gate either way.
+
+- **Reuse the existing brief.** Do not re-spawn the collector: pass the open
+  contract's brief (`$CONTRACT_BRIEF` from `contract_read`) unchanged as
+  `--brief`. Only a legacy contract without a brief (it reads as
+  `applicable:false`, "contract predates the context brief") spawns the
+  collector as in step 2.
+- **Scope-creep "accept & amend"** (the user accepted a `/dod:verify`
+  scope-creep finding into the task): widen the task to cover the accepted
+  change, and keep the baseline — skip step 7 and pass
+  `--baseline-sha "$CONTRACT_BASELINE_SHA"`, so the review still covers
+  every change since the task began. The next `/dod:verify` reviews it in
+  `full` mode (its step 5), since the creep stop skipped lenses 2-6.

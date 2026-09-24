@@ -18,11 +18,14 @@ run_track() {
 EOF
 }
 
+NA_BRIEF='{"applicable":false,"reason":"test fixture"}'
+
 open_contract() {
   local repo="$1" key="$2"
   contract_write "$repo/.dod/$key/contract.json" \
     --task-key "$key" --task "do the thing" --task-source "argument" \
     --session-id "sid-1" --works-when "test fixture" --baseline-sha "$(git -C "$repo" rev-parse HEAD)" \
+    --brief "$NA_BRIEF" \
     --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"}]'
 }
 
@@ -82,6 +85,30 @@ if state_has_edit_for_prompt "$REPO/.dod/main/state.json" "p2"; then
 else
   ok "state_has_edit_for_prompt: false for different prompt"
 fi
+
+# --- .dod/ writes are ignored: no edit logged, no nudge ---------------------
+# Absolute path under $PROJECT_DIR/.dod/
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+OUT=$(run_track "$REPO" "Edit" "$REPO/.dod/main/result.json" "p1")
+eq "dod-dir write (absolute): silent, no nudge" "" "$OUT"
+state_read "$REPO/.dod/main/state.json"
+COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+eq "dod-dir write (absolute): nothing logged" "0" "$COUNT"
+
+# Relative path under .dod/
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+OUT=$(run_track "$REPO" "Edit" ".dod/main/contract.json" "p1")
+eq "dod-dir write (relative): silent, no nudge" "" "$OUT"
+state_read "$REPO/.dod/main/state.json"
+COUNT=$(printf '%s' "$STATE_EDITS" | jq 'length' 2>/dev/null)
+eq "dod-dir write (relative): nothing logged" "0" "$COUNT"
+
+# No contract open: a .dod/ write must not trigger the no-contract nudge either
+REPO=$(dod__test_make_repo)
+OUT=$(run_track "$REPO" "Edit" ".dod/main/contract.json" "p1")
+eq "dod-dir write, no contract: no nudge printed" "" "$OUT"
 
 echo
 echo "track.sh: $PASS passed, $FAIL failed"

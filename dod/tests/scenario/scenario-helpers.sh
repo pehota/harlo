@@ -43,3 +43,18 @@ scenario_run() {
   done
   return $fail
 }
+
+# scenario_model_tools <system_prompt_file> <user_prompt> <cwd> <tools> — like
+# scenario_model, but runs inside <cwd> (a throwaway fixture repo) with the
+# given comma-separated built-in tools and edits auto-accepted there
+# (acceptEdits confines writes to the working directory; anything else that
+# would prompt is denied). Prints the reply's last JSON line.
+scenario_model_tools() {
+  local sys="$1" user="$2" cwd="$3" tools="$4" out
+  out=$(cd "$cwd" && printf '%s' "$user" | CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p \
+    --model sonnet --tools "$tools" --setting-sources "" --strict-mcp-config \
+    --disable-slash-commands --no-session-persistence \
+    --permission-mode acceptEdits --permission-prompts none \
+    --system-prompt "$(cat "$sys")" 2>&1)
+  printf '%s\n' "$out" | grep -E '^[[:space:]]*\{.*\}[[:space:]]*$' | tail -n 1
+}

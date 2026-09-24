@@ -35,6 +35,12 @@
 # Fires only on tools that edit files (Edit, Write, NotebookEdit) — a Read or
 # Bash call is not "an edit" for D8 purposes and must not arm anything.
 #
+# A write under .dod/ (absolute under $PROJECT_DIR, or relative) is dod's own
+# bookkeeping (contract.json, result.json, state.json, ...), never task
+# work — excluded from both responsibilities above (no edit logged, no
+# nudge), same rationale as gitref.sh's dod_diff_hash excluding .dod/ from
+# the diff hash.
+#
 # No `set -e`, no `set -u`, no pipefail — every git/jq call guarded
 # individually, matching gate.sh's fail-open discipline. A bug here must
 # never block a tool call.
@@ -77,6 +83,14 @@ case "$TOOL_NAME" in
   *) exit 0 ;;
 esac
 [ -n "$FILE_PATH" ] || exit 0
+
+# A write under .dod/ (absolute, under $PROJECT_DIR, or relative) is dod's
+# OWN bookkeeping, never task work — it must not be logged as an edit (D8
+# would then treat writing a result.json as "the agent claimed this task")
+# and must not trigger the no-contract nudge either.
+case "$FILE_PATH" in
+  "$PROJECT_DIR"/.dod/*|.dod/*) exit 0 ;;
+esac
 
 TASK_KEY=$(dod_task_key "$PROJECT_DIR")
 [ -n "$TASK_KEY" ] || TASK_KEY="session-${SESSION_ID:-unknown}"

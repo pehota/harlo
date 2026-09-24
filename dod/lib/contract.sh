@@ -35,6 +35,19 @@
 #     part of `works_when` it proves (dod-define step 4). Enforced by
 #     contract__validate_proves from contract_write only — a legacy contract
 #     carrying the old advisory `rationale` instead still reads.
+#   - a top-level `brief` always exists on write (ADR 0004): either
+#     `applicable:true` with `path` pointing at an existing, non-empty file
+#     (a relative path resolves against the repo root, i.e.
+#     `$(dirname contract_path)/../..`), or `applicable:false` with a
+#     non-empty `reason`. Enforced by contract__validate_brief from
+#     contract_write only — a legacy contract written before the brief
+#     existed still reads, via contract_read's synthesized
+#     `{"applicable":false,"reason":"contract predates the context brief"}`,
+#     mirroring the scenario/docs synthesis above.
+#   - a waiver with `id:"review"` (review depth `scope`, ADR 0004) must carry
+#     a `reason` starting `"user: "` — the scope depth is the user's explicit
+#     call, never an agent's inference. Enforced by contract__validate_waivers
+#     from contract_write only.
 
 CONTRACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -115,6 +128,50 @@ contract__validate_proves() {
   printf '%s' "$reqs" | jq -e 'all(.[]; ((.proves // "") | type == "string" and length > 0))' >/dev/null 2>&1
 }
 
+# contract__validate_brief <contract_path> <brief_json> — applicable:true
+# needs `path` of an existing, non-empty file (a relative path resolves
+# against the repo root, $(dirname contract_path)/../..); applicable:false
+# needs a non-empty `reason`. See the header invariant.
+contract__validate_brief() {
+  local contract_path="$1" brief="$2" applicable brief_path repo_root resolved
+  dod__has_jq || return 1
+  printf '%s' "$brief" | jq -e '. != null and type == "object"' >/dev/null 2>&1 || return 1
+
+  applicable=$(printf '%s' "$brief" | jq -r '.applicable' 2>/dev/null)
+  case "$applicable" in
+    true)
+      brief_path=$(printf '%s' "$brief" | jq -r '.path // ""' 2>/dev/null)
+      [ -n "$brief_path" ] || return 1
+      case "$brief_path" in
+        /*) resolved="$brief_path" ;;
+        *)
+          repo_root="$(dirname "$contract_path")/../.."
+          resolved="$repo_root/$brief_path"
+          ;;
+      esac
+      [ -s "$resolved" ] || return 1
+      ;;
+    false)
+      printf '%s' "$brief" | jq -e '((.reason // "") | length) > 0' >/dev/null 2>&1 || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# contract__validate_waivers <json_array> — a waiver with id "review" (review
+# depth "scope", ADR 0004) must carry a reason starting "user: ". See the
+# header invariant.
+contract__validate_waivers() {
+  local waivers="$1"
+  dod__has_jq || return 1
+  printf '%s' "$waivers" | jq -e '
+    all(.[]; .id != "review" or ((.reason // "") | startswith("user: ")))
+  ' >/dev/null 2>&1
+}
+
 # contract_write <path> --task-key K --task T --task-source S --session-id ID
 #                        --works-when W --baseline-sha SHA [--dirty-files JSON_ARR]
 #                        --requirements JSON_ARR [--waivers JSON_ARR]
@@ -132,7 +189,7 @@ contract__validate_proves() {
 contract_write() {
   local path="$1"; shift
   local task_key="" task="" task_source="" session_id="" works_when="" baseline_sha=""
-  local dirty_files="[]" requirements="[]" waivers="[]"
+  local dirty_files="[]" requirements="[]" waivers="[]" brief=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -145,16 +202,25 @@ contract_write() {
       --dirty-files) dirty_files="$2"; shift 2 ;;
       --requirements) requirements="$2"; shift 2 ;;
       --waivers) waivers="$2"; shift 2 ;;
+      --brief) brief="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
 
   dod__has_jq || return 1
   [ -n "$works_when" ] || return 1
+  [ -n "$brief" ] || return 1
   contract__validate_requirements "$requirements" || return 1
   contract__validate_proves "$requirements" || return 1
+  contract__validate_waivers "$waivers" || return 1
 
+  # mkdir before brief validation: a relative brief path resolves against
+  # $(dirname path)/../.. (the repo root), which requires $(dirname path)
+  # (the task's .dod/<key> dir) to already exist for that traversal to
+  # resolve on a brand-new task.
   mkdir -p "$(dirname "$path")" 2>/dev/null
+
+  contract__validate_brief "$path" "$brief" || return 1
 
   jq -n \
     --arg task_key "$task_key" \
@@ -166,6 +232,7 @@ contract_write() {
     --argjson dirty_files "$dirty_files" \
     --argjson requirements "$requirements" \
     --argjson waivers "$waivers" \
+    --argjson brief "$brief" \
     '{
       version: 1,
       task_key: $task_key,
@@ -176,6 +243,7 @@ contract_write() {
       works_when: $works_when,
       baseline: { sha: $baseline_sha, dirty_files: $dirty_files },
       waivers: $waivers,
+      brief: $brief,
       requirements: $requirements
     }' > "$path" 2>/dev/null || return 1
 
@@ -204,6 +272,7 @@ contract_read() {
   CONTRACT_BASELINE_SHA=""
   CONTRACT_REQUIREMENTS="[]"
   CONTRACT_WAIVERS="[]"
+  CONTRACT_BRIEF=""
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -240,6 +309,12 @@ contract_read() {
   CONTRACT_REQUIREMENTS="$reqs"
   CONTRACT_WAIVERS=$(jq -c '.waivers // []' "$path" 2>/dev/null)
   [ -n "$CONTRACT_WAIVERS" ] || CONTRACT_WAIVERS="[]"
+
+  # Back-compat: a contract written before the brief existed (ADR 0004) has
+  # no `brief` field. Synthesize an implicit applicable:false on read, same
+  # rationale as scenario/docs above.
+  CONTRACT_BRIEF=$(jq -c '.brief // {"applicable":false,"reason":"contract predates the context brief"}' "$path" 2>/dev/null)
+  [ -n "$CONTRACT_BRIEF" ] || CONTRACT_BRIEF='{"applicable":false,"reason":"contract predates the context brief"}'
   return 0
 }
 
