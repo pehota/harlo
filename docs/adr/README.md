@@ -12,8 +12,11 @@
   the Stop gate goes silent until the agent arms a claim latch, then blocks until a
   HEAD-keyed verification result *and* a clean product surface cover the changeset;
   establishes the asymmetry rule that an agent-authored signal may only tighten the gate.
+- [0004 — Context is split by timing: a define-time brief and a review-time impact trace](0004-context-brief-and-impact-trace.md) —
+  a fresh collector writes project standards and invariants into a context brief at
+  define time; the reviewer derives change impact itself from the diff. *(proposed, v2)*
 
-> **All ADRs above are marked `superseded`.** They record decisions for the
+> **ADRs 0001–0003 are marked `superseded`.** They record decisions for the
 > pre-v2 `dod/` implementation (recoverable at tag `dod-v1-final`), which
 > [`../design-v2.md`](../design-v2.md) replaced end-to-end. Kept for the
 > reasoning they capture, not as a description of current behaviour.
