@@ -63,8 +63,9 @@ assert_relay() {
   reply=$(cat)
   printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
 
+  # f2 is an advisory in a failing round: not presented (advisory batching).
   ids=$(printf '%s' "$reply" | jq -c '[.presented_findings[].id] | sort')
-  [ "$ids" = '["f1","f2"]' ] || { echo "presented finding ids $ids, want [\"f1\",\"f2\"]"; return 1; }
+  [ "$ids" = '["f1"]' ] || { echo "presented finding ids $ids, want [\"f1\"]"; return 1; }
 
   o1_ok=$(printf '%s' "$reply" | jq '[.pre_verify_actions[] | select(.observation_id=="o1")] as $a | ($a|length>0) and ($a|all(.disposition=="fix_before_verify"))')
   [ "$o1_ok" = "true" ] || { echo "o1 (real bug) not consistently fix_before_verify"; return 1; }
