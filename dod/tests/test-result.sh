@@ -145,6 +145,34 @@ eq "next round: same baseline, prior round 2 -> 3" "3" "$(result_next_round "$PR
 eq "next round: different baseline -> 1" "1" "$(result_next_round "$PRIOR" "other-baseline")"
 eq "next round: malformed prior -> 1" "1" "$(result_next_round "$BADFILE" "y")"
 
+# --- RESULT_CREEP_IDS: only blocking scope+creep findings (ADR 0004) --------
+CREEP_FILE="$REPO/.dod/main/creep-result.json"
+result_write "$CREEP_FILE" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"fail","findings":[
+      {"id":"c1","severity":"blocking","lens":"scope","kind":"creep","file":"a.ts","line":1,"summary":"unrequested refactor"},
+      {"id":"g1","severity":"blocking","lens":"scope","kind":"gap","file":"b.ts","line":2,"summary":"missing coverage"},
+      {"id":"adv1","severity":"advisory","lens":"scope","kind":"creep","file":"c.ts","line":3,"summary":"advisory creep, not blocking"},
+      {"id":"other1","severity":"blocking","lens":"correctness","file":"d.ts","line":4,"summary":"a bug"}
+    ]}
+  ]'
+result_read "$CREEP_FILE"
+eq "creep ids: only blocking scope+creep findings" '["c1"]' "$RESULT_CREEP_IDS"
+
+NOCREEP_FILE="$REPO/.dod/main/nocreep-result.json"
+result_write "$NOCREEP_FILE" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"fail","findings":[
+      {"id":"g1","severity":"blocking","lens":"scope","kind":"gap","file":"b.ts","line":2,"summary":"missing coverage"}
+    ]}
+  ]'
+result_read "$NOCREEP_FILE"
+eq "creep ids: gap-only result has none" "[]" "$RESULT_CREEP_IDS"
+
+eq "creep ids: check-only result has none" "[]" "$(result_read "$RFILE" && printf '%s' "$RESULT_CREEP_IDS")"
+
 echo
 echo "result.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

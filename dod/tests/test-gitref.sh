@@ -201,6 +201,51 @@ else
   bad "baseline_worktree_remove is a safe no-op when already removed" "failed"
 fi
 
+# --- dod_changed_standards (ADR 0004) ----------------------------------------
+
+# none changed -> []
+REPO8=$(dod__test_make_repo)
+BASE8=$(git -C "$REPO8" rev-parse HEAD)
+CS_NONE=$(dod_changed_standards "$REPO8" "$BASE8")
+eq "changed_standards: none changed -> []" "[]" "$CS_NONE"
+
+# root CLAUDE.md, untracked -> included
+echo "root claude rules" > "$REPO8/CLAUDE.md"
+CS_ROOT=$(dod_changed_standards "$REPO8" "$BASE8")
+eq "changed_standards: root CLAUDE.md (untracked) included" "true" \
+  "$(printf '%s' "$CS_ROOT" | jq -e 'any(.[]; . == "CLAUDE.md")' >/dev/null 2>&1 && echo true || echo false)"
+
+# nested CLAUDE.md at any depth, committed since baseline -> included
+mkdir -p "$REPO8/pkg/sub"
+echo "nested claude rules" > "$REPO8/pkg/sub/CLAUDE.md"
+git -C "$REPO8" add -A
+git -C "$REPO8" commit -q -m "add nested CLAUDE.md"
+CS_NESTED=$(dod_changed_standards "$REPO8" "$BASE8")
+eq "changed_standards: nested CLAUDE.md included" "true" \
+  "$(printf '%s' "$CS_NESTED" | jq -e 'any(.[]; . == "pkg/sub/CLAUDE.md")' >/dev/null 2>&1 && echo true || echo false)"
+eq "changed_standards: committed-since-baseline file included" "true" \
+  "$(printf '%s' "$CS_NESTED" | jq -e 'any(.[]; . == "CLAUDE.md")' >/dev/null 2>&1 && echo true || echo false)"
+
+# untracked docs/adr file -> included
+mkdir -p "$REPO8/docs/adr"
+echo "adr draft" > "$REPO8/docs/adr/0099-draft.md"
+CS_ADR=$(dod_changed_standards "$REPO8" "$BASE8")
+eq "changed_standards: untracked docs/adr file included" "true" \
+  "$(printf '%s' "$CS_ADR" | jq -e 'any(.[]; . == "docs/adr/0099-draft.md")' >/dev/null 2>&1 && echo true || echo false)"
+
+# src file and .dod/ excluded; lint configs excluded
+mkdir -p "$REPO8/.dod/main" "$REPO8/src"
+echo "console.log(1)" > "$REPO8/src/index.js"
+echo '{"round":1}' > "$REPO8/.dod/main/result.json"
+echo "{}" > "$REPO8/.eslintrc.json"
+CS_ALL=$(dod_changed_standards "$REPO8" "$BASE8")
+eq "changed_standards: src file excluded" "false" \
+  "$(printf '%s' "$CS_ALL" | jq -e 'any(.[]; . == "src/index.js")' >/dev/null 2>&1 && echo true || echo false)"
+eq "changed_standards: .dod/ excluded" "false" \
+  "$(printf '%s' "$CS_ALL" | jq -e 'any(.[]; startswith(".dod/"))' >/dev/null 2>&1 && echo true || echo false)"
+eq "changed_standards: lint config excluded" "false" \
+  "$(printf '%s' "$CS_ALL" | jq -e 'any(.[]; . == ".eslintrc.json")' >/dev/null 2>&1 && echo true || echo false)"
+
 echo
 echo "gitref.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

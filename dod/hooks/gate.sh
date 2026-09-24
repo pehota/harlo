@@ -13,7 +13,13 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10,11,12. Branch 5 detects both "claimed"
+# Branches shipped: 0,1,2,3,4,5,6,7,8,8a,9,10,11,12. Branch 8a (ADR 0004,
+# scope creep) sits between the "no-result" checks and branch 8's ordinary
+# round-bump path: a blocking finding with lens:"scope" kind:"creep" blocks
+# once (no round bump, contract stays open) and then releases every later
+# Stop on that SAME result via state.creep_diff_hash, until a new result.json
+# exists. A gap finding (lens:"scope" kind:"gap") is not creep and still
+# takes branch 8 exactly as before. Branch 5 detects both "claimed"
 # (latch armed) and "edited this prompt_id without a latch" via state.edits
 # (track.sh). Branch 4 (expiry) only covers a rebased/force-pushed baseline,
 # not a killed session with untouched history — a session that crashes or is
@@ -238,6 +244,27 @@ case "$RESULT_BLOCKING_FAIL" in
 esac
 
 if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
+  # --- branch 8a: scope creep (ADR 0004) -> block once, no round bump -------
+  # A blocking review finding with lens:"scope" kind:"creep" is a decision
+  # for the USER (revert the creep, or accept it and amend the contract),
+  # never something the agent auto-fixes — so it must not enter the ordinary
+  # round-bump/escalation machinery (that's for the agent to keep trying).
+  # One-shot: block the first Stop that sees this result, then release every
+  # later Stop on the SAME result (state.creep_diff_hash == this diff_hash)
+  # silently, contract left "open", until a genuinely NEW result.json
+  # (different diff_hash) exists — i.e. until /dod:verify runs again on a
+  # changed changeset. Gap findings (lens:"scope" kind:"gap") are NOT creep
+  # and fall through unchanged to branch 8 below.
+  if [ "$RESULT_CREEP_IDS" != "[]" ]; then
+    if [ "$STATE_CREEP_DIFF_HASH" = "$DIFF_HASH" ]; then
+      gate__clear_last_block
+      dod_release
+      exit 0
+    fi
+    state_set_creep_diff_hash "$STATE_FILE" "$DIFF_HASH"
+    gate__block "creep" "verification found scope-creep finding(s) outside the task's agreed scope (ids: ${RESULT_CREEP_IDS}) — report them to the user and ask: revert the creep, or accept it and amend the contract. Do not fix it yourself. Stop here."
+  fi
+
   # D26: identical diff_hash across two failing rounds means no progress was
   # made since the last failure — burn the budget immediately rather than
   # waiting for round to literally reach the cap, so a stuck agent that

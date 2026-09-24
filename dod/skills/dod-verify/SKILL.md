@@ -80,7 +80,9 @@ independent review.
    unchanged (it's already part of `$CONTRACT_REQUIREMENTS`) and set `docs`'s
    final `verdict` from the reviewer's findings: `"fail"` if any finding in
    the reviewer's `findings` array carries `requirement_id: "docs"` with
-   `severity: "blocking"`, else `"pass"`. Use `requirement_id` for this
+   `severity: "blocking"`, else `"pass"`. At review depth `scope` (step 5)
+   the reviewer does not check docs: set an applicable `docs`'s `verdict` to
+   `"waived"` with `reason` `"review at scope depth"`. Use `requirement_id` for this
    check, never infer it from a finding's `file` path matching a
    `doc_paths` entry — the field exists precisely so attribution doesn't
    depend on string matching.
@@ -132,41 +134,68 @@ independent review.
    and write its verdict; the whole point of a judgement requirement is a
    **fresh, independent** reviewer that forms its own opinion.
 
+   **Every round, first compute the reviewer's context inputs:**
+   ```bash
+   CHANGED_STANDARDS=$(dod_changed_standards "$PWD" "$CONTRACT_BASELINE_SHA")
+   ```
+   - `brief` — from `$CONTRACT_BRIEF`: its `path` if `applicable:true`, else
+     `n/a: <its reason>`.
+   - `changed_standards` — `$CHANGED_STANDARDS` (a JSON array, recomputed
+     every round, never carried over).
+   - `depth` — `scope` if `$CONTRACT_WAIVERS` has an entry with
+     `id: "review"` (the user consented to a scope-only review), else `full`.
+
    **Round 1** (no prior `result.json`, or the prior result's round is being
    superseded by fresh work — i.e. this is the first verify pass for the
-   current diff_hash lineage): spawn in `full` mode.
+   current diff_hash lineage — or the prior result's `review` findings
+   contain a blocking `lens:"scope"`, `kind:"creep"` finding, i.e. that review
+   stopped at the scope lens and lenses 2-6 never ran): spawn in `full` mode.
    ```
    baseline_sha : $CONTRACT_BASELINE_SHA
    mode         : full
    task         : $CONTRACT_TASK
    works_when   : $CONTRACT_WORKS_WHEN
    requirements : $CONTRACT_REQUIREMENTS
+   brief        : <brief path | n/a: reason>
+   changed_standards : $CHANGED_STANDARDS
+   depth        : full | scope
    ```
 
    **Round 2+** (a prior `result.json` exists for this task with `blocking`
-   findings from the `review` requirement — i.e. the agent already ran
-   `/dod:verify` once, got a `fail` verdict on `review`, fixed something, and
-   is verifying again): spawn in `delta_reconfirm` mode, passing the prior
-   round's blocking findings back as `reconfirm`:
+   findings from the `review` requirement, none of them a `lens:"scope"`,
+   `kind:"creep"` finding — i.e. the agent already ran `/dod:verify` once,
+   got a `fail` verdict on `review` from a review that ran every lens, fixed
+   something, and is verifying again): spawn in `delta_reconfirm` mode,
+   passing the prior round's blocking findings back as `reconfirm`:
    ```
    baseline_sha : $CONTRACT_BASELINE_SHA
    mode         : delta_reconfirm
    delta_from   : <prior result's diff_hash>
-   reconfirm    : <prior round's review findings with severity "blocking">
+   reconfirm    : <prior round's review findings with severity "blocking", except lens "scope">
    task         : $CONTRACT_TASK
    works_when   : $CONTRACT_WORKS_WHEN
    requirements : $CONTRACT_REQUIREMENTS
+   brief        : <brief path | n/a: reason>
+   changed_standards : $CHANGED_STANDARDS
+   depth        : full | scope
    ```
+   Leave `lens: "scope"` findings out of `reconfirm` — the scope check
+   re-runs over the full changeset every round and re-raises any that still
+   hold. After a creep stop — whether the user chose revert or accept &
+   amend — the next round is always Round 1 (`full`), so the original
+   changeset gets every lens and an impact trace.
 
    **After the user's advisory decision** (`state_read` gives a non-empty
    `$STATE_DECISIONS`, see "Advisory decision" below): add
    `blocking_only : true` to either mode's inputs — the reviewer reports
    blocking findings only.
 
-   The reviewer's final message is JSON: `{"findings":[...], "reconfirm":[...],
-   "verdict":"pass|fail"}` (full schema in `dod/agents/dod-reviewer.md`).
-   Parse it — do not paraphrase or re-summarize it yourself, pass the
-   `findings` array through to step 6 as-is. The requirement's own
+   The reviewer's final message is JSON: `{"depth":"...","findings":[...],
+   "impact_trace":[...],"reconfirm":[...],"verdict":"pass|fail"}` (full
+   schema in `dod/agents/dod-reviewer.md`). Parse it — do not paraphrase or
+   re-summarize it yourself, pass the `findings` array, `depth` and
+   `impact_trace` through to step 6 as-is, every finding with its `lens`
+   (and a scope finding's `kind`). The requirement's own
    `verdict` in `result.json` is the reviewer's `verdict` field: `"fail"` if
    any finding has `severity: "blocking"` or any `reconfirm` entry has
    `status != "fixed"`, else `"pass"`.
@@ -177,10 +206,12 @@ independent review.
    ```bash
    RFILE=".dod/$TASK_KEY/result.json"
    ROUND=$(result_next_round "$RFILE" "$CONTRACT_BASELINE_SHA")
-   REQUIREMENTS=$(jq -nc --argjson findings "$REVIEW_FINDINGS" '[
+   REQUIREMENTS=$(jq -nc --arg depth "$REVIEW_DEPTH" \
+       --argjson findings "$REVIEW_FINDINGS" \
+       --argjson impact_trace "$REVIEW_IMPACT_TRACE" '[
        {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
        {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
-       {"id":"review","type":"judgement","verdict":"pass|fail","findings":$findings},
+       {"id":"review","type":"judgement","verdict":"pass|fail","depth":$depth,"findings":$findings,"impact_trace":$impact_trace},
        {"id":"docs","type":"check","verdict":"pass|fail|n/a","doc_paths":[...]}
      ]')
    result_write "$RFILE" \
@@ -190,7 +221,14 @@ independent review.
      --requirements "$REQUIREMENTS"
    state_set_state ".dod/$TASK_KEY/state.json" "idle"
    ```
-   `$REVIEW_FINDINGS` is the reviewer's `findings` array from step 5.
+   `$REVIEW_FINDINGS` is the reviewer's `findings` array from step 5,
+   unchanged — every finding keeps its `lens` and, for scope findings, its
+   `kind` (the gate reads `lens:"scope"` + `kind:"creep"` to stop instead of
+   asking for a fix). `$REVIEW_DEPTH` and `$REVIEW_IMPACT_TRACE` are the
+   reviewer's `depth` string and `impact_trace` array, also unchanged
+   (`impact_trace` is `[]` after a creep stop or at depth `scope`) — the
+   `review` entry records them as `docs/design-v2.md` §6.4 documents;
+   `result_write` stores extra fields as given.
    Clear `state` back to `"idle"` right after — leaving it `"verifying"`
    only means a possible future turn gets a slightly misleading "wait,
    it's running" message for one round, not a correctness problem, but
@@ -214,6 +252,9 @@ independent review.
    the row states `n/a` with the contract's reason, `pass` if the reviewer
    confirmed every `doc_paths` entry was updated, or `fail` with which
    path(s) it found missing or stale (`dod/base-dod.md`, `dod-define` step 4).
+   At review depth `scope`, the `review` row states "scope depth" with the
+   user's waiver reason verbatim, and `docs` states `waived — review at
+   scope depth`.
 
    Findings you show come **only** from this round's reviewer `findings[]` —
    never add your own, and never promote implementer
@@ -221,11 +262,24 @@ independent review.
    findings or user decisions (those were settled before verify, see above).
    Advisories are never auto-fixed. Then, by outcome — exactly one applies:
 
-   - **Failing round.** List which requirements failed: for a failing
+   - **Scope creep — a blocking `lens:"scope"`, `kind:"creep"` finding.**
+     This is the user's decision, never a fix: do **not** delegate any fix,
+     for the creep or anything else this round. Show each creep finding
+     (file, line, summary), then ask the user, per finding: **revert** (undo
+     the change) or **accept & amend** (widen the task to include it). Then
+     stop. On **revert** → delegate reverting exactly those hunks, then run
+     `/dod:verify`. On **accept & amend** → run `/dod:define` to amend the
+     contract, widening the task and keeping the baseline (see its amend
+     section), then run `/dod:verify`. Either way that next review runs in
+     `full` mode (step 5) — the creep stop skipped lenses 2-6.
+   - **Failing round** (no creep). List which requirements failed: for a failing
      `check` with a `baseline_verdict`, state it plainly ("pre-existing —
      also fails at baseline" vs "new — passes at baseline, this changeset
      broke it"); for `review`, every `blocking` finding's file, line, and
-     summary. Do not list advisories or raise them as decisions: a failing
+     summary. Then delegate the fixes — a `kind:"gap"` finding is a normal
+     fix: the implementer completes the missing part of the task. Every fix
+     delegation passes the context brief's path (when applicable) and tells
+     the implementer to read it before editing. Do not list advisories or raise them as decisions: a failing
      round's advisories are ignored — only the final passing round's review
      raises the advisories the user decides on (a gate escalation is the
      one exception, see "After verify"). The gate's block
@@ -270,6 +324,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
 ```
 
 - **All skip** → stop; the gate closes the contract.
-- **Any fix** → fix only those (delegate), then run `/dod:verify`. That
+- **Any fix** → fix only those (delegate, passing the context brief's path
+  as for any fix), then run `/dod:verify`. That
   round's review is blocking-only (step 5); the gate blocks a close until
   the changeset has changed and been re-verified.

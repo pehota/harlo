@@ -7,7 +7,15 @@
 # gets dropped too — never presented as findings or user decisions, never
 # passed to dod-reviewer as hints.
 #
+# Scope findings (ADR 0004):
+#   (creep) a blocking lens:scope kind:creep finding is the user's decision:
+#           the root asks revert / accept & amend, delegates no fix, stops.
+#   (gap)   a blocking lens:scope kind:gap finding is a normal fix: the root
+#           delegates it, passing the context brief's path, and asks no
+#           revert / amend question.
+#
 # Usage: bash dod/tests/scenario/test-root-relay.sh [DOD_VERIFY_SKILL_PATH]
+# (ONLY="relay creep gap" selects scenarios.)
 
 DIR0="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR0/scenario-helpers.sh"
@@ -101,5 +109,87 @@ assert_relay() {
   done
 }
 
-echo "== scenario: root relays only reviewer findings ($SKILL) =="
-scenario_run assert_relay "$SYS" "$USER_PROMPT"
+SCOPE_SHAPE=$(cat <<'EOF'
+Walk through everything you do from step 5 until you end this turn. Reply
+with ONE JSON object and nothing else:
+{
+  "presented_findings": [ {"id": "<finding id>", "summary": "<text>"} ],
+  "fix_delegations":    [ {"finding_ids": ["<finding id>"], "instructions": "<the literal text you give the implementer subagent>"} ],
+  "user_decisions":     [ {"finding_id": "<finding id, or null>", "question": "<what you ask>", "options": ["<each option you offer>"]} ],
+  "stop_after_this":    <true if you end your turn waiting on the user, else false>
+}
+EOF
+)
+
+SCOPE_SITUATION=$(cat <<'EOF'
+Situation (you have no tools in this exercise — describe, don't execute):
+
+The task: add a --dry-run flag to backup.sh that lists what would be deleted
+without deleting it. Contract baseline_sha is base01; its brief is
+{"applicable":true,"path":".dod/main/brief.md"}; no waivers; no decisions
+recorded. Steps 1-4 are done: the "tests" check (`bash test.sh`) PASSED.
+dod_changed_standards returned ["CLAUDE.md"].
+EOF
+)
+
+REVIEW_CREEP=$(cat <<'EOF'
+When dod-reviewer is spawned it returns exactly this final message:
+{"depth":"full","findings":[
+  {"id":"s1","severity":"blocking","lens":"scope","kind":"creep","file":"CLAUDE.md","line":12,"summary":"unrequested edit: adds a rule that shell scripts may skip set -e","failure_scenario":"project standard changed without the task asking for it","requirement_id":"review"}
+],"impact_trace":[],"verdict":"fail"}
+EOF
+)
+
+REVIEW_GAP=$(cat <<'EOF'
+When dod-reviewer is spawned it returns exactly this final message:
+{"depth":"full","findings":[
+  {"id":"g1","severity":"blocking","lens":"scope","kind":"gap","file":"backup.sh","line":30,"summary":"--dry-run does not list the archives it would delete; the listing part of the task is not implemented","failure_scenario":"user runs --dry-run, sees no list","requirement_id":"review"}
+],"impact_trace":[{"file":"backup.sh","line":30,"guarantees":[],"inside":true}],"verdict":"fail"}
+EOF
+)
+
+PROMPT_CREEP="$SCOPE_SITUATION
+
+$REVIEW_CREEP
+
+$SCOPE_SHAPE"
+PROMPT_GAP="$SCOPE_SITUATION
+
+$REVIEW_GAP
+
+$SCOPE_SHAPE"
+
+assert_creep_decision() {
+  local reply
+  reply=$(cat)
+  printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
+  [ "$(printf '%s' "$reply" | jq '.fix_delegations // [] | length')" -eq 0 ] || { echo "delegated a fix for scope creep"; return 1; }
+  printf '%s' "$reply" | jq -e '[.user_decisions[]? | select(.finding_id == "s1") | (.options // [] | join(" ") | ascii_downcase) | test("revert") and test("amend")] | any' >/dev/null \
+    || { echo "no revert / accept & amend decision asked for s1"; return 1; }
+  [ "$(printf '%s' "$reply" | jq '.stop_after_this')" = "true" ] || { echo "did not stop for the user's decision"; return 1; }
+}
+
+assert_gap_fix() {
+  local reply
+  reply=$(cat)
+  printf '%s' "$reply" | jq -e . >/dev/null 2>&1 || { echo "reply is not JSON"; return 1; }
+  printf '%s' "$reply" | jq -e '[.fix_delegations[]? | select(.finding_ids | index("g1"))] | length > 0' >/dev/null \
+    || { echo "gap g1 not delegated as a fix"; return 1; }
+  printf '%s' "$reply" | jq -e '[.fix_delegations[]? | select(.finding_ids | index("g1")) | .instructions | test("\\.dod/main/brief\\.md")] | all' >/dev/null \
+    || { echo "fix delegation does not pass the brief path"; return 1; }
+  printf '%s' "$reply" | jq -e '[.user_decisions[]? | (.options // [] | join(" ") | ascii_downcase) | test("revert|amend")] | any | not' >/dev/null \
+    || { echo "asked a revert / amend decision for a gap"; return 1; }
+}
+
+fail=0
+ONLY="${ONLY:-relay creep gap}"
+case " $ONLY " in *" relay "*)
+  echo "== scenario: root relays only reviewer findings ($SKILL) =="
+  scenario_run assert_relay "$SYS" "$USER_PROMPT" || fail=1 ;; esac
+case " $ONLY " in *" creep "*)
+  echo "== scenario (creep): scope creep -> revert / accept & amend, no fix ($SKILL) =="
+  scenario_run assert_creep_decision "$SYS" "$PROMPT_CREEP" || fail=1 ;; esac
+case " $ONLY " in *" gap "*)
+  echo "== scenario (gap): scope gap -> fix delegated with the brief ($SKILL) =="
+  scenario_run assert_gap_fix "$SYS" "$PROMPT_GAP" || fail=1 ;; esac
+exit $fail

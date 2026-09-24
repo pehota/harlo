@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# dod/lib/gitref.sh — git-derived identity: task key, diff hash, ancestry.
+# dod/lib/gitref.sh — git-derived identity: task key, diff hash, ancestry,
+# changed-standards detection (ADR 0004).
 #
 # No `set -e`/`set -u`/pipefail (sourced into hooks). Every git call guarded;
 # callers get empty string / non-zero on failure, never a crash.
@@ -9,6 +10,8 @@
 # (harness-common.sh) which re-sanitised at three call sites.
 
 GITREF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+dod__has_jq() { command -v jq >/dev/null 2>&1; }
 
 # dod__sanitize <str> — every char not in [A-Za-z0-9_.-] becomes '-'.
 dod__sanitize() {
@@ -22,6 +25,24 @@ dod_task_key() {
   branch=$(git -C "$repo" symbolic-ref -q --short HEAD 2>/dev/null)
   [ -n "$branch" ] || return 1
   dod__sanitize "$branch"
+}
+
+# gitref__changed_paths <repo_dir> <baseline_sha> — repo-relative paths
+# changed since baseline: `git diff --name-only` (tracked, vs baseline)
+# unioned with untracked paths (git ls-files --others --exclude-standard),
+# deduped, .dod/ excluded (see dod_diff_hash's header for why .dod/ must
+# never be trusted). Shared enumeration for dod_diff_hash (content-hashing on
+# top) and dod_changed_standards (pattern-filtering on top) — DRY, since both
+# need the same "which paths changed since baseline" answer.
+gitref__changed_paths() {
+  local repo="$1" baseline="$2"
+  {
+    git -C "$repo" diff --name-only "$baseline" -- 2>/dev/null
+    git -C "$repo" ls-files --others --exclude-standard 2>/dev/null
+  } | sort -u | while IFS= read -r f; do
+    case "$f" in .dod/*) continue ;; esac
+    printf '%s\n' "$f"
+  done
 }
 
 # dod_diff_hash <repo_dir> <baseline_sha> — stable hash of "which paths
@@ -65,15 +86,40 @@ dod_diff_hash() {
   local repo="$1" baseline="$2"
   [ -n "$baseline" ] || return 1
   {
-    {
-      git -C "$repo" diff --name-only "$baseline" -- 2>/dev/null
-      git -C "$repo" ls-files --others --exclude-standard 2>/dev/null
-    } | sort -u | while IFS= read -r f; do
-      case "$f" in .dod/*) continue ;; esac
+    gitref__changed_paths "$repo" "$baseline" | while IFS= read -r f; do
       printf '%s\n' "$f"
       git -C "$repo" hash-object "$repo/$f" 2>/dev/null || printf 'MISSING\n'
     done
   } | git hash-object --stdin 2>/dev/null
+}
+
+# dod_changed_standards <repo_dir> <baseline_sha> — JSON array of
+# repo-relative paths changed since baseline (committed, staged, unstaged,
+# untracked; .dod/ excluded, same enumeration as dod_diff_hash) that name a
+# project-standards file: `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md` at any
+# depth, `docs/adr/*`, `.claude/rules/*`, `.cursor/rules/*`, or
+# `.github/copilot-instructions.md`.
+#
+# ADR 0004: /dod:verify uses this to tell a standards edit the task actually
+# asked for from unrequested scope creep. Empty input -> `[]`, never a bare
+# empty string, so callers can always `jq` the result without checking for
+# that case first.
+dod_changed_standards() {
+  local repo="$1" baseline="$2" f base
+  [ -n "$baseline" ] || return 1
+  dod__has_jq || return 1
+  {
+    gitref__changed_paths "$repo" "$baseline" | while IFS= read -r f; do
+      base="${f##*/}"
+      case "$base" in
+        CLAUDE.md|AGENTS.md|CONTEXT.md) printf '%s\n' "$f"; continue ;;
+      esac
+      case "$f" in
+        docs/adr/*|.claude/rules/*|.cursor/rules/*|.github/copilot-instructions.md)
+          printf '%s\n' "$f" ;;
+      esac
+    done
+  } | jq -R -s -c 'split("\n") | map(select(length > 0))'
 }
 
 # dod_is_ancestor <repo_dir> <ancestor_sha> <descendant_sha> — 0 if ancestor

@@ -27,11 +27,14 @@ run_gate() {
 EOF
 }
 
+NA_BRIEF='{"applicable":false,"reason":"test fixture"}'
+
 open_contract() {
   local repo="$1" key="$2"
   contract_write "$repo/.dod/$key/contract.json" \
     --task-key "$key" --task "do the thing" --task-source "argument" \
     --session-id "sid-1" --works-when "test fixture" --baseline-sha "$(git -C "$repo" rev-parse HEAD)" \
+    --brief "$NA_BRIEF" \
     --requirements '[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"protocol","proves":"test fixture"},{"id":"e2e","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"scenario","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"},{"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"protocol","proves":"test fixture","applicable":false,"reason":"test fixture"}]'
 }
 
@@ -446,6 +449,93 @@ case "$REASON_NP" in
 esac
 ESCALATION_NP=$(jq -r '.escalation' "$REPO/.dod/main/state.json" 2>/dev/null)
 eq "branch9 (D26): state.escalation armed on no-progress" "armed" "$ESCALATION_NP"
+
+# --- branch 8a: scope creep -> block once, no round bump, contract open -----
+# (ADR 0004) A blocking review finding with lens:"scope" kind:"creep" must
+# NOT go through the ordinary round-bump/escalation machinery — it blocks
+# exactly once with a revert/accept-and-amend message, then every Stop on
+# the SAME result (same diff_hash, no new /dod:verify) releases silently
+# until a new result.json exists.
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[
+    {"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0},
+    {"id":"review","type":"judgement","verdict":"fail","findings":[
+      {"id":"c1","severity":"blocking","lens":"scope","kind":"creep","file":"root.txt","line":1,"summary":"unrequested change"}
+    ]}
+  ]'
+OUT=$(run_gate "$REPO" "p1")
+if is_block "$OUT"; then
+  ok "branch8a: scope creep blocks"
+else
+  bad "branch8a: scope creep blocks" "$OUT"
+fi
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"revert"*"accept"*) ok "branch8a: reason asks the user revert / accept & amend" ;;
+  *) bad "branch8a: reason asks the user revert / accept & amend" "$REASON" ;;
+esac
+ROUND_AFTER=$(jq -r '.round' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "branch8a: round NOT bumped" "0" "$ROUND_AFTER"
+eq "branch8a: contract stays open" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# a later Stop on the SAME result (no new /dod:verify) releases silently
+OUT2=$(run_gate "$REPO" "p2")
+eq "branch8a: next Stop on the same result releases silently (one-shot)" "" "$OUT2"
+eq "branch8a: contract still open after the one-shot release" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# a NEW result (fresh /dod:verify) with the same creep finding blocks again
+echo "more edits" >> "$REPO/root.txt"
+DH2=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH2" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[
+    {"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0},
+    {"id":"review","type":"judgement","verdict":"fail","findings":[
+      {"id":"c1","severity":"blocking","lens":"scope","kind":"creep","file":"root.txt","line":1,"summary":"unrequested change"}
+    ]}
+  ]'
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT3=$(run_gate "$REPO" "p3")
+if is_block "$OUT3"; then
+  ok "branch8a: a new result re-blocks (one-shot resets on a new result)"
+else
+  bad "branch8a: a new result re-blocks (one-shot resets on a new result)" "$OUT3"
+fi
+
+# --- branch 8 regression: gap-only blocking failure unchanged ---------------
+# (ADR 0004) A blocking finding with lens:"scope" kind:"gap" is NOT creep —
+# it must behave exactly as before: round bump, no one-shot release.
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"fail","findings":[
+      {"id":"g1","severity":"blocking","lens":"scope","kind":"gap","file":"root.txt","line":1,"summary":"missed part of the task"}
+    ]}
+  ]'
+OUT=$(run_gate "$REPO" "p1")
+if is_block "$OUT"; then
+  ok "branch8 regression: gap-only blocking failure blocks"
+else
+  bad "branch8 regression: gap-only blocking failure blocks" "$OUT"
+fi
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"/dod:verify"*) ok "branch8 regression: reason tells agent to fix and re-verify (unchanged wording)" ;;
+  *) bad "branch8 regression: reason tells agent to fix and re-verify (unchanged wording)" "$REASON" ;;
+esac
+ROUND_AFTER=$(jq -r '.round' "$REPO/.dod/main/state.json" 2>/dev/null)
+eq "branch8 regression: round IS bumped for a gap-only failure" "1" "$ROUND_AFTER"
 
 echo
 echo "gate.sh: $PASS passed, $FAIL failed"

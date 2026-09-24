@@ -9,6 +9,11 @@
 # Both requirement kinds are live: `check` ("fail" verdict = blocking) and
 # `judgement` (the dod-reviewer agent's verdict, with severity-classified
 # findings — "fail" or any blocking finding = blocking).
+#
+# ADR 0004: a judgement finding also carries `lens` and, for `lens:"scope"`,
+# `kind` ("creep" | "gap"). RESULT_CREEP_IDS exports the ids of BLOCKING
+# scope+creep findings only — gate.sh's one-shot creep branch reads it to
+# route scope creep to a user decision instead of an ordinary fix round.
 
 RESULT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -89,6 +94,7 @@ result_read() {
   RESULT_REQUIREMENTS="[]"
   RESULT_BLOCKING_FAIL=""
   RESULT_ADVISORY_IDS="[]"
+  RESULT_CREEP_IDS="[]"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -105,6 +111,14 @@ result_read() {
   RESULT_BLOCKING_FAIL=$(jq -r '.summary.blocking_fail // 0' "$path" 2>/dev/null)
   RESULT_ADVISORY_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "advisory") | .id] | unique' 2>/dev/null)
   [ -n "$RESULT_ADVISORY_IDS" ] || RESULT_ADVISORY_IDS="[]"
+
+  # ADR 0004: ids of BLOCKING findings that are both lens:"scope" and
+  # kind:"creep" — a gap finding (also lens:"scope") or an advisory-severity
+  # creep finding never belongs here; gate.sh's one-shot creep branch reads
+  # this to tell "the user must decide revert/accept-and-amend" from an
+  # ordinary fix-and-reverify blocking failure.
+  RESULT_CREEP_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "blocking" and .lens == "scope" and .kind == "creep") | .id] | unique' 2>/dev/null)
+  [ -n "$RESULT_CREEP_IDS" ] || RESULT_CREEP_IDS="[]"
   return 0
 }
 

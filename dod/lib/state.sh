@@ -6,11 +6,11 @@
 # round counter and escalation flag the gate's decision tree reads and
 # (only it) mutates.
 #
-# Fields: latched, round, escalation, last_failed_diff_hash, edits[]
-# (track.sh), state ("idle"|"verifying", this file), cache{} (this file),
-# decisions[] / decided_diff_hash (the user's fix/skip decision on the
-# final review's advisory findings, below) and errors_unacknowledged
-# (session.sh's error banner).
+# Fields: latched, round, escalation, last_failed_diff_hash, creep_diff_hash
+# (ADR 0004, below), edits[] (track.sh), state ("idle"|"verifying", this
+# file), cache{} (this file), decisions[] / decided_diff_hash (the user's
+# fix/skip decision on the final review's advisory findings, below) and
+# errors_unacknowledged (session.sh's error banner).
 #
 # `state` is WORDING-ONLY: gate.sh reads it to pick which block message to
 # print, never to change the block/release decision itself (that stays
@@ -52,6 +52,7 @@ state__write_body() {
     round: 0,
     escalation: "none",
     last_failed_diff_hash: null,
+    creep_diff_hash: null,
     edits: [],
     state: "idle",
     cache: {},
@@ -71,6 +72,7 @@ state_read() {
   STATE_ROUND=""
   STATE_ESCALATION=""
   STATE_LAST_FAILED_DIFF_HASH=""
+  STATE_CREEP_DIFF_HASH=""
   STATE_EDITS="[]"
   STATE_STATE="idle"
   STATE_CACHE="{}"
@@ -85,6 +87,7 @@ state_read() {
   STATE_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
   STATE_ESCALATION=$(jq -r '.escalation // "none"' "$path" 2>/dev/null)
   STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$path" 2>/dev/null)
+  STATE_CREEP_DIFF_HASH=$(jq -r '.creep_diff_hash // ""' "$path" 2>/dev/null)
   STATE_EDITS=$(jq -c '.edits // []' "$path" 2>/dev/null)
   [ -n "$STATE_EDITS" ] || STATE_EDITS="[]"
   STATE_STATE=$(jq -r '.state // "idle"' "$path" 2>/dev/null)
@@ -145,6 +148,19 @@ state_set_escalation() {
 state_set_last_failed_diff_hash() {
   local path="$1" hash="$2"
   state__mutate "$path" ".last_failed_diff_hash = $(jq -n --arg h "$hash" '$h')"
+}
+
+# state_set_creep_diff_hash <path> <diff_hash> — ADR 0004's one-shot marker:
+# gate.sh's creep branch sets this to the diff_hash of the result it just
+# blocked scope creep on. The NEXT Stop with the SAME diff_hash (no new
+# result.json, i.e. the changeset hasn't moved) reads this back and releases
+# silently instead of re-blocking — "block once ... following Stops release
+# until a new result.json exists". Reset to null by contract_write
+# (state_write), same as every other state field, so a fresh/amended
+# contract never inherits a stale marker from a prior pass.
+state_set_creep_diff_hash() {
+  local path="$1" hash="$2"
+  state__mutate "$path" ".creep_diff_hash = $(jq -n --arg h "$hash" '$h')"
 }
 
 # --- the user's fix/skip decision on the final review's advisories ---------
