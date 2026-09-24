@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Tests for dod/hooks/gate.sh — one case per branch: 0,1,2,3,4,5,6,7,8,9,10.
+# Tests for dod/hooks/gate.sh — one case per branch: 0,1,2,3,4,5,6,7,8,9,10,11,12.
 #
 # Idiom (ported from v1's dod-gate.sh suite): assert block via parsed JSON
 # (`jq -e '.decision == "block"'`), assert release via EMPTY stdout.
@@ -172,6 +172,78 @@ else
   ok "branch10: tears down the baseline worktree on pass"
 fi
 
+# --- branch 11: all pass WITH advisories, no decision -> await, release -----
+ADV_PASS='[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0},
+  {"id":"review","type":"judgement","verdict":"pass","findings":[
+    {"id":"a1","severity":"advisory","file":"root.txt","line":1,"summary":"nit one"},
+    {"id":"a2","severity":"advisory","file":"root.txt","line":2,"summary":"nit two"}]}]'
+adv_repo() {
+  REPO=$(dod__test_make_repo)
+  open_contract "$REPO" "main"
+  bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+  BASELINE=$(git -C "$REPO" rev-parse HEAD)
+  DH=$(dod_diff_hash "$REPO" "$BASELINE")
+  result_write "$REPO/.dod/main/result.json" \
+    --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 --requirements "$ADV_PASS"
+  result_read "$REPO/.dod/main/result.json"
+}
+adv_repo
+OUT=$(run_gate "$REPO")
+eq "branch11: all pass with advisories releases (agent may stop)" "" "$OUT"
+eq "branch11: contract stays open" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+OUT=$(run_gate "$REPO" "p2")
+eq "branch11: a later Stop while awaiting still releases" "" "$OUT"
+eq "branch11: contract still open while awaiting" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# --- a partial reply is not recorded -> still awaiting, contract open -------
+if state_record_decisions "$REPO/.dod/main/state.json" '[{"id":"a1","decision":"skip"}]' "$DH" "$RESULT_ADVISORY_IDS"; then
+  bad "partial decision: rejected (a2 undecided)" "accepted"
+else
+  ok "partial decision: rejected (a2 undecided)"
+fi
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate "$REPO" "p3")
+eq "partial decision: Stop still releases" "" "$OUT"
+eq "partial decision: contract stays open" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# --- decision skip-all -> the next Stop closes the contract -----------------
+state_record_decisions "$REPO/.dod/main/state.json" '[{"id":"a1","decision":"skip"},{"id":"a2","decision":"skip"}]' "$DH" "$RESULT_ADVISORY_IDS"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate "$REPO" "p3")
+eq "decision skip-all: releases" "" "$OUT"
+eq "decision skip-all: contract passed" "passed" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# --- branch 12: fix decided, result not re-verified since -> block ----------
+adv_repo
+run_gate "$REPO" >/dev/null
+state_record_decisions "$REPO/.dod/main/state.json" '[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]' "$DH" "$RESULT_ADVISORY_IDS"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate "$REPO" "p2")
+if is_block "$OUT"; then
+  ok "branch12: fix decided but result predates the fix blocks"
+else
+  bad "branch12: fix decided but result predates the fix blocks" "$OUT"
+fi
+case "$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)" in
+  *"/dod:verify"*) ok "branch12: reason tells agent to fix and run /dod:verify" ;;
+  *) bad "branch12: reason tells agent to fix and run /dod:verify" "$OUT" ;;
+esac
+eq "branch12: contract stays open" "open" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
+# fixed + re-verified (new diff): a new advisory in that round is no new
+# decision — the contract closes.
+echo "fixed a1" >> "$REPO/root.txt"
+DH2=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH2" --baseline-sha "$BASELINE" --round 2 \
+  --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0},
+    {"id":"review","type":"judgement","verdict":"pass","findings":[
+      {"id":"a9","severity":"advisory","file":"root.txt","line":3,"summary":"new nit"}]}]'
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate "$REPO" "p3")
+eq "decision fix, re-verified: releases" "" "$OUT"
+eq "decision fix, re-verified: contract passed despite a new advisory" "passed" "$(jq -r '.status' "$REPO/.dod/main/contract.json")"
+
 # --- branch 8: claimed, failing result matching diff_hash -> block, round++ --
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
@@ -301,6 +373,10 @@ REASON2=$(printf '%s' "$OUT2" | jq -r '.reason' 2>/dev/null)
 case "$REASON2" in
   *"BUDGET EXHAUSTED"*"Report"*) ok "branch9: reason names budget exhaustion and tells agent to report" ;;
   *) bad "branch9: reason names budget exhaustion and tells agent to report" "$REASON2" ;;
+esac
+case "$REASON2" in
+  *"advisories of the last review"*) ok "branch9: reason tells agent to report the last review's advisories" ;;
+  *) bad "branch9: reason tells agent to report the last review's advisories" "$REASON2" ;;
 esac
 case "$REASON2" in
   *"NO PROGRESS"*) bad "branch9: headline must not say NO PROGRESS when budget, not lack of progress, is the trigger" "$REASON2" ;;

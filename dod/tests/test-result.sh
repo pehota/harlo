@@ -87,6 +87,23 @@ result_write "$JPASSFILE" \
 result_read "$JPASSFILE"
 eq "judgement: advisory-only findings do not block" "0" "$RESULT_BLOCKING_FAIL"
 
+# --- RESULT_ADVISORY_IDS: advisory finding ids across judgements --------
+result_read "$RFILE"
+eq "advisory ids: none in a check-only result" "[]" "$RESULT_ADVISORY_IDS"
+result_read "$JFILE"
+eq "advisory ids: only severity advisory" '["f2"]' "$RESULT_ADVISORY_IDS"
+
+PRIOR="$REPO/.dod/main/prior-result.json"
+result_write "$PRIOR" \
+  --diff-hash "x" --baseline-sha "y" --round 2 \
+  --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"t","exit":0}]'
+
+# --- result_next_round: prior round + 1 for the same contract, else 1 ------
+eq "next round: no prior result -> 1" "1" "$(result_next_round "$REPO/.dod/main/no-such-result.json" "y")"
+eq "next round: same baseline, prior round 2 -> 3" "3" "$(result_next_round "$PRIOR" "y")"
+eq "next round: different baseline -> 1" "1" "$(result_next_round "$PRIOR" "other-baseline")"
+eq "next round: malformed prior -> 1" "1" "$(result_next_round "$BADFILE" "y")"
+
 echo
 echo "result.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

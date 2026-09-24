@@ -7,8 +7,10 @@
 # (only it) mutates.
 #
 # Fields: latched, round, escalation, last_failed_diff_hash, edits[]
-# (track.sh), state ("idle"|"verifying", this file), cache{} (this file) and
-# errors_unacknowledged (session.sh's error banner).
+# (track.sh), state ("idle"|"verifying", this file), cache{} (this file),
+# decisions[] / decided_diff_hash (the user's fix/skip decision on the
+# final review's advisory findings, below) and errors_unacknowledged
+# (session.sh's error banner).
 #
 # `state` is WORDING-ONLY: gate.sh reads it to pick which block message to
 # print, never to change the block/release decision itself (that stays
@@ -52,7 +54,9 @@ state__write_body() {
     last_failed_diff_hash: null,
     edits: [],
     state: "idle",
-    cache: {}
+    cache: {},
+    decisions: [],
+    decided_diff_hash: null
   }' > "$path" 2>/dev/null
 }
 # state_write <path> — (re)writes defaults. Used both to initialise and,
@@ -70,6 +74,8 @@ state_read() {
   STATE_EDITS="[]"
   STATE_STATE="idle"
   STATE_CACHE="{}"
+  STATE_DECISIONS="[]"
+  STATE_DECIDED_DIFF_HASH=""
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -85,6 +91,9 @@ state_read() {
   [ -n "$STATE_STATE" ] || STATE_STATE="idle"
   STATE_CACHE=$(jq -c '.cache // {}' "$path" 2>/dev/null)
   [ -n "$STATE_CACHE" ] || STATE_CACHE="{}"
+  STATE_DECISIONS=$(jq -c '.decisions // []' "$path" 2>/dev/null)
+  [ -n "$STATE_DECISIONS" ] || STATE_DECISIONS="[]"
+  STATE_DECIDED_DIFF_HASH=$(jq -r '.decided_diff_hash // ""' "$path" 2>/dev/null)
   return 0
 }
 
@@ -136,6 +145,45 @@ state_set_escalation() {
 state_set_last_failed_diff_hash() {
   local path="$1" hash="$2"
   state__mutate "$path" ".last_failed_diff_hash = $(jq -n --arg h "$hash" '$h')"
+}
+
+# --- the user's fix/skip decision on the final review's advisories ---------
+# All requirements pass but advisories remain and none is decided: the gate
+# keeps the contract open and releases the Stop — the agent has asked the
+# user and waits on them, not on unfinished work. /dod:verify records the
+# reply via state_record_decisions; the gate then closes on the next Stop,
+# unless a `fix` was decided and the changeset has not changed since
+# (state_decision_needs_verify) — a fix needs a fresh /dod:verify. The
+# decision is about ONE result's advisories (its ids + diff_hash); later
+# rounds' findings never re-open it. Reset with this file by contract_write.
+
+# state_record_decisions <path> <decisions_json> <diff_hash> <advisory_ids_json>
+# — decisions is an array of {id, decision: "fix"|"skip"} with exactly one
+# entry per id in advisory_ids (the decided result's RESULT_ADVISORY_IDS),
+# none missing, extra or repeated; diff_hash is that result's. Rejects
+# anything else, writing nothing.
+state_record_decisions() {
+  local path="$1" decisions="$2" diff_hash="$3" ids="$4"
+  dod__has_jq || return 1
+  jq -e -n --argjson d "$decisions" --argjson ids "$ids" '
+    ($d | type == "array" and length > 0)
+    and ($d | all(.[]; (.id | type == "string") and (.decision == "fix" or .decision == "skip")))
+    and ($d | map(.id) | sort) == ($ids | sort)
+  ' >/dev/null 2>&1 || return 1
+  state__mutate "$path" ".decisions = $(printf '%s' "$decisions" | jq -c .)
+    | .decided_diff_hash = $(jq -n --arg h "$diff_hash" '$h')"
+}
+
+# state_decision_needs_verify <path> <diff_hash> — 0 if a `fix` was decided
+# and the changeset is still the one it was decided on (not re-verified
+# since), 1 otherwise. Read-only: no lock needed.
+state_decision_needs_verify() {
+  local path="$1" diff_hash="$2"
+  [ -f "$path" ] || return 1
+  dod__has_jq || return 1
+  jq -e --arg h "$diff_hash" '
+    any((.decisions // [])[]; .decision == "fix") and .decided_diff_hash == $h
+  ' "$path" >/dev/null 2>&1
 }
 
 # state_log_edit <path> <prompt_id> <file_path> — appends one edit record

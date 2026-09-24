@@ -27,7 +27,11 @@ reconfirm      : [ { id, file, line, summary } ]     (delta_reconfirm only)
 task           : <contract.task>
 works_when     : <contract.works_when>               ("It works when ...")
 requirements   : <contract.requirements>
+blocking_only  : true                                (optional; absent = false)
 ```
+
+With `blocking_only: true`, report `blocking` findings only — raise no
+`advisory` ones (the user has already decided on this task's advisories).
 
 If any required input for your mode is missing, do not guess a range or invent
 scope. State the gap in your final report and review only what the given

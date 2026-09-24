@@ -42,6 +42,7 @@ independent review.
 
    TASK_KEY=$(dod_task_key "$PWD")
    contract_read ".dod/$TASK_KEY/contract.json"
+   state_read ".dod/$TASK_KEY/state.json"
    ```
    If no contract is open, tell the user to run `/dod:define` first — do
    not mark verification in progress for a contract that doesn't exist.
@@ -157,10 +158,15 @@ independent review.
    requirements : $CONTRACT_REQUIREMENTS
    ```
 
+   **After the user's advisory decision** (`state_read` gives a non-empty
+   `$STATE_DECISIONS`, see "Advisory decision" below): add
+   `blocking_only : true` to either mode's inputs — the reviewer reports
+   blocking findings only.
+
    The reviewer's final message is JSON: `{"findings":[...], "reconfirm":[...],
    "verdict":"pass|fail"}` (full schema in `dod/agents/dod-reviewer.md`).
    Parse it — do not paraphrase or re-summarize it yourself, pass the
-   `findings` array through to `result_write` as-is. The requirement's own
+   `findings` array through to step 6 as-is. The requirement's own
    `verdict` in `result.json` is the reviewer's `verdict` field: `"fail"` if
    any finding has `severity: "blocking"` or any `reconfirm` entry has
    `status != "fixed"`, else `"pass"`.
@@ -169,18 +175,22 @@ independent review.
    `result_write` — do not construct or edit `result.json` any other way (N6):
 
    ```bash
-   result_write ".dod/$TASK_KEY/result.json" \
-     --diff-hash "$DIFF_HASH" \
-     --baseline-sha "$CONTRACT_BASELINE_SHA" \
-     --round "$((STATE_ROUND + 1))" \
-     --requirements '[
+   RFILE=".dod/$TASK_KEY/result.json"
+   ROUND=$(result_next_round "$RFILE" "$CONTRACT_BASELINE_SHA")
+   REQUIREMENTS=$(jq -nc --argjson findings "$REVIEW_FINDINGS" '[
        {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
        {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
-       {"id":"review","type":"judgement","verdict":"pass|fail","findings":[...]},
+       {"id":"review","type":"judgement","verdict":"pass|fail","findings":$findings},
        {"id":"docs","type":"check","verdict":"pass|fail|n/a","doc_paths":[...]}
-     ]'
+     ]')
+   result_write "$RFILE" \
+     --diff-hash "$DIFF_HASH" \
+     --baseline-sha "$CONTRACT_BASELINE_SHA" \
+     --round "$ROUND" \
+     --requirements "$REQUIREMENTS"
    state_set_state ".dod/$TASK_KEY/state.json" "idle"
    ```
+   `$REVIEW_FINDINGS` is the reviewer's `findings` array from step 5.
    Clear `state` back to `"idle"` right after — leaving it `"verifying"`
    only means a possible future turn gets a slightly misleading "wait,
    it's running" message for one round, not a correctness problem, but
@@ -197,28 +207,36 @@ independent review.
    (checks) command or (judgements) blocking/advisory finding counts. A
    `"waived"` verdict's row states the waiver's `reason` verbatim, and an
    `"n/a"` verdict's row states why it doesn't apply — "passed" must never
-   quietly mean "passed the ones that were actually checked." On all-pass
-   (accounting for waived/n/a as satisfied), tell the user the DoD is
-   satisfied. On failure, list which requirements failed — for a failing
-   `check` with a `baseline_verdict`, state it plainly ("pre-existing — also
-   fails at baseline" vs "new — passes at baseline, this changeset broke
-   it"), since that distinction is exactly what tells the user whether to
-   expect a fix in scope; for `review`, list every `blocking` finding's
-   file, line, and summary; for `docs`, its own row states its verdict
-   plainly — `n/a` with the contract's reason if inapplicable, `pass` if
-   the reviewer confirmed every `doc_paths` entry was updated, `fail` with
-   which path(s) the reviewer found missing or stale if not (`dod/base-dod.md`,
-   `dod-define` step 4); advisory findings are listed too but flagged as
-   the user's decision, never auto-fixed (per the repo's standing rule:
-   raise non-blocking findings, never silently fix or drop them — this
-   applies to the reviewer's `findings[]`; your own observations were
-   already settled, fixed or dropped, before verify). The
-   findings you show come **only** from the reviewer's `findings[]` — never
-   add your own, and never promote implementer notes, reviewer prose outside
-   `findings[]`, or your own observations into findings or user decisions
-   (those were settled before verify, see above). The
-   gate's own block message will restate check failures, but the agent
-   should not wait for the block to inform the user.
+   quietly mean "passed the ones that were actually checked." For `docs`,
+   the row states `n/a` with the contract's reason, `pass` if the reviewer
+   confirmed every `doc_paths` entry was updated, or `fail` with which
+   path(s) it found missing or stale (`dod/base-dod.md`, `dod-define` step 4).
+
+   Findings you show come **only** from this round's reviewer `findings[]` —
+   never add your own, and never promote implementer
+   notes, reviewer prose outside `findings[]`, or your own observations into
+   findings or user decisions (those were settled before verify, see above).
+   Advisories are never auto-fixed. Then, by outcome — exactly one applies:
+
+   - **Failing round.** List which requirements failed: for a failing
+     `check` with a `baseline_verdict`, state it plainly ("pre-existing —
+     also fails at baseline" vs "new — passes at baseline, this changeset
+     broke it"); for `review`, every `blocking` finding's file, line, and
+     summary. Do not list advisories or raise them as decisions: a failing
+     round's advisories are ignored — only the final passing round's review
+     raises the advisories the user decides on (a gate escalation is the
+     one exception, see "After verify"). The gate's block
+     message will restate check failures; don't wait for it to inform the
+     user.
+   - **All pass, advisories, `$STATE_DECISIONS` is `[]`** (the user has not
+     decided yet). The contract stays open awaiting the user. Show **one**
+     advisory table, every advisory once: id, file:line, short summary, and
+     your fix/skip recommendation with its reason. Ask the user to decide fix or skip per
+     id, then stop — the gate lets you stop while the decision is pending.
+   - **All pass, and no advisories or `$STATE_DECISIONS` non-empty.** Tell
+     the user the DoD is satisfied; the gate closes the contract when you
+     stop. The decision is asked once per contract: once recorded, raise no
+     advisory as a decision again — not even a new one this round.
 
 ## After verify
 
@@ -226,3 +244,29 @@ Stop normally. The gate reads `result.json` against the current diff hash —
 if you've verified and haven't edited anything since, it releases. If you
 edit again after verifying, the diff hash changes and the gate will demand a
 fresh `/dod:verify`.
+
+If the gate escalates (budget exhausted / no progress), that round is final:
+report its unresolved findings and — unlike a normal failing round — also
+list that round's advisories from
+`result.json`'s `findings[]` once — file:line, summary — then stop. Do not
+ask a fix/skip decision: the contract closes as escalated, so nothing
+records or gates one.
+
+## Advisory decision
+
+On the user's reply to step 8's advisory table, record one decision per
+advisory id of that result, through `lib/state.sh` only (N6). It rejects a
+reply that leaves an advisory undecided — ask again for the missing ones:
+
+```bash
+result_read ".dod/$TASK_KEY/result.json"
+state_record_decisions ".dod/$TASK_KEY/state.json" \
+  '[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]' \
+  "$RESULT_DIFF_HASH" "$RESULT_ADVISORY_IDS"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
+```
+
+- **All skip** → stop; the gate closes the contract.
+- **Any fix** → fix only those (delegate), then run `/dod:verify`. That
+  round's review is blocking-only (step 5); the gate blocks a close until
+  the changeset has changed and been re-verified.

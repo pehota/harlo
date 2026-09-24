@@ -67,7 +67,8 @@ result_write() {
     }' > "$path" 2>/dev/null
 }
 
-# result_read <path> — sets RESULT_* globals. Returns 1 on missing/malformed/
+# result_read <path> — sets RESULT_* globals (RESULT_ADVISORY_IDS: JSON
+# array of the advisory findings' ids across judgement requirements). Returns 1 on missing/malformed/
 # invalid, without setting stale globals.
 result_read() {
   local path="$1"
@@ -76,6 +77,7 @@ result_read() {
   RESULT_ROUND=""
   RESULT_REQUIREMENTS="[]"
   RESULT_BLOCKING_FAIL=""
+  RESULT_ADVISORY_IDS="[]"
 
   [ -f "$path" ] || return 1
   dod__has_jq || return 1
@@ -90,5 +92,19 @@ result_read() {
   RESULT_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
   RESULT_REQUIREMENTS="$reqs"
   RESULT_BLOCKING_FAIL=$(jq -r '.summary.blocking_fail // 0' "$path" 2>/dev/null)
+  RESULT_ADVISORY_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "advisory") | .id]' 2>/dev/null)
+  [ -n "$RESULT_ADVISORY_IDS" ] || RESULT_ADVISORY_IDS="[]"
   return 0
 }
+
+# result_next_round <prior_path> <baseline_sha> — prints the prior result's
+# round + 1 when it belongs to the same contract (same baseline_sha), else 1
+# (missing, invalid, or another contract's result).
+result_next_round() {
+  local prior="$1" baseline_sha="$2"
+  if result_read "$prior" && [ "$RESULT_BASELINE_SHA" = "$baseline_sha" ]; then
+    case "$RESULT_ROUND" in ''|*[!0-9]*) ;; *) echo $((RESULT_ROUND + 1)); return 0 ;; esac
+  fi
+  echo 1
+}
+

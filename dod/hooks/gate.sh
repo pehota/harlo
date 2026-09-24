@@ -13,7 +13,7 @@
 # individually so a harness bug degrades to fail-open (branch 0), never a
 # wedged session.
 #
-# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10. Branch 5 detects both "claimed"
+# Branches shipped: 0,1,2,3,4,5,6,7,8,9,10,11,12. Branch 5 detects both "claimed"
 # (latch armed) and "edited this prompt_id without a latch" via state.edits
 # (track.sh). Branch 4 (expiry) only covers a rebased/force-pushed baseline,
 # not a killed session with untouched history — a session that crashes or is
@@ -265,7 +265,7 @@ if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
       ESCALATE_REASON="verification still failing"
     fi
     state_set_escalation "$STATE_FILE" "armed"
-    gate__block "escalate" "${ESCALATE_HEADLINE} ${ESCALATE_REASON}. Report the unresolved findings to the user, then stop. Do not attempt another fix."
+    gate__block "escalate" "${ESCALATE_HEADLINE} ${ESCALATE_REASON}. Report the unresolved findings and the advisories of the last review to the user, then stop. Do not attempt another fix."
   fi
 
   # Disarm the latch here: this round's claim has been fully judged (failed)
@@ -279,6 +279,27 @@ if [ "$RESULT_BLOCKING_FAIL" -gt 0 ]; then
   # latch itself (its step 7), so this never under-blocks a genuine retry.
   state_disarm_latch "$STATE_FILE"
   gate__block "findings" "verification result for this changeset has ${RESULT_BLOCKING_FAIL} failing requirement(s) — fix them, run /dod:verify, then stop again."
+fi
+
+# --- branch 11: all pass, advisories, no decision yet -> await, release -----
+# The agent has shown the user one fix/skip table and is waiting on the
+# reply, not on unfinished work: release, but keep the contract open. The
+# latch stays armed so the Stop after the reply (decision recorded, no
+# edits) re-enters here and closes; until then every Stop re-lands here and
+# releases again.
+if [ "$STATE_DECISIONS" = "[]" ] && [ "$RESULT_ADVISORY_IDS" != "[]" ]; then
+  gate__clear_last_block
+  dod_release
+  exit 0
+fi
+
+# --- branch 12: a fix was decided, changeset unchanged since -> block ------
+# A skip-all decision closes below; a `fix` needs the fix and a fresh
+# /dod:verify first. Any advisory that later round raises is not a new
+# decision — decisions exist, so branch 11 never fires again, and nothing
+# compares their ids to a later result's.
+if state_decision_needs_verify "$STATE_FILE" "$DIFF_HASH"; then
+  gate__block "decision" "the user chose to fix advisory finding(s), but the changeset has not changed since that decision — fix them, run /dod:verify, then stop again."
 fi
 
 # --- branch 10: all pass -> release, mark passed -----------------------------

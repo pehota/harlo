@@ -117,6 +117,68 @@ fi
 state_read "$SFILE"
 eq "state_set_state: rejected write leaves state unchanged" "idle" "$STATE_STATE"
 
+# --- advisory decision: record (must cover every advisory), needs-verify ---
+state_write "$SFILE"
+state_read "$SFILE"
+eq "default decisions" "[]" "$STATE_DECISIONS"
+
+ADV_IDS='["a1","a2"]'
+DECISIONS='[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]'
+state_record_decisions "$SFILE" "$DECISIONS" "h1" "$ADV_IDS"
+state_read "$SFILE"
+eq "state_record_decisions: decisions round-trip" "$(printf '%s' "$DECISIONS" | jq -c .)" "$STATE_DECISIONS"
+eq "state_record_decisions: records the diff hash decided on" "h1" "$STATE_DECIDED_DIFF_HASH"
+if jq -e 'has("awaiting_decision")' "$SFILE" >/dev/null 2>&1; then
+  bad "state.json has no awaiting_decision field" "present"
+else
+  ok "state.json has no awaiting_decision field"
+fi
+
+if state_record_decisions "$SFILE" '[{"id":"a1","decision":"maybe"},{"id":"a2","decision":"skip"}]' "h2" "$ADV_IDS"; then
+  bad "state_record_decisions rejects a decision other than fix|skip" "accepted"
+else
+  ok "state_record_decisions rejects a decision other than fix|skip"
+fi
+if state_record_decisions "$SFILE" '[{"id":"a1","decision":"skip"}]' "h2" "$ADV_IDS"; then
+  bad "state_record_decisions rejects a partial reply (a2 undecided)" "accepted"
+else
+  ok "state_record_decisions rejects a partial reply (a2 undecided)"
+fi
+if state_record_decisions "$SFILE" '[{"id":"a1","decision":"skip"},{"id":"a2","decision":"skip"},{"id":"a9","decision":"skip"}]' "h2" "$ADV_IDS"; then
+  bad "state_record_decisions rejects an id not among the advisories" "accepted"
+else
+  ok "state_record_decisions rejects an id not among the advisories"
+fi
+if state_record_decisions "$SFILE" '[{"id":"a1","decision":"skip"},{"id":"a1","decision":"fix"}]' "h2" "$ADV_IDS"; then
+  bad "state_record_decisions rejects a duplicate id" "accepted"
+else
+  ok "state_record_decisions rejects a duplicate id"
+fi
+if state_record_decisions "$SFILE" '[]' "h2" '[]'; then
+  bad "state_record_decisions rejects an empty decision list" "accepted"
+else
+  ok "state_record_decisions rejects an empty decision list"
+fi
+state_read "$SFILE"
+eq "state_record_decisions: rejected writes leave decisions unchanged" "$(printf '%s' "$DECISIONS" | jq -c .)" "$STATE_DECISIONS"
+
+if state_decision_needs_verify "$SFILE" "h1"; then
+  ok "state_decision_needs_verify: fix decided, diff unchanged -> needs verify"
+else
+  bad "state_decision_needs_verify: fix decided, diff unchanged -> needs verify" "false"
+fi
+if state_decision_needs_verify "$SFILE" "h9"; then
+  bad "state_decision_needs_verify: fix decided, diff changed since -> no" "true"
+else
+  ok "state_decision_needs_verify: fix decided, diff changed since -> no"
+fi
+state_record_decisions "$SFILE" '[{"id":"a1","decision":"skip"}]' "h1" '["a1"]'
+if state_decision_needs_verify "$SFILE" "h1"; then
+  bad "state_decision_needs_verify: skip-all -> no" "true"
+else
+  ok "state_decision_needs_verify: skip-all -> no"
+fi
+
 # --- concurrent state_log_edit calls: no lost writes under flock -------------
 if command -v flock >/dev/null 2>&1; then
   state_write "$SFILE"
