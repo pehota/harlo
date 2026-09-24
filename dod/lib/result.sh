@@ -15,12 +15,20 @@ RESULT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dod__has_jq() { command -v jq >/dev/null 2>&1; }
 
 # result__validate_requirements <json_array> — every element type check or
-# judgement, never neither.
+# judgement, never neither. Also: every judgement requirement's findings (if
+# any) carry a non-empty string `id` — a null/missing id can never be
+# decided (state_record_decisions requires string ids in RESULT_ADVISORY_IDS,
+# dod/lib/state.sh), which would leave an advisory-decision contract stuck
+# open forever with no way to satisfy it. Rejected here at the write
+# boundary, same as the check/judgement type rule above, rather than
+# silently dropped or coerced later.
 result__validate_requirements() {
   local reqs="$1"
   dod__has_jq || return 1
   printf '%s' "$reqs" | jq -e '
     all(.[]; .type == "check" or .type == "judgement")
+    and all(.[]; .type != "judgement" or
+      ((.findings // []) | all(.[]; (.id | type) == "string" and (.id | length) > 0)))
   ' >/dev/null 2>&1
 }
 
@@ -68,8 +76,11 @@ result_write() {
 }
 
 # result_read <path> — sets RESULT_* globals (RESULT_ADVISORY_IDS: JSON
-# array of the advisory findings' ids across judgement requirements). Returns 1 on missing/malformed/
-# invalid, without setting stale globals.
+# array of the advisory findings' ids across judgement requirements, unique
+# and non-null — result__validate_requirements already rejects a null/missing
+# id, `unique` here only guards against an accidental duplicate id so
+# state_record_decisions never sees the same id twice). Returns 1 on
+# missing/malformed/invalid, without setting stale globals.
 result_read() {
   local path="$1"
   RESULT_DIFF_HASH=""
@@ -92,7 +103,7 @@ result_read() {
   RESULT_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
   RESULT_REQUIREMENTS="$reqs"
   RESULT_BLOCKING_FAIL=$(jq -r '.summary.blocking_fail // 0' "$path" 2>/dev/null)
-  RESULT_ADVISORY_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "advisory") | .id]' 2>/dev/null)
+  RESULT_ADVISORY_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "advisory") | .id] | unique' 2>/dev/null)
   [ -n "$RESULT_ADVISORY_IDS" ] || RESULT_ADVISORY_IDS="[]"
   return 0
 }

@@ -9,6 +9,8 @@
 DIR0="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR0/test-helpers.sh"
 . "$DIR0/../lib/contract.sh"
+. "$DIR0/../lib/result.sh"
+. "$DIR0/../lib/state.sh"
 
 PROMPT="$DIR0/../hooks/prompt.sh"
 
@@ -58,6 +60,38 @@ case "$CTX" in
   *"no Definition of Done"*) ok "passed contract: nudge printed" ;;
   *) bad "passed contract: nudge printed" "$OUT" ;;
 esac
+
+# --- f3: pending advisory decision -> nudge with ids --------------------------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "h1" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"pass",
+     "findings":[{"id":"f1","severity":"advisory","file":"a.ts","line":1,"summary":"x"},
+                 {"id":"f2","severity":"advisory","file":"b.ts","line":2,"summary":"y"}]}
+  ]'
+OUT=$(run_prompt "$REPO")
+CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
+case "$CTX" in
+  *"advisory decision is still pending"*"f1"*"f2"*) ok "pending decision: nudge names the advisory ids" ;;
+  *) bad "pending decision: nudge names the advisory ids" "$OUT" ;;
+esac
+
+# --- f3: decision already recorded -> no nudge ---------------------------------
+state_record_decisions "$REPO/.dod/main/state.json" \
+  '[{"id":"f1","decision":"skip"},{"id":"f2","decision":"skip"}]' "h1" '["f1","f2"]'
+OUT=$(run_prompt "$REPO")
+eq "decided: no nudge printed" "" "$OUT"
+
+# --- f3: all-pass result with no advisories -> no nudge -----------------------
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "h1" --baseline-sha "$(git -C "$REPO" rev-parse HEAD)" --round 1 \
+  --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"t","exit":0}]'
+OUT=$(run_prompt "$REPO")
+eq "no advisories: no nudge printed" "" "$OUT"
 
 # --- non-git dir -> silent, no crash ------------------------------------------
 NONGIT=$(dod__test_mktemp_d)

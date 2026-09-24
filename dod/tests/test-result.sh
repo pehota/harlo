@@ -54,6 +54,35 @@ else
   ok "result_write does not create a file on validation failure"
 fi
 
+# --- f1: a judgement finding must carry a non-empty string id ----------------
+# A null/missing id can never be decided (state_record_decisions requires
+# string ids), which would leave an advisory-decision contract stuck open
+# forever — reject at the write boundary instead.
+NULLID="$REPO/.dod/main/nullid-result.json"
+if result_write "$NULLID" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[{"id":"review","type":"judgement","verdict":"pass",
+    "findings":[{"id":null,"severity":"advisory","file":"a.ts","line":1,"summary":"x"}]}]'; then
+  bad "result_write rejects a judgement finding with a null id" "accepted"
+else
+  ok "result_write rejects a judgement finding with a null id"
+fi
+if [ -f "$NULLID" ]; then
+  bad "result_write does not create a file on null-id validation failure" "created"
+else
+  ok "result_write does not create a file on null-id validation failure"
+fi
+
+MISSINGID="$REPO/.dod/main/missingid-result.json"
+if result_write "$MISSINGID" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[{"id":"review","type":"judgement","verdict":"pass",
+    "findings":[{"severity":"advisory","file":"a.ts","line":1,"summary":"x"}]}]'; then
+  bad "result_write rejects a judgement finding with a missing id" "accepted"
+else
+  ok "result_write rejects a judgement finding with a missing id"
+fi
+
 # --- blocking failure counted correctly --------------------------------------
 FAILFILE="$REPO/.dod/main/fail-result.json"
 result_write "$FAILFILE" \
@@ -92,6 +121,18 @@ result_read "$RFILE"
 eq "advisory ids: none in a check-only result" "[]" "$RESULT_ADVISORY_IDS"
 result_read "$JFILE"
 eq "advisory ids: only severity advisory" '["f2"]' "$RESULT_ADVISORY_IDS"
+
+# --- f1: RESULT_ADVISORY_IDS is deduplicated ----------------------------------
+DUPFILE="$REPO/.dod/main/dup-result.json"
+result_write "$DUPFILE" \
+  --diff-hash "x" --baseline-sha "y" --round 1 \
+  --requirements '[
+    {"id":"review","type":"judgement","verdict":"pass",
+     "findings":[{"id":"f1","severity":"advisory","file":"a.ts","line":1,"summary":"x"},
+                 {"id":"f1","severity":"advisory","file":"a.ts","line":1,"summary":"x"}]}
+  ]'
+result_read "$DUPFILE"
+eq "advisory ids: duplicate ids are deduplicated" '["f1"]' "$RESULT_ADVISORY_IDS"
 
 PRIOR="$REPO/.dod/main/prior-result.json"
 result_write "$PRIOR" \

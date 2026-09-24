@@ -204,8 +204,11 @@ independent review.
 
 8. **Print the pass table.** One row per requirement — **every** requirement,
    with no exceptions for a waived or not-applicable one: id, verdict, and
-   (checks) command or (judgements) blocking/advisory finding counts. A
-   `"waived"` verdict's row states the waiver's `reason` verbatim, and an
+   (checks) command or (judgements) finding counts — a failing round's
+   judgement row states its blocking count only (its advisories, if any, are
+   ignored per "Failing round" below); the passing/decision round's
+   judgement row states both blocking (always 0 there) and advisory counts.
+   A `"waived"` verdict's row states the waiver's `reason` verbatim, and an
    `"n/a"` verdict's row states why it doesn't apply — "passed" must never
    quietly mean "passed the ones that were actually checked." For `docs`,
    the row states `n/a` with the contract's reason, `pass` if the reviewer

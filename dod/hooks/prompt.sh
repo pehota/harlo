@@ -24,7 +24,7 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 DOD_ERR=""
-for lib in io.sh gitref.sh contract.sh; do
+for lib in io.sh gitref.sh contract.sh result.sh state.sh; do
   if [ -f "$PLUGIN_ROOT/lib/$lib" ]; then
     . "$PLUGIN_ROOT/lib/$lib" 2>/dev/null
   else
@@ -47,7 +47,27 @@ TASK_KEY=$(dod_task_key "$PROJECT_DIR" 2>/dev/null)
 CONTRACT_FILE="$PROJECT_DIR/.dod/$TASK_KEY/contract.json"
 if [ -f "$CONTRACT_FILE" ]; then
   contract_read "$CONTRACT_FILE" 2>/dev/null
-  [ "$CONTRACT_STATUS" = "open" ] && exit 0
+  if [ "$CONTRACT_STATUS" = "open" ]; then
+    # Pending advisory decision (gate.sh branch 11): an all-pass result with
+    # advisories and no decision recorded yet leaves the contract open but
+    # releases the Stop — nothing else reminds the agent on a LATER prompt,
+    # so a user who moves on lets the old contract keep gating new edits
+    # with the decision never asked for. Same read pattern as gate.sh:
+    # result.sh/state.sh own their files (N6), never jq into them directly.
+    RESULT_FILE="$PROJECT_DIR/.dod/$TASK_KEY/result.json"
+    STATE_FILE="$PROJECT_DIR/.dod/$TASK_KEY/state.json"
+    if result_read "$RESULT_FILE" 2>/dev/null \
+      && [ "$RESULT_BLOCKING_FAIL" = "0" ] \
+      && [ "$RESULT_ADVISORY_IDS" != "[]" ] \
+      && state_read "$STATE_FILE" 2>/dev/null \
+      && [ "$STATE_DECISIONS" = "[]" ]; then
+      IDS=$(printf '%s' "$RESULT_ADVISORY_IDS" | jq -r 'join(", ")' 2>/dev/null)
+      jq -n --arg ids "$IDS" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext:
+        "dod: an advisory decision is still pending on the open contract — advisory id(s) \($ids). Get the user'"'"'s fix/skip for each before other work, then record the decision (dod-verify SKILL.md, \"Advisory decision\")."}}' 2>/dev/null
+      exit 0
+    fi
+    exit 0
+  fi
 fi
 
 jq -n '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext:
