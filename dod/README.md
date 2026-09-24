@@ -10,22 +10,33 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
 
 - `/dod:define [task]` — open a DoD contract before implementation starts.
   Self-invoked by the agent; run it yourself if it forgets. Clarifies an
-  ambiguous task first, records "how will we know it works?" as
-  `works_when`, then derives test/e2e/scenario/docs/review per `base-dod.md`
-  as its proofs (each states what it `proves`) and shows a confirmation
-  table before writing anything.
+  ambiguous task first, spawns a fresh `dod-context-collector` to write the
+  context brief (the project standards and invariants relevant to this
+  task, at `.dod/<key>/brief.md`) the moment the task is agreed, records
+  "how will we know it works?" as `works_when`, then derives
+  test/e2e/scenario/docs/review per `base-dod.md` as its proofs (each states
+  what it `proves`) and shows a confirmation table — including the brief's
+  path (or why it's N/A) — before writing anything.
 - `/dod:verify` — run the contract's checks and independent review, write a
   result. Self-invoked by the agent; run it yourself if the gate blocks
-  asking for it. The independent review also confirms every path in an
-  applicable `docs` requirement's `doc_paths` was actually updated. The pass
-  table has a row per requirement; its findings come only from the
-  reviewer — the agent's own observations are settled, fixed or dropped,
-  before verify runs. Advisories come only from the final passing round's
-  review (a failing round shows blocking findings only). All pass with
-  advisories does not close the contract: the agent asks you fix or skip per
-  advisory and stops. All skip closes it; a fix is made, re-verified
-  (blocking-only review), then closes. Until decided, `prompt.sh` reminds
-  the agent of the pending advisory ids on every later prompt.
+  asking for it. The review runs a **scope check first**, over the full
+  changeset: any change outside the task is a blocking finding, and if it's
+  unrequested scope creep the review stops there and the agent asks you to
+  revert it or accept it and amend the contract — never an auto-fix. Only
+  once scope passes do the rest of the lenses (impact, spec, standards,
+  security, correctness) run, reading the context brief as a floor. A
+  `review` waiver sets the review **depth** to `scope` (scope check only,
+  your explicit call, never the agent's) instead of `full`. The independent
+  review also confirms every path in an applicable `docs` requirement's
+  `doc_paths` was actually updated. The pass table has a row per
+  requirement; its findings come only from the reviewer — the agent's own
+  observations are settled, fixed or dropped, before verify runs. Advisories
+  come only from the final passing round's review (a failing round shows
+  blocking findings only). All pass with advisories does not close the
+  contract: the agent asks you fix or skip per advisory and stops. All skip
+  closes it; a fix is made, re-verified (blocking-only review), then closes.
+  Until decided, `prompt.sh` reminds the agent of the pending advisory ids
+  on every later prompt.
 
 ## Manual escape hatch
 

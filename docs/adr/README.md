@@ -14,7 +14,7 @@
   establishes the asymmetry rule that an agent-authored signal may only tighten the gate.
 - [0004 — Context is split by timing: a define-time brief and a review-time impact trace](0004-context-brief-and-impact-trace.md) —
   a fresh collector writes project standards and invariants into a context brief at
-  define time; the reviewer derives change impact itself from the diff. *(proposed, v2)*
+  define time; the reviewer derives change impact itself from the diff.
 
 > **ADRs 0001–0003 are marked `superseded`.** They record decisions for the
 > pre-v2 `dod/` implementation (recoverable at tag `dod-v1-final`), which

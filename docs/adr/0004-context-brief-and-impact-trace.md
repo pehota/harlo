@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Context is split by timing: a define-time brief and a review-time impact trace

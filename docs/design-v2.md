@@ -231,12 +231,18 @@ above), not overlooked.
 ### 5.1 `gate.sh` — the decision tree
 
 > **Phase status** (`docs/design-v2.plan.md`): this diagram is the **full v2
-> end-state**. Shipped: L2, L3, L4, L5, L6, the diff-hash branch, L7, L8, L9, L11, L12
-> (both arms — round++ and the budget/no-progress escalation arm). **Not
+> end-state**. Shipped: L2, L3, L4, L5, L6, the diff-hash branch, L7, L8, L8A,
+> L9, L11, L12 (both arms — round++ and the budget/no-progress escalation
+> arm). **Not
 > shipped:** L1 as a standalone top-level branch (see below).
 > `gate.sh`'s own header comment names the shipped branches as
-> "0,1,2,3,4,5,6,7,8,9,10,11,12" (its own internal numbering, not this diagram's
-> L-labels) and says so explicitly. One concrete gap against this diagram:
+> "0,1,2,3,4,5,6,7,8,8a,9,10,11,12" (its own internal numbering, not this
+> diagram's L-labels) and says so explicitly. Branch 8a (ADR 0004, scope
+> creep) sits between L7 and L8: a blocking finding with `lens:"scope"`
+> `kind:"creep"` blocks once — no round bump, contract stays `open` — then
+> releases every later Stop on that SAME result via `state.creep_diff_hash`,
+> until a genuinely new `result.json` exists. A `kind:"gap"` finding is not
+> creep and still takes L8 as before. One concrete gap against this diagram:
 > - `stop_hook_active` is **not** an early top-level check (L1). It's
 >   consulted only inside the block-emitting helper (`gate__block`, the A2
 >   category-scoped brake) — after the contract/status/latch checks already
@@ -286,12 +292,15 @@ flowchart TB
   H --> L7{"result exists AND<br/>result.diff_hash == diff_hash?<br/>(L1's stop_hook_active brake<br/>applies here via gate__block)"}
   L7 -->|no| B7["stdout JSON block + EXIT 0<br/>block-no-result.txt"]
   L7 -->|yes| L8{"blocking failures?"}
+  L8 -->|yes| L8A{"scope creep finding?<br/>(RESULT_CREEP_IDS, ADR 0004)"}
+  L8A -->|new diff_hash| B8A["state.creep_diff_hash := diff_hash<br/>stdout JSON block + EXIT 0<br/>no round bump — user decides"]
+  L8A -->|same diff_hash as last creep block| R8A["EXIT 0 — released, contract stays open"]
+  L8A -->|no creep| L9{"round >= budget?<br/>(Phase 2 — not enforced yet,<br/>round increments unbounded)"}
   L8 -->|no| L11{"advisories AND<br/>no decision recorded?"}
   L11 -->|yes| R11["status stays open<br/>EXIT 0 — waiting on the user"]
   L11 -->|no| L12{"fix decided AND diff<br/>unchanged since?"}
   L12 -->|yes| B12["stdout JSON block + EXIT 0<br/>fix, then /dod:verify"]
   L12 -->|no| R10["print nothing<br/>status := passed<br/>tear down worktree (Phase 2)<br/>EXIT 0"]
-  L8 -->|yes| L9{"round >= budget?<br/>(Phase 2 — not enforced yet,<br/>round increments unbounded)"}
   L9 -->|no| B8["round++ · last_failed := diff_hash<br/>stdout JSON block + EXIT 0<br/>block-findings.txt"]
   L9 -->|yes| B9["escalation := armed (Phase 2)<br/>stdout JSON block + EXIT 0<br/>block-escalate.txt"]
 
@@ -299,8 +308,8 @@ flowchart TB
   classDef blk fill:#f8cecc,stroke:#b85450,color:#000
   classDef err fill:#ffe6cc,stroke:#d79b00,color:#000
   classDef p2 fill:#fff2cc,stroke:#d6b656,color:#000
-  class R2,R3,R5,R10,R4,R11 rel
-  class B7,B8,B12 blk
+  class R2,R3,R5,R10,R4,R11,R8A rel
+  class B7,B8,B12,B8A blk
   class L6,R6,L9,B9 p2
   class R_ERR err
 ```
@@ -330,15 +339,23 @@ itself each time it blocks.
   ├─ task capture ──────── argument if given, else derive from conversation
   │                        record task_source; ambiguous → clarify with the
   │                        user and stop, settled → proceed without re-asking
+  ├─ context collector ─── (ADR 0004) spawn dod-context-collector, background,
+  │                        the moment the task is agreed; awaited before the
+  │                        confirmation table; writes .dod/<key>/brief.md,
+  │                        never the implementer's own choice
   ├─ works_when (Q1) ───── "how will we know it works?" → "It works when …"
   ├─ protocol loader ───── DoD protocol floor + CLAUDE.md chain
   ├─ proof finder (Q2) ─── "how do we prove that?" → build/start · tests ·
   │                        e2e/scenario · docs · review, each with `proves`
   ├─ waiver extractor ──── free text in the user's prompt → waivers[]
+  │                        (a `review` waiver needs the user's own "user: "
+  │                        words — it sets review depth `scope`, ADR 0004)
   ├─ schema validator ──── reject malformed · reject vague-without-check
-  ├─ confirmation gate ──── print the verification table · BLOCK on yes/adjust/cancel (D29)
+  ├─ confirmation gate ──── print the verification table, incl. the context
+  │                        brief line · BLOCK on yes/adjust/cancel (D29)
   ├─ baseline recorder ─── HEAD sha + dirty file list
-  └─ contract_write ────── via lib/contract.sh, then confirm one-line: "open"
+  └─ contract_write ────── via lib/contract.sh, `--brief` from the collector's
+                           verdict, then confirm one-line: "open"
 ```
 
 Ordering matters: **the baseline is recorded last**, immediately before the
@@ -356,10 +373,16 @@ requirements.
   ├─ baseline resolver ─── ONLY on a failed check:
   │                        create .dod/<branch>/baseline worktree (once per task)
   │                        re-run that one command there → baseline_verdict
-  ├─ judgement orchestr. ─ spawn dod-reviewer with fixed prompt + schema
-  │                        round 1: full changeset
-  │                        round 2: delta + re-confirm round-1 blocking findings
-  ├─ finding classifier ── blocking vs advisory
+  ├─ judgement orchestr. ─ spawn dod-reviewer with fixed prompt + schema, incl.
+  │                        `brief`, `changed_standards` (dod_changed_standards)
+  │                        and `depth` (`scope` from a `review` waiver, else
+  │                        `full`); round 1: full changeset; round 2: delta +
+  │                        re-confirm round-1 blocking findings (scope
+  │                        findings excluded — the scope lens re-runs fresh);
+  │                        after a creep stop the next round is full again
+  ├─ finding classifier ── blocking vs advisory; a blocking `scope`+`creep`
+  │                        finding is a user decision (revert / accept &
+  │                        amend), never an auto-fix (ADR 0004)
   ├─ result_write ──────── via lib/result.sh · evidence/ files · keyed to diff_hash
   └─ pass table printer ── on all-pass, prints the brief table to the user
 ```
@@ -393,8 +416,13 @@ dod/
 │   ├── dod-define/SKILL.md
 │   └── dod-verify/SKILL.md
 └── agents/
-    └── dod-reviewer.md
+    ├── dod-reviewer.md
+    └── dod-context-collector.md   (ADR 0004)
 ```
+
+`.dod/<task_key>/brief.md` (ADR 0004) is the context brief `dod-context-collector`
+writes — task-specific harness state next to `contract.json`/`result.json`/
+`state.json`, not tracked in the repo.
 
 **N6 enforcement rule:** nothing outside `lib/contract.sh` may `jq` into
 `contract.json`; likewise for `result.sh` and `state.sh`. Checkable by grep in
@@ -477,6 +505,7 @@ Owned by `lib/contract.sh`.
   "works_when": "It works when <observable outcome>",
   "baseline": { "sha": "a1b2c3", "dirty_files": ["README.md"] },
   "waivers": [ { "id": "lint", "reason": "user: prototype spike" } ],
+  "brief": { "applicable": true, "path": ".dod/feat-invite-flow/brief.md" },
   "requirements": [
     { "id": "build",  "type": "check", "cmd": "pnpm build",
       "expect_exit": 0, "source": "auto-detected",
@@ -506,6 +535,15 @@ Owned by `lib/contract.sh`.
   requirement (which part of `works_when` it proves). `proves` replaces the
   earlier advisory `rationale`; a legacy contract without `works_when`, or
   with `rationale` instead of `proves`, still reads.
+- **`brief` always exists on write** (ADR 0004): either `applicable:true`
+  with `path` pointing at an existing, non-empty file (a relative path
+  resolves against the repo root), or `applicable:false` with a non-empty
+  `reason`. Enforced by `contract__validate_brief`. A legacy contract
+  without `brief` still reads, via `contract_read`'s synthesized
+  `{"applicable":false,"reason":"contract predates the context brief"}`.
+- **a `review`-id waiver's `reason` must start `"user: "`** (ADR 0004,
+  `contract__validate_waivers`) — review depth `scope` is the user's
+  explicit call, never an agent's inference.
 
 **Cross-artefact side effect:** every `contract_write` call also resets the
 sibling `state.json` to defaults (via `state_write`) — a fresh `/dod:define`
@@ -533,17 +571,34 @@ Owned by `lib/result.sh`.
     { "id": "lint",  "verdict": "waived", "reason": "user: prototype spike" },
     { "id": "e2e",   "verdict": "n/a",    "reason": "pure refactor" },
     { "id": "review", "type": "judgement", "verdict": "fail",
+      "depth": "full",
       "findings": [
-        { "id": "f1", "severity": "blocking", "file": "src/a.ts", "line": 42,
+        { "id": "f1", "severity": "blocking", "lens": "impact",
+          "file": "src/a.ts", "line": 42,
           "summary": "null deref when invite expired" },
-        { "id": "f2", "severity": "advisory", "file": "src/b.ts",
+        { "id": "f2", "severity": "advisory", "lens": "standards",
+          "file": "src/b.ts",
           "summary": "naming inconsistent with module" }
+      ],
+      "impact_trace": [
+        { "file": "src/a.ts", "line": 42,
+          "guarantees": ["transaction opened by saveOrder()"], "inside": false }
       ],
       "evidence": "evidence/review-r1.json" }
   ],
   "summary": { "pass": 3, "blocking_fail": 2, "advisory": 1, "waived": 1, "na": 1 }
 }
 ```
+
+**ADR 0004 additions.** Every finding carries `lens` (`scope | impact | spec |
+standards | security | correctness`); a `scope` finding also carries `kind`
+(`creep | gap`). `impact_trace` is one entry per changed hunk the impact lens
+walked, `[]` when it did not run (a creep stop, or `depth: scope`). `depth`
+records whether the round ran `full` or `scope`. `/dod:verify` copies both
+onto the `review` entry verbatim from the reviewer's output. `result_read` exports
+`RESULT_CREEP_IDS`: the ids of `blocking` findings with `lens:"scope"` and
+`kind:"creep"` — `gate.sh`'s one-shot creep branch (§5.1, 8a) reads it to
+route scope creep to a user decision instead of an ordinary fix round.
 
 **`blocking` vs `advisory`.** Only `blocking` fails the gate. `advisory` never
 triggers a fix — it appears in the pass table with a fix/skip recommendation for
@@ -561,7 +616,8 @@ ids as `RESULT_ADVISORY_IDS`. `round` is the prior result's `round + 1` for the 
 ### 6.5 `state.json`
 
 Owned by `lib/state.sh`. All fields below are shipped: `latched`, `round`,
-`escalation`, `last_failed_diff_hash`, `edits` (`track.sh`), `state`
+`escalation`, `last_failed_diff_hash`, `creep_diff_hash` (ADR 0004, below),
+`edits` (`track.sh`), `state`
 (`/dod:verify`'s in-progress marker), `cache`
 (`state_cache_get`/`state_cache_set`), `decisions` / `decided_diff_hash`
 (the advisory decision, below), and
@@ -583,6 +639,7 @@ give for free.
   "round": 0,
   "escalation": "none",                    // none | armed
   "last_failed_diff_hash": null,
+  "creep_diff_hash": null,
   "edits": [ { "prompt_id": "…", "path": "src/a.ts", "ts": "…" } ],
   "state": "idle",                         // idle | verifying
   "cache": { "<diff_hash>:<cmd_hash>": "pass" },
@@ -631,6 +688,13 @@ first. That re-verify's reviewer runs `blocking_only`, and since
 Escalation does not use this: it is terminal (L6 → `escalated`), so the
 last review's advisories are reported once, not asked, and there is no
 later round to gate.
+
+**`creep_diff_hash`** (ADR 0004) is gate.sh's one-shot marker for branch 8a
+(§5.1): set to the blocked result's `diff_hash` the first time a blocking
+`lens:"scope"` `kind:"creep"` finding is seen; the next Stop with the SAME
+`diff_hash` releases silently instead of re-blocking, until a genuinely new
+`result.json` (different `diff_hash`) exists. Reset to `null` by
+`contract_write`, like every other state field.
 
 **Not independently owned end-to-end:** `contract.sh`'s `contract_write`
 resets this file to defaults on every open/amend (see §6.3) — `state.json`'s
@@ -714,6 +778,9 @@ reconfirm      : [ { id, file, line, summary } ] (delta mode only)
 task           : <contract.task>
 works_when     : <contract.works_when>
 requirements   : <contract.requirements>
+brief          : <path to the context brief> | n/a: <reason>       (ADR 0004)
+changed_standards : [ "<repo-relative path>", ... ]                (ADR 0004)
+depth          : full | scope                                      (ADR 0004)
 ```
 
 **Prompt invariants** — fixed text, not composed per run:
@@ -728,15 +795,39 @@ requirements   : <contract.requirements>
   `reconfirm` entry against current code.
 - Do not fix anything. Do not write outside your result.
 
+**Lenses — in order** (ADR 0004): `scope` → `impact` → `spec` → `standards` →
+`security` → `correctness`. `scope` (always runs, over the full changeset)
+checks every hunk traces to `task`/`requirements` (`kind:"gap"` if not
+attempted at all) and flags anything beyond it (`kind:"creep"`, including any
+`changed_standards` entry the task didn't ask for) — a `creep` finding stops
+the review right there (no other lens runs, `impact_trace` stays empty); at
+`depth: scope` the review stops after this lens regardless. `impact` runs
+next, over every changed hunk, so it is never the lens cut on a large diff —
+it walks each hunk's callers and enclosing scope, names the guarantees in
+force (transaction, lock, auth context, ordering), and records
+`{file, line, guarantees, inside}` in `impact_trace` for every hunk, escape or
+not. `spec` judges `works_when`/`task` conformance and the `docs`
+requirement's `doc_paths`, same as before. `standards` reads `brief` as a
+**floor, not a ceiling** — check against it, then form an independent view;
+if `brief` is `n/a`, fall back to the reviewer's own standards discovery. A
+`changed_standards` file the task requested overrides the brief where they
+disagree.
+
 **Output schema** (`review.schema.json`)
 
 ```jsonc
 {
+  "depth": "full",
   "findings": [
-    { "id": "f1", "severity": "blocking|advisory",
+    { "id": "f1", "severity": "blocking|advisory", "lens": "scope|impact|spec|standards|security|correctness",
       "file": "src/a.ts", "line": 42,
       "summary": "one sentence",
-      "failure_scenario": "concrete inputs → wrong output" }
+      "failure_scenario": "concrete inputs → wrong output",
+      "kind": "creep|gap"                    (scope findings only) }
+  ],
+  "impact_trace": [
+    { "file": "src/a.ts", "line": 42,
+      "guarantees": ["transaction opened by saveOrder()"], "inside": false }
   ],
   "reconfirm": [
     { "id": "f1", "status": "fixed|still_present|unverifiable",
@@ -776,6 +867,16 @@ Subagents are **not gated**. Their edits are still tracked, because
 `PostToolUse` fires inside them. The main loop's `Stop` is the single gate, at
 the boundary where work is claimed done. The `dod-reviewer` is therefore exempt
 by construction and cannot deadlock the gate.
+
+**`dod-context-collector`** (ADR 0004) is the same kind of exempt, fresh,
+ungated subagent — spawned once at define time, writing only the brief file
+it is given (`.dod/<key>/brief.md`), no other file, no edit, no commit.
+`track.sh` ignores every write under `.dod/` regardless of which agent made
+it (own bookkeeping, never task work — logging it as an edit would make
+writing `result.json` or the brief look like the agent claiming the task),
+so the collector's write neither arms D8 nor triggers the no-contract nudge.
+Like the reviewer, the collector is fresh context so the implementer never
+gets to choose which standards apply to its own work.
 
 ### 7.3 Speed (N3)
 

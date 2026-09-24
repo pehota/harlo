@@ -29,8 +29,22 @@ _Avoid_: blast radius, call-graph review
 
 **Scope check**:
 The reviewer's confirmation that every hunk of a changeset traces to the task,
-and nothing beyond it was changed. Never skipped.
+and nothing planned was left out. Never skipped; the only lens that can stop
+the review early.
 _Avoid_: scope creep review, task-fit
+
+**Scope creep**:
+A change beyond the task: a hunk no part of the task or its requirements asks
+for. Includes any standards file edit the task didn't request. Blocking, and
+a decision for the user (revert, or accept and amend the task) — never an
+auto-fix.
+_Avoid_: unrequested change, out-of-scope edit
+
+**Scope gap**:
+A part of the task the changeset does not implement at all — no hunk even
+attempts it. Blocking, and fixed like any other failing requirement. Not the
+same as getting an attempted part wrong, which is a spec finding.
+_Avoid_: missing requirement, incomplete task
 
 **Review depth**:
 How much of the review runs: `full` (every lens) or `scope` (scope check
@@ -54,3 +68,9 @@ The written and de-facto conventions of the reviewed project — its rule files,
 ADRs, and the idioms of its framework and neighbouring code. Fixed for the
 life of a task.
 _Avoid_: style guide, best practices
+
+**Standards file**:
+A file the harness treats as project standards by path alone, mechanically:
+`CLAUDE.md`, `AGENTS.md`, `CONTEXT.md` at any depth, `docs/adr/*`,
+`.claude/rules/*`, `.cursor/rules/*`, `.github/copilot-instructions.md`.
+_Avoid_: rule file, config file

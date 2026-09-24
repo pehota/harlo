@@ -52,3 +52,7 @@ green (folded into the checks, not a requirement of its own).
   What `docs` cannot enforce mechanically is whether the named
   `doc_paths` were *correctly* updated — that's `dod-reviewer`'s judgement
   call, checked against the `docs` requirement during the `review` pass.
+- The context brief (ADR 0004, `contract.brief`) is contract context, not a
+  proof — it is not a checklist item here. It informs the implementer and
+  is a floor for `dod-reviewer`'s `standards` lens, but proves nothing about
+  `works_when` on its own.
