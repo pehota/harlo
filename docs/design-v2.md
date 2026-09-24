@@ -615,7 +615,11 @@ misleading-but-harmless message for at most one turn before the next
 next to `escalation`. When all requirements pass but advisories remain and
 `decisions` is empty, the gate releases with the contract still `open`
 (L11), writing nothing; the latch stays armed, so every Stop until the reply
-re-lands there. `/dod:verify` records the reply via `state_record_decisions`
+re-lands there. `prompt.sh` backs this up on every later prompt while it
+holds: open contract, latest result `blocking_fail=0` with non-empty
+`advisory_ids`, and `state.json`'s `decisions` still empty — it reminds the
+agent of the pending advisory ids and to get the user's fix/skip for each,
+so the ask survives even if the agent moves on mid-turn. `/dod:verify` records the reply via `state_record_decisions`
 with that result's `RESULT_ADVISORY_IDS` and `diff_hash`: exactly one
 `{id, decision}` per advisory id — a partial reply, an unknown or a repeated
 id is rejected and nothing is written. The decision is about that one

@@ -24,7 +24,8 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
   review (a failing round shows blocking findings only). All pass with
   advisories does not close the contract: the agent asks you fix or skip per
   advisory and stops. All skip closes it; a fix is made, re-verified
-  (blocking-only review), then closes.
+  (blocking-only review), then closes. Until decided, `prompt.sh` reminds
+  the agent of the pending advisory ids on every later prompt.
 
 ## Manual escape hatch
 
