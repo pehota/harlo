@@ -56,3 +56,25 @@ _(filled at the end)_
 
 ## Future (out of scope)
 - Specialised subagent for Q1 (derive `works_when`) and for Q2 (find/list proofs).
+
+---
+
+# Advisory batching across /dod:verify rounds
+
+## Item 2 — final-review-only advisories, decided before close
+- [x] a. Carry-over deleted: `result_merge_advisories`, dedupe, `carried_from_round`, "N advisories held for the end" (+ tests, fixtures, doc text). Failing rounds' advisories are ignored.
+- [x] b. Kept: `result_next_round` (round = prior + 1, same baseline_sha, else 1) + tests.
+- [x] c. `result.sh`: `RESULT_ADVISORY_IDS` (advisory ids of the result).
+- [x] d. `state.sh`: `decisions[]` + `decided_diff_hash`; `state_record_decisions` needs exactly one decision per advisory id of the decided result (f4); `state_decision_needs_verify`. No `awaiting_decision` field (f5: written, never read).
+- [x] e. Gate: branch 11 (all pass + advisories + no decisions → release, contract open); branch 12 (fix decided + diff unchanged → block). Escalation text: "the advisories of the last review".
+- [x] f. `dod-reviewer` `blocking_only` input; SKILL step 5 flag, step 6 findings as-is, step 8 by outcome, escalation lists last review's advisories (not asked), "Advisory decision" section.
+- [x] g. Docs: `dod/README.md`, `docs/design-v2.md` (§5.1, §6.4, §6.5, §6.6, §7.6, D31).
+- [x] h. Scenario `test-advisory-batching.sh`: (fail), (decide), (after-fix), (escalate).
+
+## Review
+- Why the pivot: review round 1 failed (2 blocking + 4 advisories); 4 of 6 rooted in cross-round carry-over. Without carry-over, f1 (decided advisories re-carried) and f2 (carried/new id clash) cannot occur: decisions are keyed to one result's ids + diff_hash and never compared with a later result.
+- Unit red → green: test-state 6 → 40/40, test-result 2 → 18/18, test-gate 3 → 56/56.
+- Scenario baseline (371f1fb skill): (fail) 0/3 (presents a3), (decide) 0/3 (no recommendation), (after-fix) 0/3 (a9 asked), (escalate) 0/3 (asks b1/a1 as decisions).
+- After: all four 3/3. First after-run (escalate) 2/3 — step 8's failing-round "don't list advisories" beat the escalation text; named escalation as the one exception in both places.
+- Bite: 16 bad hand-made replies rejected, 4 good accepted.
+- `bash run-tests.sh`: all 36 suites passed.
