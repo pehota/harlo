@@ -231,11 +231,11 @@ above), not overlooked.
 ### 5.1 `gate.sh` — the decision tree
 
 > **Phase status** (`docs/design-v2.plan.md`): this diagram is the **full v2
-> end-state**. Shipped: L2, L3, L4, L5, L6, the diff-hash branch, L7, L8, L9
+> end-state**. Shipped: L2, L3, L4, L5, L6, the diff-hash branch, L7, L8, L9, L11, L12
 > (both arms — round++ and the budget/no-progress escalation arm). **Not
 > shipped:** L1 as a standalone top-level branch (see below).
 > `gate.sh`'s own header comment names the shipped branches as
-> "0,1,2,3,4,5,6,7,8,9,10" (its own internal numbering, not this diagram's
+> "0,1,2,3,4,5,6,7,8,9,10,11,12" (its own internal numbering, not this diagram's
 > L-labels) and says so explicitly. One concrete gap against this diagram:
 > - `stop_hook_active` is **not** an early top-level check (L1). It's
 >   consulted only inside the block-emitting helper (`gate__block`, the A2
@@ -286,7 +286,11 @@ flowchart TB
   H --> L7{"result exists AND<br/>result.diff_hash == diff_hash?<br/>(L1's stop_hook_active brake<br/>applies here via gate__block)"}
   L7 -->|no| B7["stdout JSON block + EXIT 0<br/>block-no-result.txt"]
   L7 -->|yes| L8{"blocking failures?"}
-  L8 -->|no| R10["print nothing<br/>status := passed<br/>tear down worktree (Phase 2)<br/>EXIT 0"]
+  L8 -->|no| L11{"advisories AND<br/>no decision recorded?"}
+  L11 -->|yes| R11["status stays open<br/>EXIT 0 — waiting on the user"]
+  L11 -->|no| L12{"fix decided AND diff<br/>unchanged since?"}
+  L12 -->|yes| B12["stdout JSON block + EXIT 0<br/>fix, then /dod:verify"]
+  L12 -->|no| R10["print nothing<br/>status := passed<br/>tear down worktree (Phase 2)<br/>EXIT 0"]
   L8 -->|yes| L9{"round >= budget?<br/>(Phase 2 — not enforced yet,<br/>round increments unbounded)"}
   L9 -->|no| B8["round++ · last_failed := diff_hash<br/>stdout JSON block + EXIT 0<br/>block-findings.txt"]
   L9 -->|yes| B9["escalation := armed (Phase 2)<br/>stdout JSON block + EXIT 0<br/>block-escalate.txt"]
@@ -295,8 +299,8 @@ flowchart TB
   classDef blk fill:#f8cecc,stroke:#b85450,color:#000
   classDef err fill:#ffe6cc,stroke:#d79b00,color:#000
   classDef p2 fill:#fff2cc,stroke:#d6b656,color:#000
-  class R2,R3,R5,R10,R4 rel
-  class B7,B8 blk
+  class R2,R3,R5,R10,R4,R11 rel
+  class B7,B8,B12 blk
   class L6,R6,L9,B9 p2
   class R_ERR err
 ```
@@ -547,13 +551,21 @@ the user to decide. This encodes the standing rule that non-blocking review
 findings are raised to the user, never silently fixed and never silently
 dropped. The threshold is hardcoded in v1; see §9.
 
+**Only the final review's advisories count.** Each round's `findings[]` is
+that round's reviewer output as-is; nothing carries across rounds. A failing
+round's advisories are ignored (except on escalation, §6.6); the passing
+round's are the ones the user decides on (§6.5). `result_read` exposes their
+ids as `RESULT_ADVISORY_IDS`. `round` is the prior result's `round + 1` for the same `baseline_sha`, else 1
+(`result_next_round`).
+
 ### 6.5 `state.json`
 
 Owned by `lib/state.sh`. All fields below are shipped: `latched`, `round`,
 `escalation`, `last_failed_diff_hash`, `edits` (`track.sh`), `state`
 (`/dod:verify`'s in-progress marker), `cache`
-(`state_cache_get`/`state_cache_set`), and `errors_unacknowledged`
-(`session.sh`'s error banner).
+(`state_cache_get`/`state_cache_set`), `decisions` / `decided_diff_hash`
+(the advisory decision, below), and
+`errors_unacknowledged` (`session.sh`'s error banner).
 
 **`worktree` — deliberately never a `state.json` field.** The shipped
 baseline worktree (`dod_baseline_worktree`, `lib/gitref.sh`) is tracked by
@@ -574,6 +586,8 @@ give for free.
   "edits": [ { "prompt_id": "…", "path": "src/a.ts", "ts": "…" } ],
   "state": "idle",                         // idle | verifying
   "cache": { "<diff_hash>:<cmd_hash>": "pass" },
+  "decisions": [ { "id": "a1", "decision": "fix" } ],  // fix | skip
+  "decided_diff_hash": "9f8e…",            // changeset the decision was made on
   "worktree": null,
   "errors_unacknowledged": 0
 }
@@ -592,6 +606,27 @@ hadn't started when it had. No TTL/staleness guard on `state` — a crashed
 session can leave it stuck `"verifying"`, but the only cost is a
 misleading-but-harmless message for at most one turn before the next
 `/dod:verify` call resets it fresh; not worth the added complexity (YAGNI).
+
+**The advisory decision lives here, not in `contract.json` or
+`result.json`.** `result.json` is overwritten every round, and a non-`open`
+`contract.status` would release every later Stop at L3 (so edits for a
+`fix` would go ungated) and make `prompt.sh` nudge for a new `/dod:define`.
+`state.json` is per-contract flow state already (reset by `contract_write`),
+next to `escalation`. When all requirements pass but advisories remain and
+`decisions` is empty, the gate releases with the contract still `open`
+(L11), writing nothing; the latch stays armed, so every Stop until the reply
+re-lands there. `/dod:verify` records the reply via `state_record_decisions`
+with that result's `RESULT_ADVISORY_IDS` and `diff_hash`: exactly one
+`{id, decision}` per advisory id — a partial reply, an unknown or a repeated
+id is rejected and nothing is written. The decision is about that one
+result; nothing later compares its ids to another result's. Next Stop: all `skip` closes (L10); any `fix` blocks
+while the diff still equals `decided_diff_hash` (L12,
+`state_decision_needs_verify`) — the fix and a fresh `/dod:verify` must come
+first. That re-verify's reviewer runs `blocking_only`, and since
+`decisions` is non-empty, no advisory it still raises re-opens the decision.
+Escalation does not use this: it is terminal (L6 → `escalated`), so the
+last review's advisories are reported once, not asked, and there is no
+later round to gate.
 
 **Not independently owned end-to-end:** `contract.sh`'s `contract_write`
 resets this file to defaults on every open/amend (see §6.3) — `state.json`'s
@@ -652,7 +687,8 @@ DOD GATE — BUDGET EXHAUSTED after {{round}} rounds.
 {{reason}}
 
 REQUIRED NEXT ACTION
-  Report the unresolved findings below to the user, then stop.
+  Report the unresolved findings below and the advisories of the last
+  review to the user, then stop.
   Do not attempt another fix.
 
 UNRESOLVED
@@ -809,6 +845,17 @@ Those are settled **before** `/dod:verify`: a suspected bug or spec violation is
 fixed first; anything else is dropped. Neither is passed to `dod-reviewer` as a
 hint — that would bias the independent review.
 
+**Advisories come only from the final passing round's review.** A failing
+round shows failures and blocking findings only; its advisories are ignored.
+On a gate escalation (§6.6) the last review's advisories are listed once,
+not asked.
+
+**All pass with advisories does not close the contract.** `/dod:verify`
+shows one advisory table (id, file:line, summary, its fix/skip
+recommendation with reason), asks the user to decide per id, and stops; the gate releases with the contract open (§6.5, L11). The reply is
+recorded per id; all skip closes, any fix is fixed and re-verified with a
+blocking-only review, then closes. The decision is asked once per contract.
+
 ---
 
 ## 8. Decision log
@@ -845,6 +892,7 @@ hint — that would bias the independent review.
 | D28 | `/dod:define` and `/dod:verify` instruct the agent to self-trigger verification the moment it believes a task is done, in the same turn — the gate block is the fallback, not the intended path | rely on the Stop-gate block as the only prompt to verify |
 | D29 | **Reverses D4.** `/dod:define`'s verification table blocks on user confirmation (yes/adjust/cancel) before `contract_write` runs, using a fixed template (Verification / Expected Result / Why This Verification per row). The block covers implementation edits too, not just the contract write — no edit toward the task before the user replies. Confirmation is a single gate, not two: "yes" approves the list AND starts implementation in the same turn — the agent does not stop after `contract_write` and wait to be told to begin | keep D4's silent-print; a status label ("Contract Opened") with no content the user has to read; gate only the file write, allow the agent to start coding while the table sits unanswered; treat confirmation and "begin work" as two separate approvals |
 | D30 | Definition is one chain: agree the task (clarify if ambiguous, don't re-ask if settled) → "how will we know it works?" (`works_when`, required) → "how do we prove that?" (the requirements, each with a required `proves`). The D29 table opens with "It works when:" and its third column is "Proves". Agent/prompt/skill text counts as observable behavior, so `scenario` is N/A only when another row already fully proves `works_when` | an optional free-text `rationale` per requirement; deciding scenario applicability on "is there runnable code" |
+| D31 | Advisories come only from the final passing round's review; all pass with advisories waits for the user's fix/skip decision on every one before closing; the decision lives in `state.json`, a `fix` needs a fresh verify, and later rounds are blocking-only | carry advisories across rounds (stale/duplicate/id-clashing findings); close on pass and list advisories as FYI; `contract.status: awaiting_decision` (ungates the fix edits) |
 
 ---
 

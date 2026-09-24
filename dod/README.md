@@ -18,8 +18,13 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
   result. Self-invoked by the agent; run it yourself if the gate blocks
   asking for it. The independent review also confirms every path in an
   applicable `docs` requirement's `doc_paths` was actually updated. The pass
-  table shows only the reviewer's findings; the agent's own observations
-  are settled — fixed or dropped — before verify runs.
+  table has a row per requirement; its findings come only from the
+  reviewer — the agent's own observations are settled, fixed or dropped,
+  before verify runs. Advisories come only from the final passing round's
+  review (a failing round shows blocking findings only). All pass with
+  advisories does not close the contract: the agent asks you fix or skip per
+  advisory and stops. All skip closes it; a fix is made, re-verified
+  (blocking-only review), then closes.
 
 ## Manual escape hatch
 
