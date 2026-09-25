@@ -28,9 +28,9 @@ safety net for when you fail, not the plan.
    Otherwise derive one sentence from the current conversation
    (`task_source: "conversation"`). Then decide: could two careful engineers
    read it and build different things (what changes, where, what "better"
-   means)? Test: can you write step 3's `works_when` as a concrete, checkable
-   outcome without guessing? A relative target with no measure ("shorter",
-   "faster", "less annoying", "cleaner") fails that test. If it fails, ask
+   means)? Test: can you name a concrete, checkable outcome without guessing?
+   A relative target with no measure ("shorter", "faster", "less annoying",
+   "cleaner") fails that test. If it fails, ask
    the user concrete clarifying questions and stop — no table, no contract —
    until the task is clear and agreed. If the conversation already settled
    it, proceed without re-asking.
