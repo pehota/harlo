@@ -22,9 +22,11 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
   asking for it. The review runs a **scope check first**, over the full
   changeset: any change outside the task is a blocking finding, and if it's
   unrequested scope creep the review stops there and the agent asks you to
-  revert it or accept it and amend the contract — never an auto-fix. Only
-  once scope passes do the rest of the lenses (impact, spec, standards,
-  security, correctness) run, reading the context brief as a floor. A
+  revert it or accept it and amend the contract — never an auto-fix. A scope
+  gap (part of the task left undone) is also blocking, but only creep stops
+  the review early; once past scope, the rest of the lenses (impact, spec,
+  standards, security, correctness) run too, reading the context brief as a
+  floor. A
   `review` waiver sets the review **depth** to `scope` (scope check only,
   your explicit call, never the agent's) instead of `full`. The independent
   review also confirms every path in an applicable `docs` requirement's

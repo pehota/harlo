@@ -260,7 +260,8 @@ safety net for when you fail, not the plan.
 
 ## If a contract is already open for this branch
 
-Amend it: re-run steps 2–6 (capture, `works_when`, proofs, waivers,
+Amend it: re-run steps 2–6 (step 2 without the collector spawn — see below;
+capture, `works_when`, proofs, waivers,
 **confirm the table again** — an
 amend changes what "done" means, so it needs the same confirmation a fresh
 open does) before `contract_write` for the same `task_key`. There is no
