@@ -18,3 +18,14 @@
   specifics, leaking that repo's concerns into dod.
 - **Rule:** fixtures model the pattern, never replay another project's
   incident — abstract the categories, then invent neutral examples.
+
+## Verification results are built from the log, never a template
+
+- **Pattern:** a verify round's `result.json` was written from the previous
+  round's script with `"verdict":"pass"` hard-coded, before reading the
+  scenario log — which had failed. A false pass reached `result.json`.
+- **Why wrong:** the result is the gate's trust anchor; a templated verdict
+  is grading your own homework with the answer key pre-filled.
+- **Rule:** derive every check verdict from that run's actual exit code/log
+  (parse it in the same script that writes the result); never reuse a prior
+  round's verdict values.
