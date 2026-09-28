@@ -623,7 +623,7 @@ Rules for every step:
   - Test: table for save v1 → load, `EEXIST` conflict, highest-version load, list by key (`PROJ-1` vs `PROJ-12`), list all, journal order across versions, and a corrupt file failing load.
   - Impl: `adapters/state-files.ts --dir`.
   - Done when green by piping JSON into the executable.
-- [ ] **M0.15 Spawn.**
+- [x] **M0.15 Spawn.**
   - Test: fixture bash adapters returning ok, accepted, failed, invalid JSON, schema-invalid, exit 1 and ENOENT. Also:
     - a parent secret env var is absent in the child and the profile env is present
     - a `cancel` command spawns the target's port adapter with argv `<port> cancel` and stdin payload `{target}`; it is a fire, so a non-zero exit lands in `errors`
