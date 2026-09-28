@@ -97,7 +97,7 @@ ship/
   env/                      # reference environment scripts, not part of the core or Runner
     telegram-listener.ts    # M2
     poll-changed.sh         # M1: cron-able WorkItem change poller
-    poll-stalled.sh         # M1: cron-able check for awaited commands never sent
+    poll-stalled.sh         # M1: cron-able check for awaited commands never sent or orphaned by a dead Runner
     watch-pr.ts             # M3
     watch-deploy.ts         # M3
   test/
@@ -250,12 +250,12 @@ type Signal =
 
 type Note = "ignored_stale" | "ignored_terminal" | "invalid_answer" | "rejected_start"
           | "workitem_changed_late" | "workitem_unchanged";
-type Entry = {                                 // Runner adds `at` (core has no clock)
+type Entry = {                                 // Runner adds `time` (core has no clock)
   delivery: DeliveryId;
   signal: Signal
     | { kind: "start"; workItem: WorkItem }
     // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
-    | { kind: "sent"; id: CommandId }          // after each spawn that started a process
+    | { kind: "sent"; id: CommandId; pid: number; host: string }  // once the adapter process has started, before its exit
     | { kind: "accepted"; id: CommandId }      // the adapter printed `accepted`
     | { kind: "adapter_error"; id: CommandId };// crash or invalid stdout; `info` = stderr tail
   from: Position | null; to: Position; issued: CommandId[];
@@ -296,7 +296,7 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 ### 3.4 State on disk (file adapter)
 
 ```
-<dir>/<delivery>/<version>.json   = { state: Snapshot, entries: (Entry & {at: string})[] }
+<dir>/<delivery>/<version>.json   = { state: Snapshot, entries: (Entry & {time: string})[] }
 ```
 - Save writes a tmp file, then `link(tmp, <version>.json)`. `EEXIST` means conflict. This is CAS, and the snapshot and its journal entries land in one atomic step. **[verified]** `linkSync` throws `EEXIST` under Bun 1.4.2 on macOS; Linux is **[unverified]**.
 - Load reads the highest version. The journal is every `entries` array, concatenated in version order. It is append-only (ADR 0005).
@@ -445,7 +445,7 @@ Notes:
 | D2 | non-terminal, awaiting null (after B6) | stop `{o, r}` | abandoned | abandon(o, r) | |
 | D3 | close or teardown (outcome already set) | stop `{o, r}` | abandoned | cancel + abandon(o, r) | outcome overwritten by o (stop wins) |
 | W1 | any non-terminal | `workItem_changed` with title and body equal to the snapshot's | same | none | `workitem_unchanged`, state unchanged |
-| W2 | setup, or blocked at setup | changed | same | none | workItem updated (Define has not run yet); blocked at setup stays blocked, so blockedAt is kept |
+| W2 | setup, or blocked at setup | changed | same | none | workItem updated (Define has not run yet); blocked at setup stays blocked, so blockedAt is kept (a changed WorkItem does not fix a failed workspace; only `retry` or `stop` moves it) |
 | W3 | define (incl. awaiting ask), or blocked at define | changed | define | cancel awaited (if any); run define `{}` | workItem updated; blockedAt = null when leaving Blocked |
 | W4 | accept, or blocked at accept | changed | accept | cancel awaited (if any); decide accept (evidence.note = "workItem changed") | workItem updated; blockedAt = null when leaving Blocked |
 | W5 | implement, check, decision (incl. asks), or blocked at one of these | changed | accept | cancel awaited (if any); decide accept, note as W4 | workItem updated; fixRounds and findings unchanged; blockedAt = null when leaving Blocked |
@@ -497,11 +497,15 @@ while queue not empty:
   for try in 1..5:
     {version, state} = State.load(d)
     out = core(policy, state, sig)
-    if State.save(d, version+1, out.state, [out.entry + at]) == saved: break
+    if State.save(d, version+1, out.state, [out.entry + time]) == saved: break
   if not saved: exit 3 with unapplied = [sig, ...queue]
   for cmd in out.commands (cancels first):        # every command runs, whatever an earlier one returned
-    r = spawn(cmd)
-    note = r started a process ? [sent{cmd.id}] : []   # ENOENT ran nothing
+    p = spawn(cmd)                                  # Bun.spawn returns once the process exists
+    if p is a spawn error: r = failed{info}         # ENOENT ran nothing; no sent entry
+    else:
+      journal([sent{cmd.id, pid: p.pid, host}])     # before awaiting the exit
+      r = await exit(p)
+    note = []
     if cmd.await:
       if r is a valid Result: queue.push({kind: "result", id: cmd.id, result: r})
       if r is accepted:      note += accepted{cmd.id}   # queue no Result for cmd; continue with the rest
@@ -511,7 +515,7 @@ while queue not empty:
 if crashed: exit 5
 exit 0
 
-journal(entries) = save the unchanged state as the next version with entries + at;
+journal(entries) = save the unchanged state as the next version with entries + time;
                    on a conflict reload and save again (the entries do not depend on the state)
 ```
 
@@ -519,9 +523,10 @@ Rules:
 - **Save before execute.** Nothing is sent until the state that awaits it is saved.
 - **`accepted` stops nothing.** It means only "queue no Result for this command". The Runner carries on with the remaining commands.
 - **A crash stops nothing either.** On an awaited adapter's crash (exit 5 case) the Runner journals `adapter_error`, executes the remaining commands, and only then exits 5. I1 means the remaining commands are fires.
-- **Sent journal.** After each spawn that started a process the Runner journals `sent{id}`, plus `accepted{id}` when stdout was `accepted`. These entries are audit data: the core never reads them.
+- **Sent journal.** As soon as the adapter process has started, and before awaiting its exit, the Runner journals `sent{id, pid, host}`. After the exit it journals the outcome: the Result (as the core's entry when it is applied), `accepted{id}`, or `adapter_error{id}`. A spawn error (ENOENT) journals no `sent`. These entries are audit data: the core never reads them.
 - **Crash between save and execute.** The command is lost and the core keeps waiting. The awaited id then has no `sent` entry, and the environment's stall check (`env/poll-stalled.sh`, §7) flags it. Per P6 and ADR 0004, the environment either delivers a Result or sends `stop`. The Runner never asks "already sent?", and the core stays clock-free.
-- **A false stall is possible.** A crash after spawn but before the `sent` save leaves a sent command without its entry. The person checking the flag resolves it; this errs towards alerting.
+- **Crash during a synchronous adapter.** The `sent` entry exists, its pid is dead, and no Result, `accepted` or `adapter_error` follows. The stall check flags it (§7). A still-running adapter keeps its pid alive and is not flagged, however long it runs.
+- **Remaining window.** A crash between process start and the `sent` write leaves a started command without its entry. It is rare, and the stall check flags it loudly as never sent; the person checking resolves it. This errs towards alerting (§7).
 - **One signal per Delivery at a time.** CAS on save does this: on a conflict the Runner reloads and applies again, which is safe because the core is pure. Two parallel `start`s: one creates the Delivery, and the other retries, finds it non-terminal and is rejected. There is no lock file.
 - **ajv at five points:**
   - config load
@@ -630,7 +635,8 @@ Rules for every step:
     - a persistent conflict after an immediate Result gives exit 3 with `unapplied`
     - an adapter crash gives exit 5 and an entry with `signal: {kind: "adapter_error", id}` and the stderr tail in `info`
     - a failed fire command lands in `errors`
-    - each spawn that started a process journals `sent{id}`; an `accepted` stdout adds `accepted{id}`; ENOENT journals no `sent`
+    - each spawn that started a process journals `sent{id, pid, host}`, with the child's pid; an `accepted` stdout adds `accepted{id}`; ENOENT journals no `sent`
+    - journal order: `sent{id}` is written before the adapter exits (a fake adapter that blocks until the test sees `sent` in the fake State, then exits)
     - commands `[cancel A, decide B → accepted, notify C]`: C is sent, and the journal holds `sent{A}`, `sent{B}`, `accepted{B}`, `sent{C}`
     - commands `[cancel A, decide B → crash, notify C]`: C is still sent, then exit 5
   - Impl: `runner/apply.ts`.
@@ -686,7 +692,9 @@ Rules for every step:
     - at most one non-terminal Delivery per WorkItem
     - Closed and Abandoned are absorbing
     - fix rounds ≤ N between Principal decisions
-    - no silent stall: every non-terminal, non-Blocked Delivery has an awaited command, and that command has a `sent` entry or is flagged by the stall check
+    - no silent stall: every non-terminal, non-Blocked Delivery has an awaited command that either has a `sent` entry with a live pid, an `accepted` entry, or is flagged by the stall check
+
+    Stall-check cases in the simulation (fake spawn models pids and their liveness): a synchronous adapter running longer than the grace period is not flagged; the Runner killed during a synchronous adapter leaves `sent` present, pid dead, no Result, and is flagged.
   - Impl: crash-injection hooks in the fake State and fake spawn; no change to the core.
   - Done when green over the default fast-check run count, with a fixed seed recorded for any failure found.
 - [ ] **M0.23 Docs.**
@@ -720,7 +728,11 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 - [ ] **M1.4 WorkItem change and stall pollers.**
   - Test: a bats-free shell test runs both scripts against the fakes.
     - `env/poll-changed.sh` calls `ship changed <d>` for each Delivery in `ship status`.
-    - `env/poll-stalled.sh` reads `ship status`, then pipes `{delivery}` into the configured State adapter's `state journal`. It flags each Delivery whose `awaiting` id has no `sent` entry and whose last entry is older than a grace period (the environment's clock, not the core's). Cases: sent (no flag), not sent and old (flag), not sent and within the grace period (no flag), awaiting null (no flag).
+    - `env/poll-stalled.sh` reads `ship status`, then pipes `{delivery}` into the configured State adapter's `state journal`. It flags each Delivery whose `awaiting` id either:
+      - has no `sent` entry, and its last entry is older than a grace period (the environment's clock, not the core's); or
+      - has a `sent` entry whose pid is not alive on that entry's host, and no Result, `accepted` or `adapter_error` entry. `accepted` commands are not pid-checked: their work continues elsewhere.
+
+      This is an environment check; the core stays clock-free and never reads these entries. Cases: sent with a live pid (no flag), not sent and old (flag), not sent and within the grace period (no flag), awaiting null (no flag), `accepted` with a dead pid (no flag), (a) a synchronous adapter running longer than the grace period (no flag), (b) the Runner killed during a synchronous adapter: `sent` present, pid dead, no Result (flag).
   - Impl: `env/poll-changed.sh`, `env/poll-stalled.sh`. The flag is one line on stdout per Delivery, for cron mail or an alert hook.
   - Done when green.
 - [ ] **M1.5 Local-merge Integrate: landing.**
@@ -832,6 +844,8 @@ The Runner starts no listeners. The environment must provide what follows.
 - **Crash duty (P6).**
   - If `ship` exits 5, the Delivery stays waiting. The environment alerts a person, who then sends the Result by hand or sends `stop`.
   - If `ship` dies between save and execute, the awaited command was never sent, and its id has no `sent` entry in the journal. A cron or loop running `env/poll-stalled.sh` flags it; the person then acts as for exit 5. The check keeps time in the environment, so the core stays clock-free.
+  - If `ship` dies while a synchronous adapter runs, the `sent` entry's pid is dead and no Result, `accepted` or `adapter_error` follows. `env/poll-stalled.sh` flags it; the person acts as for exit 5.
+  - Remaining window: if `ship` dies between process start and the `sent` write, the command may have run but looks never sent. It is rare, and the check flags it loudly; the person checks the adapter's side effects before sending a Result or `stop`. This errs towards alerting.
   - On exit 3, it resubmits the signals in `unapplied`.
 - **Coding agent:** the CLI installed and authenticated (subscription login or an API key in the capability env). **[unverified]** headless and structured-output behaviour, pending spike M1.8.
 - **Change detection:** a cron or loop running `env/poll-changed.sh`.
@@ -898,10 +912,10 @@ The Runner starts no listeners. The environment must provide what follows.
 | Integrate conflict detection (the core's gap G1) | `question.about = "conflict"` on integrate; the core forces `[resolved, rework]` | arch edge-case table |
 | Conflict `options` from the adapter vs the core | the core owns them for the conflict; other questions may carry adapter options | P4 (gates and branching belong to the core) |
 | Lock file vs CAS | CAS via versioned `link`; no lock | arch "one signal at a time"; the runner part's crash-safety point |
-| Journal as a third core output | a single `entry` per application; the Runner stamps `at` and saves it with the snapshot | ADR 0005; keeps the core pure (extends ADR 0002's signature) |
+| Journal as a third core output | a single `entry` per application; the Runner stamps `time` and saves it with the snapshot | ADR 0005; keeps the core pure (extends ADR 0002's signature) |
 | Gate options in config vs in the core | core constants; config keeps only the Minimum Principal per gate and decision kind **[amend, synced]** | P1: the core branches on them |
 | Self-echo in change detection | W1: the core ignores an unchanged title and body, and the adapters keep their own writes out of both | pure comparison; no world check (ADR 0004) |
-| `workItem_changed` during Setup | stay in Setup and update the data (sending it to Accept would skip Setup) | new row W2 |
+| `workItem_changed` during Setup | stay in Setup and update the data (sending it to Accept would skip Setup); Blocked at Setup stays Blocked, because a changed WorkItem does not fix a failed workspace: only `retry` or `stop` moves it | new row W2 |
 | Runner-side `inputs` / listeners config | dropped from the machine layer; the environment owns listeners **[amend, synced]** | P6, ADR 0004 |
 | Adapter state location | each adapter owns its own file | P5 |
 
