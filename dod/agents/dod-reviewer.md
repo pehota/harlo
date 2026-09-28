@@ -139,6 +139,16 @@ or stale required update is `blocking` (spec violation on the `docs`
 requirement), not a mere doc-wording nit. Name the specific `doc_paths`
 entry as the finding's `file`, and set `requirement_id: "docs"` on it —
 do not leave attribution to be inferred from the file path alone.
+Audit every `applicable:false` in `requirements`, not just the applicable
+ones — an exemption is a claim about the changeset and it can be wrong.
+Check the recorded `reason` against the diff: e.g. `e2e` marked N/A while
+the diff changes something a user can see or do (rendered string, label,
+API response shape, CLI output — see `dod/base-dod.md`); `docs` marked N/A
+while the diff changes something a doc describes; `scenario` marked N/A
+without naming the row that already proves `works_when`. A wrong N/A is
+`blocking` (spec violation), with `requirement_id` set to the exempted
+requirement.
+
 Each requirement's `proves` says which part of `works_when` it proves:
 judge whether it genuinely does (e.g. a `scenario` test that never
 observes the outcome `works_when` names). A proof that doesn't prove its

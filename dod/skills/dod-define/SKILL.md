@@ -78,8 +78,11 @@ safety net for when you fail, not the plan.
    - **Outcome — observe `works_when` directly (`e2e`, `scenario`).** Both
      are always present, decided now, never left to the reviewer:
      `applicable:true` with a `cmd`, or `applicable:false` with a concrete
-     `reason`. `e2e`: does the task add or change a user-facing flow, and is
-     there an e2e runner (`npm run e2e`, `playwright test` — detect or ask)?
+     `reason`. `e2e`: see the applicability rule in `dod/base-dod.md`
+     (see/do, not control flow). If applicable, find the runner (`npm run
+     e2e`, `playwright test` — detect or ask); if the repo has none, mark
+     `applicable:true` with `reason` noting the manual pass and no automated
+     e2e, and check the real surface by hand.
      `scenario`, decided independently: its `cmd` names the functional test
      the implementer must write and run — one that exercises the changed
      behavior the way a human would check it and observes the `works_when`

@@ -19,8 +19,12 @@ green (folded into the checks, not a requirement of its own).
 
 - [ ] **Logic — tests green.** The project's detected test command, run and
       must exit 0.
-- [ ] **Outcome — e2e, if the task touches a user-facing flow.** Decided at
-      define time — see `dod-define/SKILL.md` step 4.
+- [ ] **Outcome — e2e, if the task changes anything a user can see or do**
+      (screen, rendered string/label, URL, API response shape, CLI output —
+      "no logic changed" doesn't excuse copy/label changes). No e2e runner
+      in the repo? Check the real surface by hand and say so in `reason` —
+      a missing runner is never a reason to mark N/A. Decided at define
+      time — see `dod-define/SKILL.md` step 4.
 - [ ] **Outcome — scenario test, observing `works_when` directly.** Decided
       independently of e2e — see step 4. Agent, prompt and skill text is
       observable behavior (prove it with a headless before/after run); N/A
