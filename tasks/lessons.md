@@ -45,3 +45,12 @@
 - **Pattern:** "how many batches?" got a full status table.
 - **Why wrong:** the user asked for a number; extra content costs reading time.
 - **Rule:** a closed question gets the bare answer. Add detail only if asked.
+
+## Don't re-run checks for changes they cannot see
+
+- **Pattern:** editing `tasks/*.md` changed the dod diff hash, and I started
+  re-running the full test battery.
+- **Why wrong:** the checks exercise `ship/` only; markdown outside it cannot
+  change their outcome. Minutes wasted for zero information.
+- **Rule:** if the only change since a passing run is outside every check's
+  inputs, reuse that run's verdicts and record which hash they came from.
