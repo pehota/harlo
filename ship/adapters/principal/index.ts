@@ -6,8 +6,8 @@
 //   cancel      → print "withdrawn", then ok {}
 // Every error is caught: nothing is printed for the person unless the write succeeded, so `failed` changed nothing.
 import { appendFileSync } from "node:fs";
-import type { Decide, GateEvidence, Stdin } from "../src/contracts/common";
-import type { AskPayload, CancelPayload, NotifyPayload } from "../src/contracts/ports";
+import type { Decide, GateEvidence, Stdin } from "../../src/contracts/common";
+import type { AskPayload, CancelPayload, NotifyPayload } from "../../src/contracts/ports";
 
 const OK = { status: "ok", body: {} };
 const ACCEPTED = { status: "accepted" };

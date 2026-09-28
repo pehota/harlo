@@ -332,8 +332,8 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 }
 // machine: $SHIP_MACHINE_CONFIG or ~/.config/ship/<projectId>.json
 {
-  "principal": ["bun", "adapters/principal-terminal.ts"],
-  "state":     ["bun", "adapters/state-files.ts", "--dir", "~/.local/state/ship/harlo"],
+  "principal": ["bun", "adapters/principal/index.ts"],
+  "state":     ["bun", "adapters/state/files.ts", "--dir", "~/.local/state/ship/harlo"],
   "secrets":   { "GH": { "env": "GH_TOKEN" } },
   "capabilities": { "integrate": { "env": { "GH_TOKEN": "$secrets.GH" }, "tools": ["git", "gh"] } }
 }
@@ -625,7 +625,7 @@ Rules for every step:
   - Done when green.
 - [x] **M0.14 File State adapter.**
   - Test: table for save v1 → load, `EEXIST` conflict, highest-version load, list by key (`PROJ-1` vs `PROJ-12`), list all, journal order across versions, and a corrupt file failing load.
-  - Impl: `adapters/state-files.ts --dir`.
+  - Impl: `adapters/state/files.ts --dir`.
   - Done when green by piping JSON into the executable.
 - [x] **M0.15 Spawn.**
   - Test: fixture bash adapters returning ok, accepted, failed, invalid JSON, schema-invalid, exit 1 and ENOENT. Also:
@@ -667,7 +667,7 @@ Rules for every step:
   - Done when the fixture replay is green.
 - [x] **M0.20 Terminal Principal.**
   - Test: `decide` and `ask` print the gate, options, evidence and a paste-ready `ship signal <d> <id> '{"status":"ok","body":{"answer":"…","by":"person"}}'` line to `--out` (default `/dev/tty`), and return `accepted`. `notify` prints and returns `ok`. `cancel` prints "withdrawn".
-  - Impl: `adapters/principal-terminal.ts`.
+  - Impl: `adapters/principal/index.ts`.
   - Done when green.
 - [x] **M0.21 End-to-end on fakes.**
   - Test: `test/e2e/lifecycle.test.ts` drives `bin/ship` with a fake config through these scenarios:

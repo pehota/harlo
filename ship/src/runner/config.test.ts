@@ -38,8 +38,8 @@ const project = (): Json => ({
   },
 });
 const machine = (): Json => ({
-  principal: ["bun", "adapters/principal-terminal.ts"],
-  state: ["bun", "adapters/state-files.ts", "--dir", "~/.local/state/ship/harlo"],
+  principal: ["bun", "adapters/principal/index.ts"],
+  state: ["bun", "adapters/state/files.ts", "--dir", "~/.local/state/ship/harlo"],
   secrets: { GH: { env: "GH_TOKEN" } },
   capabilities: { integrate: { env: { GH_TOKEN: "$secrets.GH", MODE: "plain" }, tools: ["git", "gh"] } },
 });
@@ -73,7 +73,7 @@ describe("valid", () => {
     expect(config.adapters.integrate).toEqual({
       argv: ["bun", "adapters/integrate.ts"], env: { GH_TOKEN: "secret-value", MODE: "plain" }, tools: ["git", "gh"],
     });
-    expect(config.adapters.principal).toEqual({ argv: ["bun", "adapters/principal-terminal.ts"], env: {}, tools: [] });
+    expect(config.adapters.principal).toEqual({ argv: ["bun", "adapters/principal/index.ts"], env: {}, tools: [] });
     expect(config.adapters.state.argv).toEqual(machine().state);
     expect(Object.keys(config.adapters).sort()).toEqual([
       "check", "define", "deploy", "implement", "integrate", "principal", "state", "tracker", "verify", "workspace",

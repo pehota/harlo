@@ -8,7 +8,7 @@ import type { Snapshot } from "./core/types";
 
 const ROOT = join(import.meta.dir, "..");
 const BIN = join(ROOT, "bin", "ship");
-const STATE = join(ROOT, "adapters", "state-files.ts");
+const STATE = join(ROOT, "adapters", "state", "files.ts");
 const FAKE = join(ROOT, "adapters", "fake.ts");
 const CONFLICTING_STATE = join(import.meta.dir, "fixtures", "conflicting-state.sh");
 const TIMEOUT = 30_000;

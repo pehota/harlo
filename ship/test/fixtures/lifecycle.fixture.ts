@@ -11,8 +11,8 @@ import type { Snapshot } from "../../src/core/types";
 const ROOT = join(import.meta.dir, "..", "..");
 const BIN = join(ROOT, "bin", "ship");
 const FAKE = join(ROOT, "adapters", "fake.ts");
-const STATE = join(ROOT, "adapters", "state-files.ts");
-const TERMINAL = join(ROOT, "adapters", "principal-terminal.ts");
+const STATE = join(ROOT, "adapters", "state", "files.ts");
+const TERMINAL = join(ROOT, "adapters", "principal", "index.ts");
 
 export const D = "k-1"; // every scenario runs WorkItem `k`, so its first Delivery
 

@@ -4,13 +4,13 @@ import Ajv from "ajv";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../src/contracts/common";
-import { schemaFor } from "../src/contracts/ports";
-import type { TimedEntry } from "../src/contracts/snapshot";
-import type { Snapshot } from "../src/core/types";
-import { snapshotAt, workItem as baseWorkItem } from "../src/core/fixtures/builders.fixture";
+import type { Stdin, WorkItem } from "../../src/contracts/common";
+import { schemaFor } from "../../src/contracts/ports";
+import type { TimedEntry } from "../../src/contracts/snapshot";
+import type { Snapshot } from "../../src/core/types";
+import { snapshotAt, workItem as baseWorkItem } from "../../src/core/fixtures/builders.fixture";
 
-const ADAPTER = join(import.meta.dir, "state-files.ts");
+const ADAPTER = join(import.meta.dir, "files.ts");
 const ajv = new Ajv();
 
 const dirs: string[] = [];
@@ -34,7 +34,7 @@ const entry = (delivery: string, info: string): TimedEntry => ({
 type Call = { op: string; payload: unknown };
 type Out = { exitCode: number; stdout: unknown };
 
-/** Run `state-files.ts --dir <dir> state <op>` with a Stdin envelope, as the Runner does. */
+/** Run `state/files.ts --dir <dir> state <op>` with a Stdin envelope, as the Runner does. */
 const call = async (dirArg: string, { op, payload }: Call, env: Record<string, string> = {}): Promise<Out> => {
   const stdin: Stdin = {
     id: "PROJ-1-1/state-1", delivery: "PROJ-1-1", port: "state", op,
@@ -164,7 +164,7 @@ const rows: Row[] = [
   },
 ];
 
-describe("state-files adapter", () => {
+describe("state/files adapter", () => {
   test.each(rows)("$name", async (row) => {
     const dir = tempDir();
     row.seed?.(dir);

@@ -5,11 +5,11 @@ import Ajv from "ajv";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Decide, GateEvidence, Stdin } from "../src/contracts/common";
-import type { AskPayload } from "../src/contracts/ports";
-import { schemaFor } from "../src/contracts/ports";
+import type { Decide, GateEvidence, Stdin } from "../../src/contracts/common";
+import type { AskPayload } from "../../src/contracts/ports";
+import { schemaFor } from "../../src/contracts/ports";
 
-const ADAPTER = join(import.meta.dir, "principal-terminal.ts");
+const ADAPTER = join(import.meta.dir, "index.ts");
 const ajv = new Ajv();
 
 const dirs: string[] = [];
@@ -26,7 +26,7 @@ const evidence: GateEvidence = {
 
 type Out = { exit: number; stdout: unknown; printed: string };
 
-/** Run `principal-terminal.ts --out <file> principal <op>` with a Stdin envelope. */
+/** Run `principal/index.ts --out <file> principal <op>` with a Stdin envelope. */
 const call = async (op: string, id: string, payload: unknown): Promise<Out> => {
   const dir = mkdtempSync(join(tmpdir(), "ship-principal-"));
   dirs.push(dir);
@@ -53,7 +53,7 @@ const pasted = (printed: string): [string, string, unknown][] =>
 
 const answer = (text: string) => ({ status: "ok", body: { answer: text, by: "person" } });
 
-describe("principal-terminal", () => {
+describe("principal/index", () => {
   test("decide prints the gate, options and evidence, one paste-ready line per option, and accepts", async () => {
     const payload: Decide = { on: "land", options: ["approve", "rework", "rescope"], min: "person", evidence };
     const ran = await call("decide", "k-1/land-1", payload);
