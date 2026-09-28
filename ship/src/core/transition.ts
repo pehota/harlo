@@ -15,11 +15,21 @@ type OnOk = (p: Policy, s: Snapshot, body: unknown) => Move;
 
 const unhandled = (s: Snapshot, what: string): Error => new Error(`no transition at ${s.at} for ${what}`);
 
-/** Pick the move for a verdict or answer; values without a row yet are unhandled. */
+/** Pick the move for a gate answer; an answer outside the cases is unhandled. */
 const branch = (s: Snapshot, key: string, cases: Record<string, () => Move>): Move => {
   const next = Object.hasOwn(cases, key) ? cases[key] : undefined;
   if (!next) throw unhandled(s, `"${key}"`);
   return next();
+};
+
+type VerdictCases<B extends { verdict: string }> = { [V in B["verdict"]]?: (b: Extract<B, { verdict: V }>) => Move };
+
+/** Pick the move for a step's verdict, narrowed to that verdict's body. */
+const onVerdict = <B extends { verdict: string }>(s: Snapshot, body: B, cases: VerdictCases<B>): Move => {
+  const verdict: B["verdict"] = body.verdict;
+  const next = Object.hasOwn(cases, verdict) ? cases[verdict] : undefined;
+  if (!next) throw unhandled(s, `"${verdict}"`);
+  return (next as (b: B) => Move)(body);
 };
 
 /** Teardown done: the Delivery is Closed and the Principal is told (H12). */
@@ -49,17 +59,11 @@ const onOk: { [P in Position]?: OnOk } = {
     });
   },
   implement: (p, s, body) => enterStep(p, { ...s, changeset: (body as ImplementBody).changeset }, "check"),
-  check: (p, s, body) => {
-    const b = body as CheckBody;
-    return branch(s, b.verdict, {
-      pass: () => enterGate(p, { ...s, findings: [] }, "land"),
-      fix: () => fixRound(p, s, (b as Extract<CheckBody, { verdict: "fix" }>).findings),
-      decide: () => {
-        const { about, findings } = b as Extract<CheckBody, { verdict: "decide" }>;
-        return enterDecision(p, { ...s, findings }, about);
-      },
-    });
-  },
+  check: (p, s, body) => onVerdict(s, body as CheckBody, {
+    pass: () => enterGate(p, { ...s, findings: [] }, "land"),
+    fix: (b) => fixRound(p, s, b.findings),
+    decide: (b) => enterDecision(p, { ...s, findings: b.findings }, b.about),
+  }),
   decision: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
@@ -76,18 +80,21 @@ const onOk: { [P in Position]?: OnOk } = {
       rescope: () => enterStep(p, s, "define", feedback(b)),
     });
   },
-  integrate: (p, s, body) => {
-    const b = body as IntegrateBody;
-    return branch(s, b.verdict, {
-      landed: () => enterStep(p, s, "deploy"),
-      fix: () => fixRound(p, s, (b as Extract<IntegrateBody, { verdict: "fix" }>).findings),
-    });
-  },
-  deploy: (p, s, body) => branch(s, (body as DeployBody).verdict, {
-    live: () => enterStep(p, s, "verify"),
+  integrate: (p, s, body) => onVerdict(s, body as IntegrateBody, {
+    landed: () => enterStep(p, s, "deploy"),
+    fix: (b) => fixRound(p, s, b.findings),
   }),
-  verify: (p, s, body) => branch(s, (body as VerifyBody).verdict, {
+  deploy: (p, s, body) => onVerdict(s, body as DeployBody, {
+    live: () => enterStep(p, s, "verify"),
+    not_live: (b) => enterGate(p, { ...s, findings: b.findings ?? [] }, "failure"),
+  }),
+  verify: (p, s, body) => onVerdict(s, body as VerifyBody, {
     pass: () => enterClose(p, s, "delivered"),
+    fail: (b) => enterGate(p, { ...s, findings: b.findings }, "failure"),
+  }),
+  failure: (p, s, body) => branch(s, (body as DecideBody).answer, {
+    fix_forward: () => enterStep(p, s, "implement"),
+    accept: () => enterClose(p, s, "accepted_with_failure"),
   }),
   close: (p, s) => enterStep(p, s, "teardown"),
   teardown: (_, s) => enterClosed(s),
