@@ -581,7 +581,7 @@ Rules for every step:
   - Test: table for `deliveryId("PROJ-123", 2) = "PROJ-123-2"`, `nextId(seq, "land")` giving `land-1` then `land-2`, key regex accept/reject, and `parseCommandId`.
   - Impl: `core/ids.ts`.
   - Done when the table is green.
-- [ ] **M0.3 Contract schemas.**
+- [x] **M0.3 Contract schemas.**
   - Test: valid/invalid table for `Result`, the check `ok` union, `Decide` and `Stdin`, plus type tests pairing `JSONSchemaType<T>` with each type.
   - Impl: `contracts/common.ts`, `contracts/ports.ts` with a registry lookup `schemaFor(port, op)`.
   - Done when every port/op in §3.2 has a schema and the tests are green.
