@@ -1,5 +1,6 @@
-// Test data for test/e2e/lifecycle.test.ts: a project whose every port is the scripted fake adapter except
-// State (the real file adapter), plus readers that go through the adapters, never around them.
+// Test data for test/e2e/lifecycle.test.ts and terminal-principal.test.ts: a project whose every port is the
+// scripted fake adapter except State (the real file adapter) and, when asked, the Principal (the real terminal
+// adapter), plus readers that go through the adapters, never around them.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,12 +12,13 @@ const ROOT = join(import.meta.dir, "..", "..");
 const BIN = join(ROOT, "bin", "ship");
 const FAKE = join(ROOT, "adapters", "fake.ts");
 const STATE = join(ROOT, "adapters", "state-files.ts");
+const TERMINAL = join(ROOT, "adapters", "principal-terminal.ts");
 
 export const D = "k-1"; // every scenario runs WorkItem `k`, so its first Delivery
 
 // ── Scripted stdouts ──
 export const ok = (body: unknown = {}) => ({ status: "ok", body });
-export const workItem = (title = "Greet by name") => ok({ workItem: { key: "k", title, body: "Say hello." } });
+export const workItem = (title = "Greet by name", body = "Say hello.") => ok({ workItem: { key: "k", title, body } });
 export const criteria = ["greets Ada by name"];
 export const runbook = ["run greet Ada, see Hello, Ada"];
 export const defined = ok({ criteria, runbook });
@@ -24,6 +26,13 @@ export const implemented = (changeset: string) => ok({ changeset });
 export const verdict = (v: string, findings?: { text: string }[]) => ok(findings ? { verdict: v, findings } : { verdict: v });
 export const question = (prompt: string, about: string) => ({ status: "question", prompt, about });
 export const failed = (info: string) => ({ status: "failed", info });
+
+/** Every step succeeds at once: Define → Accept → … → Land → … → Closed, with only the gates awaited. */
+export const HAPPY = {
+  "workspace.setup": ok({ path: "/ws/k-1" }), "define.run": [defined], "implement.run": [implemented("c1")],
+  "check.run": [verdict("pass")], "integrate.run": [verdict("landed")], "deploy.run": [verdict("live")],
+  "verify.run": [verdict("pass")],
+};
 
 /** A Principal's answer as pasted into `ship signal`. */
 export const answer = (text: string, comment?: string) =>
@@ -46,21 +55,28 @@ export type Logged = RunnerStdin;
  * A temp project. `replies` is the fake's script ("<port>.<op>" → stdout or list of stdouts); the tracker
  * reads WorkItem `k` and teardown and Close's tracker.update succeed unless the scenario scripts otherwise.
  * Unscripted awaited calls (every Principal decide/ask) print `accepted`: the test answers with `ship signal`.
+ * `principal: "terminal"` puts the real terminal Principal on that port instead, printing to `printed()`.
  */
-export const lifecycle = (replies: Record<string, unknown>, policy: Record<string, unknown> = {}) => {
+export const lifecycle = (
+  replies: Record<string, unknown>, policy: Record<string, unknown> = {},
+  { principal = "fake" }: { principal?: "fake" | "terminal" } = {},
+) => {
   const dir = mkdtempSync(join(tmpdir(), "ship-e2e-"));
   const stateDir = join(dir, "state");
   const script = join(dir, "script.json");
   const machinePath = join(dir, "machine.json");
   const fake = ["bun", FAKE, "--script", script];
 
+  const principalOut = join(dir, "principal.txt");
   const scriptReplies = { "tracker.read": workItem(), "tracker.update": ok(), "workspace.teardown": ok(), ...replies };
   writeFileSync(script, JSON.stringify({ replies: scriptReplies }));
+  writeFileSync(principalOut, "");
   const adapters = Object.fromEntries(
     ["tracker", "workspace", "define", "implement", "check", "integrate", "deploy", "verify"].map((port) => [port, fake]),
   );
   writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "e2e", adapters, policy: { ...POLICY, ...policy } }));
-  writeFileSync(machinePath, JSON.stringify({ principal: fake, state: ["bun", STATE, "--dir", stateDir] }));
+  const principalArgv = principal === "terminal" ? ["bun", TERMINAL, "--out", principalOut] : fake;
+  writeFileSync(machinePath, JSON.stringify({ principal: principalArgv, state: ["bun", STATE, "--dir", stateDir] }));
 
   const run = async (argv: string[], cwd: string, env: Record<string, string>, stdin?: string) => {
     const proc = Bun.spawn(argv, { cwd, env, stdout: "pipe", stderr: "pipe", stdin: stdin === undefined ? "ignore" : new Blob([stdin]) });
@@ -68,9 +84,10 @@ export const lifecycle = (replies: Record<string, unknown>, policy: Record<strin
     return { stdout, stderr, exit };
   };
   const env = { PATH: process.env.PATH ?? "", HOME: dir };
+  const shipEnv = { ...env, SHIP_MACHINE_CONFIG: machinePath };
 
   const ship = async (...args: string[]): Promise<Ran> => {
-    const { stdout, stderr, exit } = await run(["bun", BIN, ...args], dir, { ...env, SHIP_MACHINE_CONFIG: machinePath });
+    const { stdout, stderr, exit } = await run(["bun", BIN, ...args], dir, shipEnv);
     const line = stdout.trim();
     return { exit, out: line ? (JSON.parse(line) as Record<string, unknown>) : null, stderr };
   };
@@ -89,8 +106,18 @@ export const lifecycle = (replies: Record<string, unknown>, policy: Record<strin
   const log = (): Logged[] =>
     readFileSync(`${script}.stdin.jsonl`, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Logged);
 
+  /** Run a shell line verbatim with bash in the project, `ship` on PATH, as a person pasting it would. */
+  const bash = (line: string) => run(["bash", "-c", line], dir, { ...shipEnv, PATH: `${join(ROOT, "bin")}:${env.PATH}` });
+  /** What the terminal Principal printed for the person so far. */
+  const printed = (): string => readFileSync(principalOut, "utf8");
+  /** Re-script the fake mid-scenario: `replies` replace those ports' replies; call counts carry on. */
+  const rescript = (replies: Record<string, unknown>) => {
+    const current = JSON.parse(readFileSync(script, "utf8")) as { replies: Record<string, unknown> };
+    writeFileSync(script, JSON.stringify({ replies: { ...current.replies, ...replies } }));
+  };
+
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
-  return { ship, journal, snapshot, log, cleanup };
+  return { ship, bash, journal, snapshot, log, printed, rescript, cleanup };
 };
 
 const RUNNER_KINDS = new Set(["sent", "accepted", "adapter_error"]);

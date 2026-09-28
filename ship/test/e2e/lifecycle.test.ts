@@ -4,7 +4,7 @@
 // Each scenario asserts the final Snapshot.at, the journal (read through `state journal`) and the fake's stdin log.
 import { afterAll, describe, expect, test } from "bun:test";
 import {
-  D, answer, calls, coreSequence, criteria, defined, failed, implemented, issuedAndSent, lifecycle, ok, payloadOf,
+  D, HAPPY, answer, calls, coreSequence, criteria, defined, failed, implemented, issuedAndSent, lifecycle, ok, payloadOf,
   question, runbook, verdict, workItem,
 } from "../fixtures/lifecycle.fixture";
 import type { Position } from "../../src/core/types";
@@ -55,11 +55,6 @@ const TO_LAND = {
 const CLOSE = {
   core: ["result close-1: close→teardown", "result teardown-1: teardown→closed"],
   calls: ["tracker.update close-1", "workspace.teardown teardown-1", "principal.notify notify-1"],
-};
-const HAPPY = {
-  "workspace.setup": ok({ path: "/ws/k-1" }), "define.run": [defined], "implement.run": [implemented("c1")],
-  "check.run": [verdict("pass")], "integrate.run": [verdict("landed")], "deploy.run": [verdict("live")],
-  "verify.run": [verdict("pass")],
 };
 const toLand = async (p: Project) => {
   await start(p, "accept-1");
