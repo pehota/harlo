@@ -142,8 +142,9 @@ export const apply = async (deps: Deps, first: Pending): Promise<Report> => {
   let head: Planned | null = null; // the first application: decides ignored / rejected
   let last: Planned | null = null;
 
+  const known = first.kind === "signal" ? first.delivery : null; // a start names only its key (in `unapplied`)
   const output = (): Output => ({
-    delivery: last?.delivery ?? null,
+    delivery: last?.delivery ?? known,
     issued,
     awaiting: last?.state.awaiting?.id ?? null,
     ...(head && IGNORED.has(head.entry.note) ? { ignored: true as const } : {}),

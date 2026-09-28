@@ -201,6 +201,14 @@ describe("ship stop", () => {
     expect(ran).toMatchObject({ exit: 0, out: { delivery: "k-1", awaiting: null } });
     expect(p.snapshot("k-1")).toMatchObject({ at: "abandoned", outcome: "abandoned", reason: "not needed" });
   }, TIMEOUT);
+
+  test("a CAS conflict that does not clear names the Delivery in the output (exit 3)", async () => {
+    const p = project();
+    await p.ship("start", "k");
+    p.configure({ state: ["bash", CONFLICTING_STATE, STATE, "--dir", join(p.dir, "state")] });
+    const ran = await p.ship("stop", "k-1", "abandoned", "not needed");
+    expect(ran).toMatchObject({ exit: 3, out: { delivery: "k-1", unapplied: [{ kind: "stop", outcome: "abandoned" }] } });
+  }, TIMEOUT);
 });
 
 describe("ship changed", () => {
