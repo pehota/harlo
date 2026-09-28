@@ -34,9 +34,11 @@ const applied = async (ctx: Ctx, pending: Pending): Promise<Ran> => {
   return { exit: report.exit, line: report.output };
 };
 
+/** `tracker.read{key}`; a WorkItem for another key is a failed read (exit 4). */
 const readWorkItem = async (ctx: Ctx, key: string, delivery: DeliveryId | null): Promise<WorkItem> => {
-  const body = await callRunnerOnly<TrackerReadBody>(ctx.config.adapters.tracker, "tracker", "read", { key }, delivery);
-  return body.workItem;
+  const { workItem } = await callRunnerOnly<TrackerReadBody>(ctx.config.adapters.tracker, "tracker", "read", { key }, delivery);
+  if (workItem.key !== key) throw new RunnerCallError(`tracker.read ${key}: returned WorkItem ${workItem.key}`);
+  return workItem;
 };
 
 const deliveryArg = (delivery: string): DeliveryId => {

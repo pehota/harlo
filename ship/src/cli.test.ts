@@ -101,6 +101,13 @@ describe("ship start", () => {
     expect(p.deliveries()).toEqual([]);
   }, TIMEOUT);
 
+  test("a tracker.read for another key gives exit 4 without calling the core", async () => {
+    const p = project();
+    p.configure({ replies: { "tracker.read": workItem("j") } });
+    expect((await p.ship("start", "k")).exit).toBe(4);
+    expect(p.deliveries()).toEqual([]);
+  }, TIMEOUT);
+
   test("a crashed awaited adapter gives exit 5, journaled, with the output line", async () => {
     const p = project();
     p.configure({ replies: { "workspace.setup": { exit: 1, stderr: "workspace.setup crashed" } } });
@@ -226,6 +233,15 @@ describe("ship changed", () => {
     await p.ship("start", "k");
     p.configure({ replies: FAILED_READ });
     expect((await p.ship("changed", "k-1")).exit).toBe(4);
+  }, TIMEOUT);
+
+  test("a tracker.read for another key gives exit 4 and saves nothing", async () => {
+    const p = project();
+    p.configure({ replies: { "tracker.read": [workItem("k"), workItem("j")] } });
+    await p.ship("start", "k");
+    const before = p.versions("k-1");
+    expect((await p.ship("changed", "k-1")).exit).toBe(4);
+    expect(p.versions("k-1")).toEqual(before);
   }, TIMEOUT);
 });
 
