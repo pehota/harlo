@@ -15,5 +15,5 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true
   },
-  "include": ["src", "bin", "adapters", "test"]
+  "include": ["src", "bin", "adapters", "env", "test"]
 }

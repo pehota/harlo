@@ -530,10 +530,10 @@ Rules:
 - **`accepted` stops nothing.** It means only "queue no Result for this command". The Runner carries on with the remaining commands.
 - **A crash stops nothing either.** On an awaited adapter's crash (exit 5 case) the Runner journals `adapter_error`, executes the remaining commands, and only then exits 5. I1 means the remaining commands are fires.
 - **Sent journal.** As soon as the adapter process has started, and before awaiting its exit, the Runner journals `sent{id, pid, host, started}`. `started` is the process start time, read right after spawn: on macOS `ps -o lstart= -p <pid>`, on Linux field 22 (`starttime`) of `/proc/<pid>/stat` **[unverified]** (both commands). After the exit it journals the outcome: the Result (as the core's entry when it is applied), `accepted{id}`, or `adapter_error{id}`. A spawn error (ENOENT) journals no `sent`. These entries are audit data: the core never reads them.
-- **Crash between save and execute.** The command is lost and the core keeps waiting. The awaited id then has no `sent` entry, and the environment's stall check (`env/poll-stalled.sh`, §7) flags it. Per P6 and ADR 0004, the environment either delivers a Result or sends `stop`. The Runner never asks "already sent?", and the core stays clock-free.
+- **Crash between save and execute.** The command is lost and the core keeps waiting. The awaited id then has no `sent` entry, and the environment's stall check (`env/poll/stalled.ts`, §7) flags it. Per P6 and ADR 0004, the environment either delivers a Result or sends `stop`. The Runner never asks "already sent?", and the core stays clock-free.
 - **Liveness is (pid, started).** The stall check counts a pid as alive only if the pid exists and its current start time equals `started`. A reused pid therefore counts as dead.
 - **Crash during a synchronous adapter.** The `sent` entry exists, its process is gone, and no Result, `accepted` or `adapter_error` follows. The stall check flags it (§7). The adapter is not killed with the Runner: it becomes an orphan, keeps running, and its Result is lost when it exits. While it is alive it is not flagged as dead.
-- **Hung adapter.** An awaited command with a live `sent` process whose age exceeds that port's `maxRuntime` is flagged "hung?". `maxRuntime` lives in the poller's own config (the environment), not in ship config; the clock lives only in `env/poll-stalled.sh`, next to the grace period. The core stays clock-free.
+- **Hung adapter.** An awaited command with a live `sent` process whose age exceeds that port's `maxRuntime` is flagged "hung?". `maxRuntime` lives in the poller's own config (the environment), not in ship config; the clock lives only in `env/poll/stalled.ts`, next to the grace period. The core stays clock-free.
 - **Remaining window.** A crash between process start and the `sent` write leaves a started command without its entry. It is rare, and the stall check flags it loudly as never sent; the person checking resolves it. This errs towards alerting (§7).
 - **One signal per Delivery at a time.** CAS on save does this: on a conflict the Runner reloads and applies again, which is safe because the core is pure. Two parallel `start`s: one creates the Delivery, and the other retries, finds it non-terminal and is rejected. There is no lock file.
 - **ajv at five points:**
@@ -737,10 +737,10 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 - [ ] **M1.3 md-file tracker: comment.**
   - Test: `comment` appends a line below `<!-- ship:log -->`, and `read` then returns an unchanged body. A later `ship changed` therefore hits W1 (no self-echo).
   - Done when green.
-- [ ] **M1.4 WorkItem change and stall pollers.**
+- [x] **M1.4 WorkItem change and stall pollers.** Implemented in Bun/TS (`env/poll/changed.ts`, `env/poll/stalled.ts`), not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` named below, per the accepted architecture amendment.
   - Test: a bats-free shell test runs both scripts against the fakes.
-    - `env/poll-changed.sh` calls `ship changed <d>` for each Delivery in `ship status`.
-    - `env/poll-stalled.sh` reads `ship status`, then pipes `{delivery}` into the configured State adapter's `state journal`. A process counts as alive only if its pid exists and its current start time equals the `sent` entry's `started` (macOS `ps -o lstart= -p <pid>`, Linux `/proc/<pid>/stat` field 22 **[unverified]**). It flags each Delivery whose `awaiting` id:
+    - `env/poll/changed.ts` calls `ship changed <d>` for each Delivery in `ship status`.
+    - `env/poll/stalled.ts` reads `ship status`, then pipes `{delivery}` into the configured State adapter's `state journal`. A process counts as alive only if its pid exists and its current start time equals the `sent` entry's `started` (macOS `ps -o lstart= -p <pid>`, Linux `/proc/<pid>/stat` field 22 **[unverified]**). It flags each Delivery whose `awaiting` id:
       - has no `sent` entry, and its last entry is older than a grace period (the environment's clock, not the core's): "never sent"; or
       - has a `sent` entry whose `host` is not the poller's host: "unknown host". §7 puts the State directory on a local filesystem, so poller and Runner share a host; a foreign host is flagged loudly, never skipped silently; or
       - has a `sent` entry whose process is not alive, and no Result, `accepted` or `adapter_error` entry: "dead"; or
@@ -756,7 +756,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
       - pid alive but its start time ≠ `started` (pid reused: "dead")
       - (a) a synchronous adapter running longer than the grace period, within `maxRuntime` (no flag)
       - (b) the Runner killed during a synchronous adapter: `sent` present, process gone, no Result ("dead")
-  - Impl: `env/poll-changed.sh`, `env/poll-stalled.sh`. The flag is one line on stdout per Delivery, for cron mail or an alert hook.
+  - Impl: `env/poll/changed.ts`, `env/poll/stalled.ts`. The flag is one line on stdout per Delivery, for cron mail or an alert hook.
   - Done when green.
 - [ ] **M1.5 Local-merge Integrate: landing.**
   - Test: in temp repos, rebase `ship/<d>` onto the main line, `merge --ff-only` into the main line, then push if a remote is configured. Returns `ok{landed}`.
@@ -830,7 +830,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.3 Jira change detection.**
   - Test: the poller runs `ship changed` for active Deliveries. ship's own transitions and comments give W1.
-  - Impl: reuses `env/poll-changed.sh`.
+  - Impl: reuses `env/poll/changed.ts`.
   - Done when green.
 - [ ] **M3.4 PR Integrate adapter.**
   - Test: with a fake `gh`, the adapter pushes `ship/<d>`, creates the PR, enables auto-merge and returns `accepted`. `cancel` closes the PR. It is idempotent on the command id (an existing PR is reused).
@@ -866,13 +866,13 @@ The Runner starts no listeners. The environment must provide what follows.
 - **State directory:** writable, on a local filesystem (hard links must work).
 - **Crash duty (P6).**
   - If `ship` exits 5, the Delivery stays waiting. The environment alerts a person, who then sends the Result by hand or sends `stop`.
-  - If `ship` dies between save and execute, the awaited command was never sent, and its id has no `sent` entry in the journal. A cron or loop running `env/poll-stalled.sh` flags it; the person then acts as for exit 5. The check keeps time in the environment, so the core stays clock-free.
-  - If `ship` dies while a synchronous adapter runs, the adapter is orphaned: it keeps running and its Result is lost. Once its process (pid plus start time) is gone with no Result, `accepted` or `adapter_error`, `env/poll-stalled.sh` flags it; while it runs past its port's `maxRuntime` it is flagged "hung?". The person acts as for exit 5, and may terminate the orphan by its `(pid, started)` pair.
+  - If `ship` dies between save and execute, the awaited command was never sent, and its id has no `sent` entry in the journal. A cron or loop running `env/poll/stalled.ts` flags it; the person then acts as for exit 5. The check keeps time in the environment, so the core stays clock-free.
+  - If `ship` dies while a synchronous adapter runs, the adapter is orphaned: it keeps running and its Result is lost. Once its process (pid plus start time) is gone with no Result, `accepted` or `adapter_error`, `env/poll/stalled.ts` flags it; while it runs past its port's `maxRuntime` it is flagged "hung?". The person acts as for exit 5, and may terminate the orphan by its `(pid, started)` pair.
   - Remaining window: if `ship` dies between process start and the `sent` write, the command may have run but looks never sent. It is rare, and the check flags it loudly; the person checks the adapter's side effects before sending a Result or `stop`. This errs towards alerting.
   - On exit 3, it resubmits the signals in `unapplied`.
 - **Coding agent:** the CLI installed and authenticated (subscription login or an API key in the capability env). **[unverified]** headless and structured-output behaviour, pending spike M1.8.
-- **Change detection:** a cron or loop running `env/poll-changed.sh`.
-- **Stall detection:** a cron or loop running `env/poll-stalled.sh` on the Runner's host, with its alert wired to a person, and its own config giving the grace period and `maxRuntime` per port.
+- **Change detection:** a cron or loop running `env/poll/changed.ts`.
+- **Stall detection:** a cron or loop running `env/poll/stalled.ts` on the Runner's host, with its alert wired to a person, and its own config giving the grace period and `maxRuntime` per port.
 
 ### Home
 
@@ -901,7 +901,7 @@ The Runner starts no listeners. The environment must provide what follows.
    - Why: `next`, the Minimum Principal for questions and the Decision gate, and the Integrate conflict branch cannot be built without them.
 2. **Crash vs `failed`.** **Decided:** a non-zero exit or invalid stdout from an awaited adapter becomes exit 5 with no signal; the environment or a person then acts.
    - Why: it is the only reading that keeps ADR 0004's "re-issue is safe" true. Treating a crash as `failed` is simpler but can repeat a side effect.
-3. **Recovering a lost command** (crash between save and execute, or exit 5). **Decided:** v1 recovers only by a Result sent by hand, or by `stop` then `start`. The `sent` journal entry plus `env/poll-stalled.sh` detects the loss (§5.2, §7).
+3. **Recovering a lost command** (crash between save and execute, or exit 5). **Decided:** v1 recovers only by a Result sent by hand, or by `stop` then `start`. The `sent` journal entry plus `env/poll/stalled.ts` detects the loss (§5.2, §7).
    - Why: YAGNI. Add `ship reissue <delivery>` later if this proves painful; it would be a Runner verb and must not become a core check.
 4. **`ship status [<delivery>]`** **[amend, synced]**. **Decided:** add it as a read-only verb (§5.1).
    - Why: pollers (M1.4) and people need the non-terminal Deliveries with their position and awaiting id.
