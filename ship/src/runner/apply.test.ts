@@ -65,6 +65,22 @@ describe("apply loop", () => {
     expect(state.top(D)?.state.at).toBe("setup");
   });
 
+  test("a journal save that never clears gives exit 3 after 5 tries, with the pending Result in `unapplied`", async () => {
+    const { state, spawn, deps } = harness({ [id("setup-1")]: setupOk });
+    const isJournal = (e: TimedEntry): boolean => runnerEntries([e]).length > 0;
+    state.conflict = ({ entries }) => entries.every(isJournal);
+    const report = await apply(deps, startK);
+    expect(report).toMatchObject({
+      exit: 3,
+      output: {
+        delivery: D, issued: [id("setup-1")],
+        unapplied: [{ kind: "result", id: id("setup-1"), result: { status: "ok", body: { path: "/ws/k-1" } } }],
+      },
+    });
+    expect(state.saves.filter((s) => s.entries.every(isJournal))).toHaveLength(5);
+    expect(spawn.sent()).toEqual([id("setup-1")]);
+  });
+
   test("an awaited adapter crash gives exit 5 and an adapter_error entry with the stderr tail", async () => {
     const { state, deps } = harness({ [id("setup-1")]: crash });
     const report = await apply(deps, startK);

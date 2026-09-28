@@ -88,41 +88,50 @@ const applyOnce = async (deps: Deps, pending: Pending): Promise<Planned | null> 
 
 /**
  * Journal Runner-written entries: save the unchanged state as the next version. The entries do not depend on
- * the state, so a conflict only means reload and save again.
+ * the state, so a conflict only means reload and save again, up to TRIES times. False: never saved.
  */
-const journal = async (deps: Deps, delivery: DeliveryId, signal: RunnerSignal, info?: string): Promise<void> => {
-  for (;;) {
+const journal = async (deps: Deps, delivery: DeliveryId, signal: RunnerSignal, info?: string): Promise<boolean> => {
+  for (let attempt = 1; attempt <= TRIES; attempt += 1) {
     const { version, state } = await loadExisting(deps.state, delivery);
     const entry: Entry = { delivery, signal, from: state.at, to: state.at, issued: [], ...(info === undefined ? {} : { info }) };
-    if (await deps.state.save(delivery, version + 1, state, [stamp(deps, entry)])) return;
+    if (await deps.state.save(delivery, version + 1, state, [stamp(deps, entry)])) return true;
   }
+  return false;
 };
 
-type Executed = { queued?: Pending; error?: { id: CommandId; info: string }; crashed?: true };
+type Executed = { queued?: Pending; error?: { id: CommandId; info: string }; crashed?: true; unjournaled?: true };
 
-/** Run one command: journal `sent` once its process exists, then map what it did (§5.2, §5.3). */
-const execute = async (deps: Deps, planned: Planned, command: Command): Promise<Executed> => {
-  const spawned = deps.spawn(planned.state, command);
-  const sentThenExit = async ({ pid, started, done }: Extract<Spawned, { spawned: true }>): Promise<Reply> => {
-    await journal(deps, planned.delivery, { kind: "sent", id: command.id, pid, host: deps.host, started });
-    return done;
-  };
-  const reply = spawned.spawned ? await sentThenExit(spawned) : spawned.reply; // a spawn error ran nothing: no `sent`
+const unjournaledIf = (journaled: boolean): Executed => (journaled ? {} : { unjournaled: true });
 
+/** What a command's reply means for the loop; `accepted` and a crash are journaled. */
+const mapReply = async (deps: Deps, planned: Planned, command: Command, reply: Reply): Promise<Executed> => {
   switch (reply.kind) {
     case "result":
       return { queued: { kind: "signal", delivery: planned.delivery, signal: { kind: "result", id: command.id, result: reply.result } } };
     case "accepted":
-      await journal(deps, planned.delivery, { kind: "accepted", id: command.id });
-      return {};
-    case "crash":
-      await journal(deps, planned.delivery, { kind: "adapter_error", id: command.id }, `${reply.reason}\n${reply.stderr}`);
-      return { crashed: true };
+      return unjournaledIf(await journal(deps, planned.delivery, { kind: "accepted", id: command.id }));
+    case "crash": {
+      const info = `${reply.reason}\n${reply.stderr}`;
+      return { crashed: true, ...unjournaledIf(await journal(deps, planned.delivery, { kind: "adapter_error", id: command.id }, info)) };
+    }
     case "fire_error":
       return { error: { id: command.id, info: reply.info } };
     case "fired":
       return {};
   }
+};
+
+/** Run one command: journal `sent` once its process exists, then map what it did (§5.2, §5.3). */
+const execute = async (deps: Deps, planned: Planned, command: Command): Promise<Executed> => {
+  const spawned = deps.spawn(planned.state, command);
+  const sentThenExit = async ({ pid, started, done }: Extract<Spawned, { spawned: true }>) => {
+    const journaled = await journal(deps, planned.delivery, { kind: "sent", id: command.id, pid, host: deps.host, started });
+    return { reply: await done, journaled };
+  };
+  // a spawn error ran nothing: no `sent`
+  const { reply, journaled } = spawned.spawned ? await sentThenExit(spawned) : { reply: spawned.reply, journaled: true };
+  const mapped = await mapReply(deps, planned, command, reply);
+  return { ...mapped, ...unjournaledIf(journaled) };
 };
 
 const signalOf = (pending: Pending): Signal | { kind: "start"; workItem: WorkItem } =>
@@ -133,7 +142,11 @@ const cancelsFirst = (commands: Command[]): Command[] => [
   ...commands.filter((c) => c.op !== "cancel"),
 ];
 
-/** Apply `first` and every immediate Result it leads to. Exit 3: CAS never cleared; exit 5: an awaited crash. */
+/**
+ * Apply `first` and every immediate Result it leads to. Exit 3: CAS never cleared — for a signal, or for a
+ * journal entry (then every command of that application still runs, and `unapplied` is the signals still
+ * queued); exit 5: an awaited crash.
+ */
 export const apply = async (deps: Deps, first: Pending): Promise<Report> => {
   const queue: Pending[] = [first];
   const issued: CommandId[] = [];
@@ -159,12 +172,15 @@ export const apply = async (deps: Deps, first: Pending): Promise<Report> => {
     last = planned;
     issued.push(...planned.commands.map((c) => c.id));
 
+    let unjournaled = false;
     for (const command of cancelsFirst(planned.commands)) {
       const executed = await execute(deps, planned, command);
       if (executed.queued) queue.push(executed.queued);
       if (executed.error) errors.push(executed.error);
       if (executed.crashed) crashed = true;
+      if (executed.unjournaled) unjournaled = true;
     }
+    if (unjournaled) return { exit: 3, output: { ...output(), unapplied: queue.map(signalOf) } };
   }
   return { exit: crashed ? 5 : 0, output: output() };
 };
