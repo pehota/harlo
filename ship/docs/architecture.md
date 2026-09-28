@@ -2,7 +2,9 @@
 
 Status: draft, from the design grilling of 2026-09-25. Amended 2026-09-28 from
 implementation planning (A1–A5, `status`, configuration layers; see
-[`plan.md`](plan.md) §8.1). Terms are defined in [`../CONTEXT.md`](../CONTEXT.md).
+[`plan.md`](plan.md) §8.1). Amended 2026-09-28 by the user: a changed WorkItem
+before Land goes back to Define, not to the Accept gate (plan.md §8.1
+decision 15). Terms are defined in [`../CONTEXT.md`](../CONTEXT.md).
 
 ship carries one WorkItem from a tracker to a verified production release.
 A deterministic core drives a fixed lifecycle; everything that varies between
@@ -151,9 +153,9 @@ Rules:
   **Delivery signals** are applied unless the Delivery is Closed or Abandoned,
   or a `workItem_changed` leaves its title and body unchanged (both ignored,
   journaled).
-- When a Delivery signal makes an outstanding command moot (`stop`;
-  `workItem_changed` sending it back to Accept; or `workItem_changed` at Define,
-  which cancels Define and re-runs it), the core issues
+- When a Delivery signal makes an outstanding command moot (`stop`; or
+  `workItem_changed` before Land, which sends it back to Define and re-runs
+  Define), the core issues
   `cancel{target}` to the port that runs the target; the adapter carries it
   out.
 - One signal is applied per Delivery at a time.
@@ -220,7 +222,7 @@ stateDiagram-v2
     (Principal: retry re-issues the step);
     stop{outcome, reason} → Abandoned from any
     non-terminal state;
-    workItem_changed before Land → AcceptGate
+    workItem_changed before Land → Define
   end note
 ```
 
@@ -243,8 +245,11 @@ stateDiagram-v2
 - An Integrate conflict comes back as a `question` to the Principal.
 - **The WorkItem changed** (`workItem_changed` signal, detected by the environment,
   which calls `changed <delivery>`; the Runner re-reads the WorkItem from the Tracker):
-  before the Land gate → back to the Accept gate showing the change; at Land or
-  later → journal it and notify the Principal, flow unchanged.
+  before the Land gate → back to Define, which derives criteria and runbook anew
+  from the changed WorkItem, then the Accept gate; at Land or later → journal it
+  and notify the Principal, flow unchanged. (Going back to the Accept gate would
+  show stale criteria next to the new WorkItem, and an easy `accept` would lock
+  them in.)
 - **Rollback is not a core concern.** The environment (or the Principal) rolls back and
   signals the core — `stop{outcome, reason}` or whatever the setup needs.
 - **Outcome.** Outcomes the core reaches on its own path are derived from it
@@ -267,7 +272,7 @@ stateDiagram-v2
 | Blocked | on entry | issue Principal `decide{retry \| stop}`, giving `retry` an id |
 | Blocked | Principal adapter `failed` | stay Blocked, issue nothing; the environment alerts; only a Delivery signal moves it |
 | Setup | `workItem_changed` | keep the new WorkItem, flow unchanged (Define has not run yet) |
-| Define | `workItem_changed` | cancel Define, re-issue it with the new WorkItem |
+| Define, Accept gate, Implement, Check, Decision gate (incl. questions) | `workItem_changed` | cancel the awaited command, re-run Define with the new WorkItem; fix rounds and findings kept |
 | Blocked | `workItem_changed` | as at the step or gate it is blocked at |
 | any | `workItem_changed`, title and body unchanged | ignored, journaled |
 | any gate | answer outside the allowed options | re-ask: re-issue the gate with a new id; invalid answer journaled |

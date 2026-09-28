@@ -450,8 +450,8 @@ Notes:
 | W1 | any non-terminal | `workItem_changed` with title and body equal to the snapshot's | same | none | `workitem_unchanged`, state unchanged |
 | W2 | setup, or blocked at setup | changed | same | none | workItem updated (Define has not run yet); blocked at setup stays blocked, so blockedAt is kept (a changed WorkItem does not fix a failed workspace; only `retry` or `stop` moves it) |
 | W3 | define (incl. awaiting ask), or blocked at define | changed | define | cancel awaited (if any); run define `{}` | workItem updated; blockedAt = null when leaving Blocked |
-| W4 | accept, or blocked at accept | changed | accept | cancel awaited (if any); decide accept (evidence.note = "workItem changed") | workItem updated; blockedAt = null when leaving Blocked |
-| W5 | implement, check, decision (incl. asks), or blocked at one of these | changed | accept | cancel awaited (if any); decide accept, note as W4 | workItem updated; fixRounds and findings unchanged; blockedAt = null when leaving Blocked |
+| W4 **[amend, synced]** | accept, or blocked at accept | changed | define | as W3: cancel awaited (if any); run define `{}` | as W3; the next Accept gate carries no note (decision 15) |
+| W5 **[amend, synced]** | implement, check, decision (incl. asks), or blocked at one of these | changed | define | as W3: cancel awaited (if any); run define `{}` | as W3; fixRounds and findings unchanged (decision 15) |
 | W6 | land, integrate, deploy, verify, failure, close, teardown (incl. blocked there) | changed | same | fire `principal.notify{text: "WorkItem changed after Land; flow unchanged"}` | workItem updated; `workitem_changed_late` |
 
 ### 4.8 Ignored
@@ -894,7 +894,7 @@ The Runner starts no listeners. The environment must provide what follows.
 
 ## 8. Decisions, assumptions and follow-ups
 
-### 8.1 Decisions (all 14 accepted by the user on 2026-09-28)
+### 8.1 Decisions (all 15 accepted by the user on 2026-09-28)
 
 1. **Architecture amendments A1–A5** **[amend, synced]**. **Decided:** accept all five; synced into `architecture.md`.
    - A1 `tracker.next`; A2 `state.list{key?}`; A3 the `ship changed <delivery>` verb; A4 `question{about, options?}`, where `about` is an adapter-defined category mapped in config to a Minimum Principal (unknown → `person`); A5 `about: scope|advisory` on Check's `decide` verdict.
@@ -907,7 +907,7 @@ The Runner starts no listeners. The environment must provide what follows.
    - Why: pollers (M1.4) and people need the non-terminal Deliveries with their position and awaiting id.
 5. **Decision gate options.** **Decided:** `[keep_going, accept, stop]`.
    - Why: the diagram's "fix / keep going" is one answer, `keep_going`.
-6. **Fix-round counting.** **Decided:** keep as tabled. Counted: Check `fix` and Integrate `fix`. Not counted: Land `rework`/`rescope`, `fix_forward`, and conflict `rework`. `workItem_changed` back to Accept resets neither fix rounds nor findings.
+6. **Fix-round counting.** **Decided:** keep as tabled. Counted: Check `fix` and Integrate `fix`. Not counted: Land `rework`/`rescope`, `fix_forward`, and conflict `rework`. `workItem_changed` back to Define (decision 15) resets neither fix rounds nor findings.
    - Why: the glossary says "a return from a check", and the only stated reset is `keep_going`.
 7. **Minimum Principal for questions.** **Decided:** `question.about` is mapped in `policy.minimum.question`; unknown values default to `person`. The Decision gate reached through N rounds uses `decision.scope`.
    - Why: strictest by default.
@@ -925,6 +925,8 @@ The Runner starts no listeners. The environment must provide what follows.
     - Why: YAGNI. Add a linter only if the repo adopts one.
 14. **Orphaned adapters.** **Decided:** no process-group tricks to make adapters die with the Runner. An orphan is detected by the stall check (dead or "hung?") and terminated through `cancel{id}` or by a person, by its recorded `(pid, started)` pair (§5.2, §5.3).
     - Why: children already share the Runner's process group by default, a SIGKILL on the Runner alone does not kill them, and macOS has no reliable parent-death signal.
+15. **A changed WorkItem before Land goes back to Define** **[amend, synced]**. **Decided:** at Accept, Implement, Check or Decision (incl. asks, and Blocked at one of these), `workItem_changed` cancels the awaited command and re-runs Define with the new WorkItem, exactly as at Define (W3–W5); the next Accept gate carries no "workItem changed" note. Previously these went back to the Accept gate with that note. Synced into `architecture.md`.
+    - Why: criteria and runbook are derived from the WorkItem. Going back to Accept showed stale criteria next to the new WorkItem, and an easy `accept` locked them in.
 
 ### 8.2 Conflicts between the planning parts, and how each was resolved
 
@@ -940,7 +942,7 @@ The Runner starts no listeners. The environment must provide what follows.
 | Journal as a third core output | a single `entry` per application; the Runner stamps `time` and saves it with the snapshot | ADR 0005; keeps the core pure (extends ADR 0002's signature) |
 | Gate options in config vs in the core | core constants; config keeps only the Minimum Principal per gate and decision kind **[amend, synced]** | P1: the core branches on them |
 | Self-echo in change detection | W1: the core ignores an unchanged title and body, and the adapters keep their own writes out of both | pure comparison; no world check (ADR 0004) |
-| `workItem_changed` during Setup | stay in Setup and update the data (sending it to Accept would skip Setup); Blocked at Setup stays Blocked, because a changed WorkItem does not fix a failed workspace: only `retry` or `stop` moves it | new row W2 |
+| `workItem_changed` during Setup | stay in Setup and update the data (sending it to Define would skip Setup); Blocked at Setup stays Blocked, because a changed WorkItem does not fix a failed workspace: only `retry` or `stop` moves it | new row W2 |
 | Runner-side `inputs` / listeners config | dropped from the machine layer; the environment owns listeners **[amend, synced]** | P6, ADR 0004 |
 | Adapter state location | each adapter owns its own file | P5 |
 
