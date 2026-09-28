@@ -590,7 +590,7 @@ Rules for every step:
   - Test: rows S1–S6, one at a time.
   - Impl: `core/start.ts`.
   - Done when S1–S6 are green, including their entries.
-- [ ] **M0.5 Happy path, part 1.**
+- [x] **M0.5 Happy path, part 1.**
   - Test: rows H1–H6, including H3a (a step with a configured status fires `tracker.update`) and H3b (no status configured: no fire).
   - Impl: `transition.ts` dispatch, `steps.ts` builders, `gates.ts` decide builder and evidence bundle.
   - Done when H1–H6 are green.

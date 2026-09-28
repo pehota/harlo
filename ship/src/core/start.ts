@@ -12,7 +12,7 @@ const fresh = (delivery: string, workItem: WorkItem): Snapshot => ({
   findings: [], evidence: [], outcome: null, reason: null,
 });
 
-export const start = (_p: Policy, workItem: WorkItem, existing: Snapshot[]): StartOutput => {
+export const start = (p: Policy, workItem: WorkItem, existing: Snapshot[]): StartOutput => {
   const signal = { kind: "start", workItem } as const;
   const earlier = existing.filter((s) => s.workItem.key === workItem.key); // a shared prefix is another key (S6)
   const open = earlier.find((s) => !isTerminal(s.at));
@@ -22,7 +22,7 @@ export const start = (_p: Policy, workItem: WorkItem, existing: Snapshot[]): Sta
   }
 
   const delivery = deliveryId(workItem.key, earlier.length + 1);
-  const setup = enterStep(fresh(delivery, workItem), "setup");
+  const setup = enterStep(p, fresh(delivery, workItem), "setup");
   const entry = { delivery, signal, from: null, to: setup.state.at, issued: setup.commands.map((c) => c.id) };
   return { kind: "created", state: setup.state, commands: setup.commands, entry };
 };

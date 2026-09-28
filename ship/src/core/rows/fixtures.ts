@@ -1,8 +1,23 @@
 // Shared row fixtures for the core tables (plan §4). Every table under rows/ is built from these, so
 // invariants.test.ts can sweep all rows with the same default Policy.
-import type { CommandId, DeliveryId, Port, WorkItem } from "../../contracts/common";
+import type { CommandId, DeliveryId, EvidenceItem, GateEvidence, Port, PrincipalKind, WorkItem } from "../../contracts/common";
 import { parseCommandId } from "../ids";
-import type { Awaiting, Command, Entry, Policy, Position, Snapshot } from "../types";
+import type { Awaiting, Command, Entry, Node, Policy, Position, Signal, Snapshot } from "../types";
+
+/** A transition row: `state | signal | → position | commands | snapshot / entry`. */
+export type TransitionRow = {
+  id: string; // table row, e.g. "H1"
+  name: string;
+  policy?: Policy; // default: `policy` below
+  state: Snapshot;
+  signal: Signal;
+  expect: {
+    at: Position;
+    commands: Command[]; // exact: ids, ports, ops, await, payloads, in order
+    state: Partial<Snapshot>; // the snapshot fields the row pins
+    entry: Pick<Entry, "from" | "to" | "issued" | "by" | "note">;
+  };
+};
 
 /** A start row (§4.1). A rejected start issues no commands. */
 export type StartRow = {
@@ -47,6 +62,11 @@ export const policy: Policy = {
   },
 };
 
+export const withTracker = (tracker: Partial<Policy["tracker"]>): Policy => ({
+  ...policy,
+  tracker: { ...policy.tracker, ...tracker },
+});
+
 export const id = (suffix: string, delivery: DeliveryId = D): CommandId => `${delivery}/${suffix}`;
 
 /** An awaited command as the snapshot records it. */
@@ -59,6 +79,19 @@ export const awaited = (
 
 /** The command the core issues for an awaited entry (without node/kind/options). */
 export const cmd = (a: Awaiting): Command => ({ id: a.id, port: a.port, op: a.op, await: a.await, payload: a.payload });
+
+export const fire = (suffix: string, port: Port, op: string, payload: unknown): Command => ({
+  id: id(suffix), port, op, await: false, payload,
+});
+
+export const gateEvidence = (over: Partial<GateEvidence> = {}): GateEvidence => ({
+  workItem, criteria, runbook, changeset, findings: [], evidence: [], ...over,
+});
+
+export const decide = (
+  gate: Node | "blocked", n: number, options: string[], min: PrincipalKind, evidence: GateEvidence = gateEvidence(),
+): Awaiting =>
+  awaited(`${gate}-${n}`, "principal", "decide", { on: gate, options, min, evidence }, gate, "decide", options);
 
 /**
  * A snapshot at `at` awaiting `awaiting`. Data fields are filled as if every step had run; rows override
@@ -75,3 +108,10 @@ export const snapshotAt = (at: Position, awaiting: Awaiting | null, over: Partia
     ...over,
   };
 };
+
+export const ok = (to: Awaiting, body: unknown, evidence?: EvidenceItem[]): Signal => ({
+  kind: "result", id: to.id, result: { status: "ok", body, ...(evidence ? { evidence } : {}) },
+});
+
+export const answer = (to: Awaiting, value: string, by: PrincipalKind = "person", comment?: string): Signal =>
+  ok(to, { answer: value, by, ...(comment === undefined ? {} : { comment }) });
