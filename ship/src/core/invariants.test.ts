@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { PrincipalKind } from "../contracts/common";
 import { parseCommandId } from "./ids";
-import { applyStart, applyTransition, startRows, transitionRows } from "./rows";
+import { applyStart, applyTransition, startRows, transitionRows } from "./fixtures/rows.fixture";
 import type { Command, Entry, Note, Signal, Snapshot } from "./types";
 
 /** One applied row: what went in, what came out. `before` is null for a created start. */

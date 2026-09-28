@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { applyStart, startRows } from "./rows";
-import type { StartRow } from "./rows/fixtures";
+import { applyStart, startRows } from "./fixtures/rows.fixture";
+import type { StartRow } from "./fixtures/builders.fixture";
 
 describe("start (§4.1)", () => {
   test.each(startRows)("$id $name", (row) => {

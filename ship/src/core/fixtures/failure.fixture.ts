@@ -3,7 +3,7 @@ import type { Finding } from "../../contracts/common";
 import {
   type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok,
   runbook, snapshotAt,
-} from "./fixtures";
+} from "./builders.fixture";
 
 const findings: Finding[] = [{ text: "greeting page returns 500", ref: "https://example.test/runs/7" }];
 const deploy1 = awaited("deploy-1", "deploy", "run", { changeset }, "deploy", "run");

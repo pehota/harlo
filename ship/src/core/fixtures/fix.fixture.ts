@@ -3,7 +3,7 @@ import type { Finding } from "../../contracts/common";
 import {
   type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok,
   snapshotAt,
-} from "./fixtures";
+} from "./builders.fixture";
 
 const findings: Finding[] = [{ text: "empty name is not rejected", ref: "greet.ts:3" }];
 const { decision: DECISION, land: LAND } = OPTIONS;

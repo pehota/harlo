@@ -2,7 +2,7 @@
 import {
   type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, decide, failed, fire, gateEvidence, id,
   runbook, snapshotAt, withRetryCap,
-} from "./fixtures";
+} from "./builders.fixture";
 
 const LOGIN = ["logged in", "give up"];
 const deploy = (n: number) => awaited(`deploy-${n}`, "deploy", "run", { changeset }, "deploy", "run");

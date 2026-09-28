@@ -3,7 +3,7 @@ import type { EvidenceItem } from "../../contracts/common";
 import {
   type TransitionRow, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok, policy,
   OPTIONS, runbook, snapshotAt, withTracker, workspace,
-} from "./fixtures";
+} from "./builders.fixture";
 
 const plan: EvidenceItem = { label: "plan", url: "file:///ws/k-1/plan.md" };
 const { accept: ACCEPT, land: LAND } = OPTIONS;

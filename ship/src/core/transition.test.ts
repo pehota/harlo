@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyTransition, ignoredRows, transitionRows } from "./rows";
+import { applyTransition, ignoredRows, transitionRows } from "./fixtures/rows.fixture";
 
 describe("transition (§4)", () => {
   test.each(transitionRows)("$id $name", (row) => {

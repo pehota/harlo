@@ -3,7 +3,7 @@ import type { EvidenceItem, Finding } from "../../contracts/common";
 import {
   type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, criteria, gateEvidence, id, question,
   runbook, snapshotAt,
-} from "./fixtures";
+} from "./builders.fixture";
 
 const early = { criteria: null, runbook: null, changeset: null }; // Define has not produced anything yet
 const shot: EvidenceItem = { label: "login page", url: "file:///ws/k-1/login.png" };

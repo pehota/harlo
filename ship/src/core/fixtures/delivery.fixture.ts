@@ -3,8 +3,8 @@ import type { Finding, WorkItem } from "../../contracts/common";
 import {
   type TransitionRow, OPTIONS, ask, awaited, cancel, changed, changeset, cmd, criteria, decide, fire, gateEvidence,
   id, snapshotAt, stop, workItem, workspace,
-} from "./fixtures";
-import { ignored } from "./ignored";
+} from "./builders.fixture";
+import { ignored } from "./ignored.fixture";
 
 const findings: Finding[] = [{ text: "empty name is not rejected" }];
 const edited: WorkItem = { ...workItem, body: "Say hello to the given name, in German too." };

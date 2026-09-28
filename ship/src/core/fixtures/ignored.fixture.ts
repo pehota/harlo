@@ -1,6 +1,6 @@
 // §4.8 ignored rows: the state comes back deep-equal (I5), nothing is issued.
 import type { Note, Signal, Snapshot } from "../types";
-import { type TransitionRow, awaited, ok, snapshotAt, workItem } from "./fixtures";
+import { type TransitionRow, awaited, ok, snapshotAt, workItem } from "./builders.fixture";
 
 export const ignored = (id: string, name: string, state: Snapshot, signal: Signal, note: Note): TransitionRow => ({
   id, name, state, signal,

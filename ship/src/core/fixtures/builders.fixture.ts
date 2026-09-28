@@ -1,4 +1,4 @@
-// Shared row fixtures for the core tables (plan §4). Every table under rows/ is built from these, so
+// Shared row fixtures for the core tables (plan §4). Every table under fixtures/ is built from these, so
 // invariants.test.ts can sweep all rows with the same default Policy.
 import type { CommandId, DeliveryId, EvidenceItem, GateEvidence, Port, PrincipalKind, WorkItem } from "../../contracts/common";
 import { parseCommandId } from "../ids";

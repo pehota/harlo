@@ -1,7 +1,7 @@
 // §4.1 start rows.
 import type { DeliveryId } from "../../contracts/common";
 import type { Awaiting, Position, Snapshot } from "../types";
-import { type StartRow, cmd, snapshotAt, workItem } from "./fixtures";
+import { type StartRow, cmd, snapshotAt, workItem } from "./builders.fixture";
 
 const existing = (delivery: DeliveryId, at: Position, key = workItem.key, over: Partial<Snapshot> = {}): Snapshot =>
   snapshotAt(at, null, { delivery, workItem: { ...workItem, key }, ...over });
