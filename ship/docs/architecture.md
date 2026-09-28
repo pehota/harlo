@@ -155,11 +155,14 @@ Rules:
 - One signal is applied per Delivery at a time.
 - **Save before execute.** The Runner saves the state that awaits a command
   before it sends the command. As soon as the adapter process has started,
-  before awaiting its exit, it journals `sent{id, pid, host}`; after the exit
-  it journals the Result, `accepted{id}` or `adapter_error{id}`. A command lost
-  to a crash between save and send has no `sent` entry; a Runner that dies
-  while a synchronous adapter runs leaves a `sent` entry whose pid is dead and
-  no outcome. The environment detects both from the journal, so the core stays
+  before awaiting its exit, it journals `sent{id, pid, host, started}`
+  (`started` = the process start time, so a reused pid is not mistaken for the
+  adapter); after the exit it journals the Result, `accepted{id}` or
+  `adapter_error{id}`. A command lost to a crash between save and send has no
+  `sent` entry; a Runner that dies while a synchronous adapter runs leaves an
+  orphaned adapter whose Result is lost, and a `sent` entry with no outcome.
+  The environment detects these from the journal (never sent, process gone,
+  or alive past a per-port `maxRuntime`: "hung?"), so the core stays
   clock-free and never reads these entries.
 - An `accepted` answer only means "no Result yet"; the Runner still sends the
   remaining commands. An adapter crash is journaled, the remaining commands are
@@ -305,7 +308,7 @@ sequenceDiagram
   Core-->>Run: new state (awaiting land-1) + command{id: land-1, decide}
   Run->>St: save (waiting on land-1)
   Run->>Pr: decide(gate, options, evidence)
-  Run->>St: journal sent{land-1, pid, host}
+  Run->>St: journal sent{land-1, pid, host, started}
   Pr-->>Run: accepted
   Run->>St: journal accepted{land-1}
   Run->>Run: exit
@@ -321,10 +324,15 @@ The same shape covers every wait: a Principal's answer, a finished agent step,
 a CI run, a merged pull request, a manual homelab deploy confirmed by reply.
 
 If the Runner dies after the save but before the send, `land-1` is awaited but
-has no `sent` entry. If it dies while a synchronous adapter runs, the `sent`
-entry's pid is dead and no Result, `accepted` or `adapter_error` follows. The
-environment's stall check flags both, and a person sends the Result by hand or
-sends `stop`. An `accepted` command is not pid-checked: its work continues
+has no `sent` entry. If it dies while a synchronous adapter runs, the adapter
+is orphaned: it keeps running, and its Result is lost when it exits. The stall
+check counts the process alive only while its pid's start time still matches
+`started`; it flags the command once the process is gone with no Result,
+`accepted` or `adapter_error`, or as "hung?" while it runs past its port's
+`maxRuntime` (the environment's config and clock). A `sent` entry from another
+host is flagged as "unknown host", never skipped. A person sends the Result by
+hand or sends `stop`, and may terminate the orphan by its `(pid, started)`
+pair. An `accepted` command is not pid-checked: its work continues
 elsewhere. The one remaining window, a crash between process start and the
 `sent` write, is rare and flagged as never sent, so it errs towards alerting.
 
