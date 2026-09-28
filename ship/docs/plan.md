@@ -633,7 +633,7 @@ Rules for every step:
   - Test: table for valid, cross-layer key, unknown port, missing key, undeclared `$secrets`, a missing `delivered.status`, and an outcome without a mapping.
   - Impl: `runner/config.ts`.
   - Done when green, with exit 2 on each invalid case.
-- [ ] **M0.17 Apply loop.**
+- [x] **M0.17 Apply loop.**
   - Test, with an in-process fake State and fake spawn:
     - an immediate-result chain runs until `accepted`
     - save happens before execute (spawn sees the saved version)

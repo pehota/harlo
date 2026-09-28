@@ -2,7 +2,7 @@
 // port's capability-profile env only. Returns as soon as the process exists, so the caller can journal
 // `sent{id, pid, host, started}` before awaiting `done` (§5.2).
 import { readFileSync } from "node:fs";
-import type { Port, Result, RunnerStdin, Stdin } from "../contracts/common";
+import type { DeliveryId, Port, Result, RunnerStdin, Stdin } from "../contracts/common";
 import { schemaFor } from "../contracts/ports";
 import { check } from "../contracts/validate";
 import type { Command, Snapshot } from "../core/types";
@@ -129,4 +129,26 @@ export const spawnCommand = (
     workItem: delivery.workItem, workspace: delivery.workspace, payload: command.payload, tools: spec.tools,
   };
   return spawnAdapter(spec, stdin, command.await);
+};
+
+/** A Runner-only call did not return an `ok` Result: it failed, crashed or could not be spawned (the CLI's exit 4). */
+export class RunnerCallError extends Error {
+  override name = "RunnerCallError";
+}
+
+/**
+ * Make a Runner-only call (tracker.read/next, state.*) and return its `ok` body. It has no command id, and it
+ * may run before a Delivery exists; the stdout schema has already checked the body.
+ */
+export const callRunnerOnly = async <Body>(
+  spec: AdapterSpec, port: Port, op: string, payload: unknown, delivery: DeliveryId | null = null,
+): Promise<Body> => {
+  const stdin: RunnerStdin = { id: null, delivery, port, op, workItem: null, workspace: null, payload, tools: spec.tools };
+  const spawned = spawnAdapter(spec, stdin, true);
+  const reply = spawned.spawned ? await spawned.done : spawned.reply;
+  const what = `${port}.${op}`;
+  if (reply.kind === "crash") throw new RunnerCallError(`${what}: ${reply.reason}\n${reply.stderr}`);
+  if (reply.kind !== "result") throw new RunnerCallError(`${what}: unexpected ${reply.kind}`); // the schema forbids `accepted`
+  if (reply.result.status !== "ok") throw new RunnerCallError(`${what}: ${reply.result.status === "failed" ? reply.result.info : reply.result.status}`);
+  return reply.result.body as Body;
 };
