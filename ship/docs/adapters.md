@@ -91,6 +91,60 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 - An orphaned target process may be killed by the `(pid, started)` pair from its
   `sent` journal entry, only while the pid's start time still equals `started`.
 
+## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
+
+Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-claude.ts` (M1.9–M1.11):
+
+- **Structured output.** `-p/--print --output-format json --json-schema '<inline
+  JSON Schema>'` works, but `--json-schema` takes the schema **inline**, not a
+  file path (`--json-schema /path/to.json` fails: `not valid JSON`). The
+  top-level reply is one JSON object; the schema-validated payload is in its
+  `structured_output` field (already parsed — don't re-parse the sibling
+  `result` string, which is the same data JSON-encoded as text). On success:
+  `is_error:false`, `structured_output` present, exit 0. **[verified]**
+- **Session resume.** `--resume <session-id>` genuinely continues the prior
+  session (confirmed: a follow-up call referenced specifics only visible to
+  that session) and returns the same `session_id`, exit 0. Use the first
+  call's `session_id` from its JSON reply — nothing needs to be invented or
+  pre-assigned via `--session-id` for the resume case. **[verified]**
+- **Fresh session (P8, for Check).** A plain `claude -p ...` with no
+  `--resume`/`--session-id` starts a new session every call; this is all
+  Check needs to guarantee independence from Implement's session.
+  **[verified]**
+- **Auth failure.** With `--bare` (which forces `ANTHROPIC_API_KEY`/
+  `apiKeyHelper` and never reads OAuth/keychain) and no key configured: process
+  exit code **1**, and stdout is still one valid JSON object
+  (`is_error:true`, `result:"Not logged in · Please run /login"`,
+  `structured_output` absent). The adapter can therefore always parse stdout
+  as JSON first and branch on `is_error`/presence of `structured_output`,
+  rather than needing a separate path for a non-JSON failure. **[verified]**
+- **Tool permissions in headless mode.** A plain `-p` call without
+  `--allowedTools`/`--permission-mode` had several of its own `Bash` calls
+  denied by this machine's existing shell hook (it rewrites `find`/`ls` to
+  `rtk find`/`rtk ls`, and those got denied under the default headless
+  permission set) — the agent adapted around it, but a real adapter should
+  pass an explicit permission mode (e.g. `--permission-mode` suited to running
+  unattended inside an isolated git worktree) rather than rely on whatever the
+  ambient host's hooks/permissions default to. **[unverified]** which mode is
+  right for production use — flagged for the adapter's own config, not
+  resolved by this spike.
+- **Cost/latency.** A single `-p` call (no `--bare`) pulled in ~48k tokens of
+  cache-creation context (project CLAUDE.md, skills, hooks, etc. via normal
+  auto-discovery) before doing any work, at real dollar cost. `--bare` (skip
+  hooks, LSP, plugin sync, auto-memory, CLAUDE.md auto-discovery) is worth
+  using for the adapter's real invocations to avoid paying for and being
+  steered by this host's unrelated tooling — **but** `--bare` also disables
+  OAuth/keychain auth, so it only works when the adapter's capability-profile
+  env supplies `ANTHROPIC_API_KEY` directly. **[verified]** the tradeoff
+  exists; **[unverified]** which auth path M1's actual deployment will use.
+
+Net for `agent-claude.ts`: build the payload → prompt text, call `claude -p
+--output-format json --json-schema '<schema for the op>' [--resume
+<stored-session-id>]`, parse stdout as JSON unconditionally, and branch on
+`is_error` (→ `failed`, nothing committed yet, or a crash if a commit already
+happened per the crash-vs-`failed` rule above) vs. `structured_output` present
+(→ map its fields to the op's `ok`/`question` body).
+
 ## Idempotency on the command id
 
 - The `id` names one instance of one step or gate. The core never reuses it: a
