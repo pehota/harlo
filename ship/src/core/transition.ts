@@ -1,10 +1,10 @@
 // transition(): apply one signal to a Delivery (plan §4). Dispatch is by position (Snapshot.at).
-import type { Ok } from "../contracts/common";
+import type { Finding, Ok } from "../contracts/common";
 import type {
   CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
-import { enterGate } from "./gates";
-import { type Move, enterClose, enterStep, present, withFire } from "./steps";
+import { enterDecision, enterGate } from "./gates";
+import { type Move, abandon, enterClose, enterStep, present, withFire } from "./steps";
 import {
   isTerminal, type Awaiting, type Entry, type Note, type Policy, type Position, type Signal, type Snapshot,
   type TransitionOutput,
@@ -28,6 +28,12 @@ const enterClosed = (s: Snapshot): Move =>
 
 const feedback = (b: DecideBody) => (b.comment === undefined ? {} : { feedback: b.comment });
 
+/** A `fix` verdict from Check or Integrate: another fix round while rounds are left, else the Decision gate. */
+const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
+  s.fixRounds < p.fixRounds
+    ? enterStep(p, { ...s, findings, fixRounds: s.fixRounds + 1 }, "implement")
+    : enterDecision(p, { ...s, findings }, "scope");
+
 /** ok results, by the position they arrive at. Gate answers are ok results of `principal.decide`. */
 const onOk: { [P in Position]?: OnOk } = {
   setup: (p, s, body) => enterStep(p, { ...s, workspace: (body as SetupBody).path }, "define"),
@@ -43,15 +49,40 @@ const onOk: { [P in Position]?: OnOk } = {
     });
   },
   implement: (p, s, body) => enterStep(p, { ...s, changeset: (body as ImplementBody).changeset }, "check"),
-  check: (p, s, body) => branch(s, (body as CheckBody).verdict, {
-    pass: () => enterGate(p, { ...s, findings: [] }, "land"),
-  }),
-  land: (p, s, body) => branch(s, (body as DecideBody).answer, {
-    approve: () => enterStep(p, s, "integrate"),
-  }),
-  integrate: (p, s, body) => branch(s, (body as IntegrateBody).verdict, {
-    landed: () => enterStep(p, s, "deploy"),
-  }),
+  check: (p, s, body) => {
+    const b = body as CheckBody;
+    return branch(s, b.verdict, {
+      pass: () => enterGate(p, { ...s, findings: [] }, "land"),
+      fix: () => fixRound(p, s, (b as Extract<CheckBody, { verdict: "fix" }>).findings),
+      decide: () => {
+        const { about, findings } = b as Extract<CheckBody, { verdict: "decide" }>;
+        return enterDecision(p, { ...s, findings }, about);
+      },
+    });
+  },
+  decision: (p, s, body) => {
+    const b = body as DecideBody;
+    return branch(s, b.answer, {
+      keep_going: () => enterStep(p, { ...s, fixRounds: 0 }, "implement"),
+      accept: () => enterGate(p, s, "land"),
+      stop: () => abandon(p, s, "abandoned", b.comment ?? "stopped at decision"),
+    });
+  },
+  land: (p, s, body) => {
+    const b = body as DecideBody;
+    return branch(s, b.answer, {
+      approve: () => enterStep(p, s, "integrate"),
+      rework: () => enterStep(p, s, "implement", feedback(b)),
+      rescope: () => enterStep(p, s, "define", feedback(b)),
+    });
+  },
+  integrate: (p, s, body) => {
+    const b = body as IntegrateBody;
+    return branch(s, b.verdict, {
+      landed: () => enterStep(p, s, "deploy"),
+      fix: () => fixRound(p, s, (b as Extract<IntegrateBody, { verdict: "fix" }>).findings),
+    });
+  },
   deploy: (p, s, body) => branch(s, (body as DeployBody).verdict, {
     live: () => enterStep(p, s, "verify"),
   }),

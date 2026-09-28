@@ -600,7 +600,7 @@ Rules for every step:
 - [x] **M0.7 Ignored.**
   - Test: rows R1–R2, with state deep-equal (I5).
   - Done when green.
-- [ ] **M0.8 Fix rounds.**
+- [x] **M0.8 Fix rounds.**
   - Test: rows F1–F10.
   - Done when green.
 - [ ] **M0.9 Failure gate.**

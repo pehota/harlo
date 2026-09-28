@@ -79,3 +79,19 @@ export const enterClose = (p: Policy, s: Snapshot, outcome: Outcome): Move => {
   const comment = p.tracker.outcomes[outcome]?.comment === true;
   return comment ? withFire(close, "tracker", "comment", { text: outcomeText(close.state) }) : close;
 };
+
+/**
+ * `abandon(o, r)`: position abandoned with outcome and reason; fire the outcome's tracker status and comment
+ * when policy sets them, then notify the Principal. No Teardown: the workspace is kept (I4).
+ */
+export const abandon = (p: Policy, s: Snapshot, outcome: Outcome, reason: string): Move => {
+  const state: Snapshot = { ...s, at: "abandoned", awaiting: null, blockedAt: null, blockedCmd: null, outcome, reason };
+  const mapping = p.tracker.outcomes[outcome];
+  const updated = mapping?.status === undefined
+    ? { state, commands: [] }
+    : withFire({ state, commands: [] }, "tracker", "update", { status: mapping.status });
+  const commented = mapping?.comment === true
+    ? withFire(updated, "tracker", "comment", { text: outcomeText(state) })
+    : updated;
+  return withFire(commented, "principal", "notify", { text: `abandoned: ${outcomeText(state)}` });
+};

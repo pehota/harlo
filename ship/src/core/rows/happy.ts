@@ -2,12 +2,11 @@
 import type { EvidenceItem } from "../../contracts/common";
 import {
   type TransitionRow, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok, policy,
-  runbook, snapshotAt, withTracker, workspace,
+  OPTIONS, runbook, snapshotAt, withTracker, workspace,
 } from "./fixtures";
 
 const plan: EvidenceItem = { label: "plan", url: "file:///ws/k-1/plan.md" };
-const ACCEPT = ["accept", "adjust"];
-const LAND = ["approve", "rework", "rescope"];
+const { accept: ACCEPT, land: LAND } = OPTIONS;
 
 const setup1 = awaited("setup-1", "workspace", "setup", {}, "setup", "run");
 const define1 = awaited("define-1", "define", "run", {}, "define", "run");

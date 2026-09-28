@@ -67,6 +67,16 @@ export const withTracker = (tracker: Partial<Policy["tracker"]>): Policy => ({
   tracker: { ...policy.tracker, ...tracker },
 });
 
+/** Gate options as §3.2 tables them (independent of the core's constants). */
+export const OPTIONS = {
+  accept: ["accept", "adjust"],
+  decision: ["keep_going", "accept", "stop"],
+  land: ["approve", "rework", "rescope"],
+  failure: ["fix_forward", "accept"],
+  blocked: ["retry", "stop"],
+  conflict: ["resolved", "rework"],
+};
+
 export const id = (suffix: string, delivery: DeliveryId = D): CommandId => `${delivery}/${suffix}`;
 
 /** An awaited command as the snapshot records it. */
