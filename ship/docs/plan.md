@@ -105,6 +105,8 @@ ship/
     e2e/readme.test.ts      # runs the README happy path against fakes (M0.23)
     property/lifecycle.property.test.ts  # fast-check: core + Runner in a simulated environment (M0.22)
     fixtures/               # fake scripts, configs
+    # Test-only data also sits next to the tests that use it: `*.fixture.ts` files and `fixtures/` dirs
+    # under src/ (e.g. src/core/fixtures/, src/runner/fixtures/, src/fixtures/) as well as under test/.
   docs/
     architecture.md  adr/  plan.md  adapters.md (M0: adapter authoring contract)
   README.md                 # M0: install, config, CLI
@@ -469,14 +471,14 @@ Service-port `question` results and verdicts outside a port's schema never reach
 
 | Verb | Runner does |
 |---|---|
-| `ship start <key>` | 1. `tracker.read{key}`. If it fails, exit 4 without calling the core. 2. `state.list{key}`, then load each Delivery and keep those whose `workItem.key === key`. 3. `core.start`. 4. If created, save as version 1, create-if-absent. If rejected, save the entry on the existing Delivery. 5. Execute the commands. |
+| `ship start <key>` | 1. `tracker.read{key}`. If it fails or returns another key's WorkItem, exit 4 without calling the core. 2. `state.list{key}`, then load each Delivery and keep those whose `workItem.key === key`. 3. `core.start`. 4. If created, save as version 1, create-if-absent. If rejected, save the entry on the existing Delivery. 5. Execute the commands. |
 | `ship next` | `tracker.next`. A `null` key gives `{delivery: null}` and exit 0. Otherwise it runs as `start`, so a key that already has a non-terminal Delivery is rejected (exit 0). |
 | `ship signal <delivery> <id> <result-json>` | 1. The id must start with `<delivery>/`, else exit 1. 2. Load the Delivery. 3. If `id === awaiting.id`, validate the JSON against the Result schema for `awaiting.port/op` (invalid: exit 1). Otherwise skip validation, because the core will ignore it and journal it. 4. Apply. |
 | `ship stop <delivery> <outcome> <reason>` | `outcome` must be in `policy.outcomes`, else exit 1. Then apply. |
-| `ship changed <delivery>` **[amend, synced]** | `tracker.read{key}`, then apply `workItem_changed`. |
+| `ship changed <delivery>` **[amend, synced]** | `tracker.read{key}` (fails or another key's WorkItem: exit 4), then apply `workItem_changed`. |
 | `ship status [<delivery>]` **[amend, synced]** | Read-only: no core call, no save, no commands. No argument: `state.list{}`, load each Delivery, keep the non-terminal ones. With an argument: that Delivery only, even if terminal. A failed State read gives exit 4. |
 
-**Output:** one JSON line, `{delivery, issued: [ids], awaiting: id|null, ignored?, rejected?, unapplied?, errors?}`.
+**Output:** one JSON line, `{delivery, issued: [ids], awaiting: id|null, ignored?, rejected?, unapplied?, errors?}`. `delivery` is the Delivery id whenever it is known, also on exit 3; only a `start` that never saved gives `null` (its key is in `unapplied`).
 
 **`status` output:** one JSON line, `{deliveries: [{delivery, at, awaiting}]}`, where `at` is `Snapshot.at` and `awaiting` is `awaiting.id` or `null`.
 
@@ -486,7 +488,7 @@ Service-port `question` results and verdicts outside a port's schema never reach
 | 1 | invalid CLI input |
 | 2 | config error; nothing touched |
 | 3 | CAS conflict that did not clear after 5 tries; `unapplied` lists the pending signals for the environment to resubmit |
-| 4 | State or Tracker read failed; nothing executed |
+| 4 | State or Tracker call failed; if it failed before execution nothing ran, otherwise see the journal |
 | 5 | awaited adapter crashed or printed invalid output; journaled, no signal applied, remaining commands still executed (§5.2, §5.3) |
 
 ### 5.2 Apply loop (`runner/apply.ts`)
@@ -518,7 +520,9 @@ if crashed: exit 5
 exit 0
 
 journal(entries) = save the unchanged state as the next version with entries + time;
-                   on a conflict reload and save again (the entries do not depend on the state)
+                   on a conflict reload and save again (the entries do not depend on the state), up to 5 tries;
+                   if it never saves: run the rest of this application's commands, then exit 3 with
+                   unapplied = queue (the signals still pending; the lost entries are audit data)
 ```
 
 Rules:

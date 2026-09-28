@@ -151,8 +151,9 @@ Rules:
   **Delivery signals** are applied unless the Delivery is Closed or Abandoned,
   or a `workItem_changed` leaves its title and body unchanged (both ignored,
   journaled).
-- When a Delivery signal makes an outstanding command moot (`stop`, or
-  `workItem_changed` sending it back to Accept), the core issues
+- When a Delivery signal makes an outstanding command moot (`stop`;
+  `workItem_changed` sending it back to Accept; or `workItem_changed` at Define,
+  which cancels Define and re-runs it), the core issues
   `cancel{target}` to the port that runs the target; the adapter carries it
   out.
 - One signal is applied per Delivery at a time.

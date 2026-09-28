@@ -83,7 +83,8 @@ Otherwise report through `ok` or `question`.
 Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 
 - It is sent to the port that ran the target, when a Delivery signal made that
-  command moot (`stop`, or a WorkItem change sending it back to Accept).
+  command moot (`stop`; a WorkItem change sending it back to Accept; or a
+  WorkItem change at Define, which cancels Define and re-runs it).
 - Stop the target's work if it is still running.
 - **Nothing to cancel → exit 0** (print `{"status":"ok","body":{}}`). A finished,
   unknown or synchronous target is not an error.

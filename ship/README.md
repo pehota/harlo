@@ -89,7 +89,7 @@ a profile `env` value:
 {"deliveries":[{"delivery":"hello-1","at":"land","awaiting":"hello-1/land-1"}]}
 ```
 
-`at` is the Delivery's Position. `awaiting` is the awaited command id, or `null`.
+`delivery` is `null` only when there is none yet (`next` with no key, a `start` that never saved). `at` is the Delivery's Position. `awaiting` is the awaited command id, or `null`.
 
 | Exit | Meaning |
 |---|---|
@@ -97,7 +97,7 @@ a profile `env` value:
 | 1 | invalid CLI input; usage on stderr |
 | 2 | config error; nothing touched |
 | 3 | State save conflict did not clear after 5 tries; `unapplied` lists the signals to resubmit |
-| 4 | State or Tracker read failed; nothing executed |
+| 4 | State or Tracker call failed; if it failed before execution nothing ran, otherwise see the journal |
 | 5 | an awaited adapter crashed or printed invalid output; journaled, remaining commands still ran |
 
 ## Happy path on fakes
