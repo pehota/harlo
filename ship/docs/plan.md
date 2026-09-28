@@ -661,7 +661,7 @@ Rules for every step:
   - Test: the fake adapter replays a fixture script (per port, the nth call returns the nth scripted stdout) and records its stdin.
   - Impl: `adapters/fake.ts` serving tracker, workspace, every step port and principal, driven by `--script`.
   - Done when the fixture replay is green.
-- [ ] **M0.20 Terminal Principal.**
+- [x] **M0.20 Terminal Principal.**
   - Test: `decide` and `ask` print the gate, options, evidence and a paste-ready `ship signal <d> <id> '{"status":"ok","body":{"answer":"…","by":"person"}}'` line to `--out` (default `/dev/tty`), and return `accepted`. `notify` prints and returns `ok`. `cancel` prints "withdrawn".
   - Impl: `adapters/principal-terminal.ts`.
   - Done when green.
