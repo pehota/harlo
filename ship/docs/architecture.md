@@ -1,7 +1,8 @@
 # ship — architecture
 
-Status: draft, from the design grilling of 2026-09-25. Terms are defined in
-[`../CONTEXT.md`](../CONTEXT.md).
+Status: draft, from the design grilling of 2026-09-25. Amended 2026-09-28 from
+implementation planning (A1–A5, `status`, configuration layers; see
+[`plan.md`](plan.md) §8.1). Terms are defined in [`../CONTEXT.md`](../CONTEXT.md).
 
 ship carries one WorkItem from a tracker to a verified production release.
 A deterministic core drives a fixed lifecycle; everything that varies between
@@ -35,7 +36,7 @@ flowchart LR
   prod["Production<br/>(app, email, side effects)"]
   st["State storage<br/>(files, DB, remote)"]
 
-  trig -- "start / next / signal / stop" --> ship
+  trig -- "start / next / signal / stop / changed / status" --> ship
   ship <-- "ask · decide · notify" --> pr
   ship --> tr
   ship --> ag
@@ -49,7 +50,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph IN["Input"]
-    T["Trigger port<br/>start · next · signal · stop"]
+    T["Trigger port<br/>start · next · signal · stop<br/>changed · status"]
   end
 
   subgraph CORE["Core (deterministic, one Delivery)"]
@@ -68,9 +69,9 @@ flowchart TB
   end
 
   subgraph SVC["Service ports — support"]
-    TR["Tracker<br/>read · update · comment"]
+    TR["Tracker<br/>read · next · update · comment"]
     PR["Principal<br/>ask · decide · notify"]
-    S["State<br/>load · save · journal"]
+    S["State<br/>load · save · list · journal"]
     W["Workspace<br/>setup · teardown"]
   end
 
@@ -111,7 +112,12 @@ kinds:
 |---|---|
 | `ok{…}` | advance to the next step or gate |
 | `failed{info}` | re-issue up to the step's retry cap (config, immediate, no delay), then `Blocked` |
-| `question{prompt}` | route to the Principal; send the answer back to the same step as a new command |
+| `question{prompt, about, options?}` | route to the Principal at the Minimum Principal for `about`; send the answer back to the same step as a new command |
+
+A `question` carries `about`, an adapter-defined category (e.g. `clarify`,
+`login`, `conflict`) that config maps to a Minimum Principal; an unknown `about`
+gets `person`. It may carry `options`, the allowed answers. Only step ports
+raise questions.
 
 `failed` means the step **could not run and changed nothing** (e.g. the app
 under test did not start). That is the adapter's contract; a step that had a side
@@ -125,7 +131,7 @@ an answer, not a failure.
 |---|---|
 | `ok{verdict: pass}` | → Land gate |
 | `ok{verdict: fix, findings}` | → Implement with the findings, up to N rounds (config, default 2) |
-| `ok{verdict: decide, findings}` | → Decision gate |
+| `ok{verdict: decide, about, findings}` | → Decision gate; `about` is `scope` or `advisory` and picks the Minimum Principal |
 | N fix rounds used | → Decision gate: keep going, accept, or stop |
 | `failed{info}` | re-issue up to the retry cap, then Blocked |
 
@@ -147,6 +153,14 @@ Rules:
   `workItem_changed` sending it back to Accept), the core issues `cancel{id}`;
   the environment carries it out.
 - One signal is applied per Delivery at a time.
+- **Save before execute.** The Runner saves the state that awaits a command
+  before it sends the command. After each send it journals `sent{id}` (and
+  `accepted{id}` when the adapter answered `accepted`). A command lost to a
+  crash between save and send has no `sent` entry; the environment detects
+  that from the journal, so the core stays clock-free.
+- An `accepted` answer only means "no Result yet"; the Runner still sends the
+  remaining commands. An adapter crash is journaled, the remaining commands are
+  still sent, and no signal is applied.
 - The core never checks the outside world; the environment guarantees a signal arrives
   or someone sends `stop`.
 
@@ -172,6 +186,7 @@ stateDiagram-v2
   LandGate --> Define: reject, re-scope
   Integrate --> Deploy: landed
   Integrate --> Implement: fix (red CI) / rework (conflict)
+  Integrate --> DecisionGate: fix, N rounds used
   Deploy --> Verify: live
   Verify --> Close: pass
   Deploy --> FailureGate: not live
@@ -181,6 +196,7 @@ stateDiagram-v2
   Close --> Teardown
   Teardown --> Closed
   Closed --> [*]
+  Blocked
   note left of Blocked
     from any step or gate: failed past cap;
     retry → that step; stop → Abandoned
@@ -214,7 +230,8 @@ stateDiagram-v2
 - **Workspace:** `setup` runs first; `teardown` runs after Close. On Abandoned
   the workspace is kept for inspection.
 - An Integrate conflict comes back as a `question` to the Principal.
-- **The WorkItem changed** (`workItem_changed` signal, detected by the environment):
+- **The WorkItem changed** (`workItem_changed` signal, detected by the environment,
+  which calls `changed <delivery>`; the Runner re-reads the WorkItem from the Tracker):
   before the Land gate → back to the Accept gate showing the change; at Land or
   later → journal it and notify the Principal, flow unchanged.
 - **Rollback is not a core concern.** The environment (or the Principal) rolls back and
@@ -245,8 +262,8 @@ stateDiagram-v2
 | Decision gate | "keep going" | fix-round counter resets |
 | Closed / Abandoned | any signal | ignored, journaled |
 
-**`next`** asks the Tracker for the next ready WorkItem and then follows the
-same rule as `start`.
+**`next`** asks the Tracker for the next ready WorkItem (`tracker.next`) and then
+follows the same rule as `start`.
 
 **Starting a Delivery.** `start <workItem>` is handled before any Delivery
 exists: it is rejected (journaled, no commands) if the WorkItem already has a
@@ -262,12 +279,15 @@ attempt is the number of that WorkItem's earlier Deliveries in State plus one.
 | Land | integrate onto the main line (may deploy) | person |
 | Failure | release check or deploy failed: fix forward, or accept | person |
 
-**Questions from steps** are not gates: a step raises `question`, the core routes
-it to the Principal with its context (P9) and sends the answer back to the step.
-Minimum Principal: model for clarification, person for login or conflict.
+**Questions from steps** are not gates: a step raises `question{prompt, about, options?}`,
+the core routes it to the Principal with its context (P9) and sends the answer
+back to the step. The Minimum Principal comes from config per `about`, e.g.
+model for `clarify`, person for `login` or `conflict`; an unknown `about` gets
+person.
 
-Minimum Principal per gate is configurable; the long-term aim is model
-Principals for all gates.
+Minimum Principal per gate (and per decision kind: `scope`, `advisory`) is
+configurable; the long-term aim is model Principals for all gates. A gate's
+options are core constants, because the core branches on them.
 
 ## Waiting and waking
 
@@ -275,37 +295,53 @@ Principals for all gates.
 sequenceDiagram
   participant Core
   participant Run as Runner
+  participant St as State adapter
   participant Pr as Principal adapter
   participant Env as Environment (bot, webhook, CI)
-  participant In as Input adapter
 
-  Core->>Run: command{id: land-1, decide(gate, payload)}
-  Run->>Pr: decide(gate, payload)
+  Core-->>Run: new state (awaiting land-1) + command{id: land-1, decide}
+  Run->>St: save (waiting on land-1)
+  Run->>Pr: decide(gate, options, evidence)
   Pr-->>Run: accepted
-  Run->>Run: save (waiting on land-1), exit
-  Note over Env: hours later, reply arrives
-  Env->>In: reply
-  In->>Run: signal(delivery, land-1, approved)
-  Run->>Core: load, apply signal
+  Run->>St: journal sent{land-1}, accepted{land-1}
+  Run->>Run: exit
+  Note over Env: hours later, the reply arrives
+  Env->>Run: ship signal (delivery, land-1, approve)
+  Run->>St: load
+  Run->>Core: apply signal
   Core-->>Run: new state + next commands
-  Run->>Run: save, execute commands
+  Run->>St: save, then execute the next commands
 ```
 
 The same shape covers every wait: a Principal's answer, a finished agent step,
 a CI run, a merged pull request, a manual homelab deploy confirmed by reply.
 
+If the Runner dies after the save but before the send, `land-1` is awaited but
+has no `sent` entry. The environment's stall check flags it, and a person sends
+the Result by hand or sends `stop`.
+
 ## State
 
 The State port stores a **snapshot** (current state of the Delivery — the source
 of truth) and an **append-only journal** (every step result and every decision
-with the kind of Principal who made it — audit only, never replayed).
+with the kind of Principal who made it, plus the Runner's `sent`, `accepted` and
+`adapter_error` entries — audit only, never replayed). Ops: `load`, `save`
+(compare-and-swap on version), `list{key?}` (a WorkItem's Deliveries, or all),
+`journal`.
+
+**Status.** `status [<delivery>]` is read-only: it lists the non-terminal
+Deliveries (or one) as `{deliveries: [{delivery, at, awaiting}]}`, where `at`
+is the Delivery's position. It never calls the core.
 
 ## Configuration
 
 | Layer | Holds |
 |---|---|
-| Project (in the repo) | adapter per port, gates, minimum Principal per gate, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N |
-| Machine (outside the repo) | input adapters (which listeners run: bot, webhook, cron), Principal channel, secrets, capability profile per step port |
+| Project (in the repo) | adapter per port, minimum Principal per gate and per decision kind (incl. question `about`) and for Blocked, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N |
+| Machine (outside the repo) | Principal channel, State adapter, secrets, capability profile per port |
+
+Gate options are core constants, not config. Listeners (bot, webhook, cron)
+are not configured in ship: the environment runs them (P6).
 
 ## Checks
 
@@ -328,12 +364,12 @@ the environment owns delivery, time and rollback (0004), snapshot + journal (000
 | Architecture | ports and adapters; executable adapters with JSON contracts |
 | Stack | Bun + TypeScript + ajv |
 | Parallelism | multiple core invocations, each in its own workspace (e.g. a git worktree) provided by the Workspace port |
-| Retries | the core re-issues a `failed` command up to a per-step cap, immediately; delays and backoff are the environment's |
-| Input | `start <workItem>`, `next`, `signal <delivery> <id> <result>`, `stop <delivery> <outcome> <reason>` |
+| Retries | the core re-issues a `failed` command up to a per-step or per-gate cap, immediately; delays and backoff are the environment's |
+| Input | `start <workItem>`, `next`, `signal <delivery> <id> <result>`, `stop <delivery> <outcome> <reason>`, `changed <delivery>`; read-only `status [<delivery>]` |
 | State | snapshot + journal |
 | Identity | Tracker adapter returns a stable, slug-safe WorkItem key; Delivery = `<key>-<attempt>` (e.g. `PROJ-123-2`); command id = `<delivery>/<step>-<n>` (e.g. `PROJ-123-2/land-1`) |
 | Location | `ship/` bundle in harlo |
 
 ## Open
 
-- Nothing open at architecture level. Next: ADRs, then implementation planning.
+- Nothing open at architecture level. Implementation plan: [`plan.md`](plan.md).

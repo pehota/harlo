@@ -18,6 +18,11 @@ One run of a WorkItem through ship's states, from start to closed or abandoned.
 A WorkItem can have several Deliveries.
 _Avoid_: run, job, pipeline
 
+**Position**:
+Where a Delivery is now: one of its steps or gates, Blocked, Closed or
+Abandoned.
+_Avoid_: phase, stage, status
+
 **Step**:
 One fixed part of a Delivery: Setup, Define, Implement, Check, Integrate,
 Deploy, Verify, Close, Teardown.
@@ -100,7 +105,8 @@ limited number before the Principal decides.
 _Avoid_: iteration, loop, retry
 
 **Capability profile**:
-The credentials and tools given to the worker of one step.
+The credentials and tools given to the adapter serving one port: a step's
+worker, or a service such as the Tracker or the Principal channel.
 _Avoid_: permissions, environment
 
 ### Flow
