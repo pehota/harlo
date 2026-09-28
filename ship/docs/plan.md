@@ -657,7 +657,7 @@ Rules for every step:
     - two parallel `start`s giving one Delivery
   - Impl: `src/cli.ts`.
   - Done when green.
-- [ ] **M0.19 Fakes.**
+- [x] **M0.19 Fakes.**
   - Test: the fake adapter replays a fixture script (per port, the nth call returns the nth scripted stdout) and records its stdin.
   - Impl: `adapters/fake.ts` serving tracker, workspace, every step port and principal, driven by `--script`.
   - Done when the fixture replay is green.

@@ -1,4 +1,4 @@
-// M0.18: the CLI as a subprocess (plan §5.1), with the real file State adapter and fixture adapters.
+// M0.18: the CLI as a subprocess (plan §5.1), with the real file State adapter and the scripted fake adapter.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import type { Snapshot } from "./core/types";
 const ROOT = join(import.meta.dir, "..");
 const BIN = join(ROOT, "bin", "ship");
 const STATE = join(ROOT, "adapters", "state-files.ts");
-const FIXTURE = join(import.meta.dir, "fixtures", "adapter.fixture.ts");
+const FAKE = join(ROOT, "adapters", "fake.ts");
 const CONFLICTING_STATE = join(import.meta.dir, "fixtures", "conflicting-state.sh");
 const TIMEOUT = 30_000;
 
@@ -18,21 +18,27 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type Options = { tracker?: string[]; workspace?: string[]; state?: string[] };
+type Options = { replies?: Record<string, unknown>; state?: string[] };
 type Ran = { exit: number; out: Record<string, unknown> | null; stderr: string };
 
-/** A project dir with both config layers; every port is the fixture adapter except State (the file adapter). */
+const ok = (body: unknown) => JSON.stringify({ status: "ok", body });
+const workItem = (key: string, title = "Greet by name") => ({ status: "ok", body: { workItem: { key, title, body: "Say hello." } } });
+/** Unless a test scripts otherwise: tracker.read gives WorkItem `k`, tracker.next no key, everything else accepts. */
+const DEFAULT_REPLIES = { "tracker.read": workItem("k"), "tracker.next": { status: "ok", body: { key: null } } };
+
+/** A project dir with both config layers; every port is the fake adapter except State (the file adapter). */
 const project = () => {
   const dir = mkdtempSync(join(tmpdir(), "ship-cli-"));
   dirs.push(dir);
   const stateDir = join(dir, "state");
   const machinePath = join(dir, "machine.json");
+  const script = join(dir, "script.json");
 
   const configure = (options: Options = {}): void => {
-    const fixture = (...flags: string[]) => ["bun", FIXTURE, ...flags];
+    writeFileSync(script, JSON.stringify({ replies: { ...DEFAULT_REPLIES, ...options.replies } }));
+    const fake = ["bun", FAKE, "--script", script];
     const adapters = {
-      tracker: fixture(...(options.tracker ?? [])), workspace: fixture(...(options.workspace ?? [])),
-      define: fixture(), implement: fixture(), check: fixture(), integrate: fixture(), deploy: fixture(), verify: fixture(),
+      tracker: fake, workspace: fake, define: fake, implement: fake, check: fake, integrate: fake, deploy: fake, verify: fake,
     };
     const policy = {
       tracker: {
@@ -44,7 +50,7 @@ const project = () => {
     };
     writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "demo", adapters, policy }));
     const state = options.state ?? ["bun", STATE, "--dir", stateDir];
-    writeFileSync(machinePath, JSON.stringify({ principal: fixture(), state }));
+    writeFileSync(machinePath, JSON.stringify({ principal: fake, state }));
   };
 
   const ship = async (...args: string[]): Promise<Ran> => {
@@ -71,7 +77,7 @@ const project = () => {
   return { dir, configure, ship, versions, journal, snapshot, deliveries };
 };
 
-const ok = (body: unknown) => JSON.stringify({ status: "ok", body });
+const FAILED_READ = { "tracker.read": { status: "failed", info: "tracker unreachable" } };
 
 describe("ship start", () => {
   test("creates the Delivery and runs Setup", async () => {
@@ -89,7 +95,7 @@ describe("ship start", () => {
 
   test("a failed tracker.read gives exit 4 without calling the core", async () => {
     const p = project();
-    p.configure({ tracker: ["--fail-read"] });
+    p.configure({ replies: FAILED_READ });
     const ran = await p.ship("start", "k");
     expect(ran.exit).toBe(4);
     expect(p.deliveries()).toEqual([]);
@@ -97,7 +103,7 @@ describe("ship start", () => {
 
   test("a crashed awaited adapter gives exit 5, journaled, with the output line", async () => {
     const p = project();
-    p.configure({ workspace: ["--crash"] });
+    p.configure({ replies: { "workspace.setup": { exit: 1, stderr: "workspace.setup crashed" } } });
     const ran = await p.ship("start", "k");
     expect(ran).toMatchObject({ exit: 5, out: { delivery: "k-1", awaiting: "k-1/setup-1" } });
     expect(p.journal("k-1").find((e) => e.signal.kind === "adapter_error")?.info).toContain("workspace.setup crashed");
@@ -129,7 +135,7 @@ describe("ship next", () => {
 
   test("a key that already has a non-terminal Delivery is rejected (exit 0)", async () => {
     const p = project();
-    p.configure({ tracker: ["--next", "k"] });
+    p.configure({ replies: { "tracker.next": { status: "ok", body: { key: "k" } } } });
     expect((await p.ship("next")).out).toMatchObject({ delivery: "k-1" });
     const ran = await p.ship("next");
     expect(ran).toMatchObject({ exit: 0, out: { delivery: "k-1", issued: [], rejected: true } });
@@ -200,8 +206,8 @@ describe("ship stop", () => {
 describe("ship changed", () => {
   test("reads the WorkItem and applies workItem_changed", async () => {
     const p = project();
+    p.configure({ replies: { "tracker.read": [workItem("k"), workItem("k", "Greet by full name")] } });
     await p.ship("start", "k");
-    p.configure({ tracker: ["--title", "Greet by full name"] });
     const ran = await p.ship("changed", "k-1");
     expect(ran).toMatchObject({ exit: 0, out: { delivery: "k-1" } });
     expect(p.snapshot("k-1").workItem.title).toBe("Greet by full name");
@@ -210,7 +216,7 @@ describe("ship changed", () => {
   test("a failed tracker.read gives exit 4", async () => {
     const p = project();
     await p.ship("start", "k");
-    p.configure({ tracker: ["--fail-read"] });
+    p.configure({ replies: FAILED_READ });
     expect((await p.ship("changed", "k-1")).exit).toBe(4);
   }, TIMEOUT);
 });
@@ -218,6 +224,7 @@ describe("ship changed", () => {
 describe("ship status", () => {
   test("lists only non-terminal Deliveries, or the one asked for; writes no State version", async () => {
     const p = project();
+    p.configure({ replies: { "tracker.read": [workItem("k"), workItem("j")] } });
     await p.ship("start", "k");
     await p.ship("start", "j");
     await p.ship("stop", "j-1", "abandoned", "not needed");
