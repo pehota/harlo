@@ -103,6 +103,15 @@ export const decide = (
 ): Awaiting =>
   awaited(`${gate}-${n}`, "principal", "decide", { on: gate, options, min, evidence }, gate, "decide", options);
 
+/** An awaited `principal.ask` raised by `node`'s question (payload options only when the ask has them). */
+export const ask = (
+  n: number, node: Node, about: string, prompt: string, min: PrincipalKind, options?: string[],
+  evidence: GateEvidence = gateEvidence(),
+): Awaiting => ({
+  ...awaited(`ask-${n}`, "principal", "ask", { prompt, min, ...(options ? { options } : {}), evidence }, node, "ask", options),
+  about,
+});
+
 /**
  * A snapshot at `at` awaiting `awaiting`. Data fields are filled as if every step had run; rows override
  * what they pin. `seq` defaults to just the awaiting id's counter.
@@ -125,3 +134,10 @@ export const ok = (to: Awaiting, body: unknown, evidence?: EvidenceItem[]): Sign
 
 export const answer = (to: Awaiting, value: string, by: PrincipalKind = "person", comment?: string): Signal =>
   ok(to, { answer: value, by, ...(comment === undefined ? {} : { comment }) });
+
+export const question = (
+  to: Awaiting, prompt: string, about: string, options?: string[], evidence?: EvidenceItem[],
+): Signal => ({
+  kind: "result", id: to.id,
+  result: { status: "question", prompt, about, ...(options ? { options } : {}), ...(evidence ? { evidence } : {}) },
+});

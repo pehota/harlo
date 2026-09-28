@@ -1,10 +1,10 @@
 // transition(): apply one signal to a Delivery (plan §4). Dispatch is by position (Snapshot.at).
-import type { Finding, Ok } from "../contracts/common";
+import type { Finding, Question, Result } from "../contracts/common";
 import type {
-  CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
+  AskBody, CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
-import { enterDecision, enterGate } from "./gates";
-import { type Move, abandon, enterClose, enterStep, present, withFire } from "./steps";
+import { enterAsk, enterDecision, enterGate } from "./gates";
+import { type Move, abandon, enterClose, enterStep, present, reissue, withFire } from "./steps";
 import {
   isTerminal, type Awaiting, type Entry, type Note, type Policy, type Position, type Signal, type Snapshot,
   type TransitionOutput,
@@ -12,6 +12,7 @@ import {
 
 type ResultSignal = Extract<Signal, { kind: "result" }>;
 type OnOk = (p: Policy, s: Snapshot, body: unknown) => Move;
+type Applied = Move & { note?: Note }; // a move plus the note its entry carries
 
 const unhandled = (s: Snapshot, what: string): Error => new Error(`no transition at ${s.at} for ${what}`);
 
@@ -106,23 +107,62 @@ const ignore = (s: Snapshot, sig: Signal, note: Note): TransitionOutput => ({
 });
 
 /** Principal answers carry `by` (I6); it is journaled, never checked (ADR 0003, 0005). */
-const byOf = (awaiting: Awaiting, body: unknown): Pick<Entry, "by"> =>
-  awaiting.port === "principal" ? { by: (body as DecideBody).by } : {};
+const byOf = (awaiting: Awaiting, result: Result): Pick<Entry, "by"> =>
+  awaiting.port === "principal" && result.status === "ok" ? { by: (result.body as DecideBody).by } : {};
+
+const ASKING: ReadonlySet<Position> = new Set(["define", "implement", "check", "integrate", "deploy", "verify"]);
+
+/** Only step ports raise questions (the Runner rejects the rest); the question goes to the Principal. */
+const onQuestion = (p: Policy, s: Snapshot, awaiting: Awaiting, q: Question): Move => {
+  if (awaiting.kind !== "run" || !ASKING.has(s.at)) throw unhandled(s, "question");
+  return enterAsk(p, s, awaiting, q);
+};
+
+/** An ask answered: back to its step with the answer (Q3, Q4), or a conflict's rework → Implement (Q5). */
+const onAsk = (p: Policy, s: Snapshot, asked: Awaiting, value: string): Move => {
+  if (asked.node === "integrate" && asked.about === "conflict" && value === "rework") return enterStep(p, s, "implement");
+  const run = present(s, "lastRun");
+  return reissue({ ...s, retries: 0 }, { ...run, payload: { ...(run.payload as object), answer: value } });
+};
+
+/** A step's ok result or a gate's answer, by the position it arrives at. */
+const onPosition = (p: Policy, s: Snapshot, body: unknown): Move => {
+  const handler = onOk[s.at];
+  if (!handler) throw unhandled(s, "ok");
+  return handler(p, s, body);
+};
+
+/** A Principal's answer (decide or ask ok); one outside the allowed options is re-asked (Q6, B5, B7). */
+const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Applied => {
+  const value = (body as AskBody).answer;
+  if (awaiting.options !== undefined && !awaiting.options.includes(value)) {
+    return { ...reissue(s, awaiting), note: "invalid_answer" };
+  }
+  if (awaiting.kind === "ask") return onAsk(p, s, awaiting, value);
+  return onPosition(p, s, body);
+};
+
+/** The awaited command's Result, applied to the state that no longer awaits it. */
+const onAwaited = (p: Policy, s: Snapshot, awaiting: Awaiting, result: Result): Applied => {
+  switch (result.status) {
+    case "question": return onQuestion(p, s, awaiting, result);
+    case "failed": throw unhandled(s, "failed");
+    case "ok": return awaiting.kind === "run" ? onPosition(p, s, result.body) : onAnswer(p, s, awaiting, result.body);
+  }
+};
 
 const onResult = (p: Policy, s: Snapshot, sig: ResultSignal): TransitionOutput => {
   const awaiting = s.awaiting;
   if (awaiting === null || sig.id !== awaiting.id) return ignore(s, sig, "ignored_stale"); // R1
-  if (sig.result.status !== "ok") throw unhandled(s, sig.result.status);
 
-  const result: Ok<unknown> = sig.result;
-  const handler = onOk[s.at];
-  if (!handler) throw unhandled(s, "ok");
-  const consumed: Snapshot = { ...s, awaiting: null, evidence: [...s.evidence, ...(result.evidence ?? [])] };
-  const move = handler(p, consumed, result.body);
+  const result = sig.result;
+  const passed = result.status === "failed" ? [] : result.evidence ?? []; // appended, never read (P9)
+  const consumed: Snapshot = { ...s, awaiting: null, evidence: [...s.evidence, ...passed] };
+  const { note, ...move } = onAwaited(p, consumed, awaiting, result);
 
   const entry: Entry = {
     delivery: s.delivery, signal: sig, from: s.at, to: move.state.at,
-    issued: move.commands.map((c) => c.id), ...byOf(awaiting, result.body),
+    issued: move.commands.map((c) => c.id), ...byOf(awaiting, result), ...(note === undefined ? {} : { note }),
   };
   return { ...move, entry };
 };

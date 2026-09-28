@@ -606,7 +606,7 @@ Rules for every step:
 - [x] **M0.9 Failure gate.**
   - Test: rows X1–X4.
   - Done when green.
-- [ ] **M0.10 Questions.**
+- [x] **M0.10 Questions.**
   - Test: rows Q1–Q6.
   - Done when green.
 - [ ] **M0.11 Retries and Blocked.**

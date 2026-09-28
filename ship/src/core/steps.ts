@@ -20,6 +20,16 @@ export const awaitOn = (s: Snapshot, name: string, spec: Omit<Awaiting, "id" | "
   return { state: { ...s, seq, awaiting }, commands: [toCommand(awaiting)] };
 };
 
+/**
+ * Re-issue an awaited command under a new id of its name (retry, re-ask, answer back to its step).
+ * A re-issued step command is the new lastRun.
+ */
+export const reissue = (s: Snapshot, a: Awaiting): Move => {
+  const { id: _stale, await: _awaited, ...spec } = a;
+  const move = awaitOn(s, a.kind === "ask" ? "ask" : a.node, spec);
+  return a.kind === "run" ? { ...move, state: { ...move.state, lastRun: move.state.awaiting } } : move;
+};
+
 /** Append a fire command (not awaited, id named after its op). */
 export const withFire = (move: Move, port: Port, op: string, payload: unknown): Move => {
   const { id, seq } = allocate(move.state, op);
@@ -27,7 +37,7 @@ export const withFire = (move: Move, port: Port, op: string, payload: unknown): 
 };
 
 /** A snapshot field the position guarantees; null here is a core bug, not an input case. */
-export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome">(
+export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome" | "lastRun">(
   s: Snapshot, field: F,
 ): NonNullable<Snapshot[F]> => {
   const value = s[field];

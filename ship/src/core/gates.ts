@@ -1,7 +1,8 @@
-// Gates (plan §3.2, §4 "decide G"): option constants, the decide command and the evidence bundle (P9).
-import type { Decide, DecidePoint, GateEvidence, PrincipalKind } from "../contracts/common";
+// Gates (plan §3.2, §4 "decide G"), step questions routed to the Principal (§4.5), and the evidence bundle (P9).
+import type { Decide, DecidePoint, GateEvidence, PrincipalKind, Question } from "../contracts/common";
+import type { AskPayload } from "../contracts/ports";
 import { type Move, awaitOn } from "./steps";
-import type { Gate, Policy, Snapshot } from "./types";
+import type { Awaiting, Gate, Policy, Snapshot } from "./types";
 
 /** Core constants, not config: the core branches on them. */
 export const GATE_OPTIONS = {
@@ -11,6 +12,9 @@ export const GATE_OPTIONS = {
   failure: ["fix_forward", "accept"],
   blocked: ["retry", "stop"],
 } as const satisfies Record<DecidePoint, readonly string[]>;
+
+/** An Integrate conflict's answers: the core owns them, whatever the adapter offered (Q2). */
+export const CONFLICT_OPTIONS = ["resolved", "rework"] as const;
 
 /** What the Principal sees: the core passes it through and never reads `evidence` (P9). */
 export const evidenceBundle = (s: Snapshot): GateEvidence => ({
@@ -32,3 +36,20 @@ export const enterGate = (p: Policy, s: Snapshot, gate: Exclude<Gate, "decision"
 /** Enter the Decision gate; the kind of decision picks the Minimum Principal (N rounds used → scope). */
 export const enterDecision = (p: Policy, s: Snapshot, about: keyof Policy["minimum"]["decision"]): Move =>
   awaitDecide({ ...s, at: "decision", retries: 0 }, "decision", p.minimum.decision[about]);
+
+/** Minimum Principal for a question's `about`; an unknown category gets the strictest, person. */
+const questionMinimum = (p: Policy, about: string): PrincipalKind =>
+  (Object.hasOwn(p.minimum.question, about) ? p.minimum.question[about] : undefined) ?? "person";
+
+/**
+ * Route a step's question to the Principal (Q1, Q2): await `principal.ask` on the asking step's node.
+ * The step's command stays lastRun so the answer can go back to it (Q3).
+ */
+export const enterAsk = (p: Policy, s: Snapshot, run: Awaiting, q: Question): Move => {
+  const asked: Snapshot = { ...s, retries: 0, lastRun: run };
+  const conflict = run.node === "integrate" && q.about === "conflict";
+  const options = conflict ? [...CONFLICT_OPTIONS] : q.options;
+  const choice = options === undefined ? {} : { options };
+  const payload: AskPayload = { prompt: q.prompt, min: questionMinimum(p, q.about), ...choice, evidence: evidenceBundle(asked) };
+  return awaitOn(asked, "ask", { port: "principal", op: "ask", payload, node: run.node, kind: "ask", about: q.about, ...choice });
+};
