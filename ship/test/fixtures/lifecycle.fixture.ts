@@ -1,0 +1,117 @@
+// Test data for test/e2e/lifecycle.test.ts: a project whose every port is the scripted fake adapter except
+// State (the real file adapter), plus readers that go through the adapters, never around them.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { RunnerStdin } from "../../src/contracts/common";
+import type { TimedEntry } from "../../src/contracts/snapshot";
+import type { Snapshot } from "../../src/core/types";
+
+const ROOT = join(import.meta.dir, "..", "..");
+const BIN = join(ROOT, "bin", "ship");
+const FAKE = join(ROOT, "adapters", "fake.ts");
+const STATE = join(ROOT, "adapters", "state-files.ts");
+
+export const D = "k-1"; // every scenario runs WorkItem `k`, so its first Delivery
+
+// ── Scripted stdouts ──
+export const ok = (body: unknown = {}) => ({ status: "ok", body });
+export const workItem = (title = "Greet by name") => ok({ workItem: { key: "k", title, body: "Say hello." } });
+export const criteria = ["greets Ada by name"];
+export const runbook = ["run greet Ada, see Hello, Ada"];
+export const defined = ok({ criteria, runbook });
+export const implemented = (changeset: string) => ok({ changeset });
+export const verdict = (v: string, findings?: { text: string }[]) => ok(findings ? { verdict: v, findings } : { verdict: v });
+export const question = (prompt: string, about: string) => ({ status: "question", prompt, about });
+export const failed = (info: string) => ({ status: "failed", info });
+
+/** A Principal's answer as pasted into `ship signal`. */
+export const answer = (text: string, comment?: string) =>
+  JSON.stringify(ok({ answer: text, by: "person", ...(comment === undefined ? {} : { comment }) }));
+
+const POLICY = {
+  tracker: {
+    outcomes: {
+      delivered: { status: "done" }, accepted_with_failure: { status: "done-with-failure" },
+      rolled_back: { status: "reopened" }, abandoned: { comment: true },
+    },
+  },
+};
+
+type Ran = { exit: number; out: Record<string, unknown> | null; stderr: string };
+/** What the fake recorded: one Stdin per call, in call order. */
+export type Logged = RunnerStdin;
+
+/**
+ * A temp project. `replies` is the fake's script ("<port>.<op>" → stdout or list of stdouts); the tracker
+ * reads WorkItem `k` and teardown and Close's tracker.update succeed unless the scenario scripts otherwise.
+ * Unscripted awaited calls (every Principal decide/ask) print `accepted`: the test answers with `ship signal`.
+ */
+export const lifecycle = (replies: Record<string, unknown>, policy: Record<string, unknown> = {}) => {
+  const dir = mkdtempSync(join(tmpdir(), "ship-e2e-"));
+  const stateDir = join(dir, "state");
+  const script = join(dir, "script.json");
+  const machinePath = join(dir, "machine.json");
+  const fake = ["bun", FAKE, "--script", script];
+
+  const scriptReplies = { "tracker.read": workItem(), "tracker.update": ok(), "workspace.teardown": ok(), ...replies };
+  writeFileSync(script, JSON.stringify({ replies: scriptReplies }));
+  const adapters = Object.fromEntries(
+    ["tracker", "workspace", "define", "implement", "check", "integrate", "deploy", "verify"].map((port) => [port, fake]),
+  );
+  writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "e2e", adapters, policy: { ...POLICY, ...policy } }));
+  writeFileSync(machinePath, JSON.stringify({ principal: fake, state: ["bun", STATE, "--dir", stateDir] }));
+
+  const run = async (argv: string[], cwd: string, env: Record<string, string>, stdin?: string) => {
+    const proc = Bun.spawn(argv, { cwd, env, stdout: "pipe", stderr: "pipe", stdin: stdin === undefined ? "ignore" : new Blob([stdin]) });
+    const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, exit };
+  };
+  const env = { PATH: process.env.PATH ?? "", HOME: dir };
+
+  const ship = async (...args: string[]): Promise<Ran> => {
+    const { stdout, stderr, exit } = await run(["bun", BIN, ...args], dir, { ...env, SHIP_MACHINE_CONFIG: machinePath });
+    const line = stdout.trim();
+    return { exit, out: line ? (JSON.parse(line) as Record<string, unknown>) : null, stderr };
+  };
+
+  /** One Runner-only call on the file State adapter, exactly as the Runner makes it. */
+  const state = async <Body>(op: string, payload: unknown): Promise<Body> => {
+    const stdin: RunnerStdin = { id: null, delivery: D, port: "state", op, workItem: null, workspace: null, payload, tools: [] };
+    const { stdout } = await run(["bun", STATE, "--dir", stateDir, "state", op], dir, env, JSON.stringify(stdin));
+    const reply = JSON.parse(stdout) as { status: string; body: Body };
+    if (reply.status !== "ok") throw new Error(`state ${op}: ${stdout}`);
+    return reply.body;
+  };
+  const journal = async (): Promise<TimedEntry[]> => (await state<{ entries: TimedEntry[] }>("journal", { delivery: D })).entries;
+  const snapshot = async (): Promise<Snapshot> => (await state<{ state: Snapshot }>("load", { delivery: D })).state;
+
+  const log = (): Logged[] =>
+    readFileSync(`${script}.stdin.jsonl`, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Logged);
+
+  const cleanup = () => rmSync(dir, { recursive: true, force: true });
+  return { ship, journal, snapshot, log, cleanup };
+};
+
+const RUNNER_KINDS = new Set(["sent", "accepted", "adapter_error"]);
+const local = (id: string | null): string => (id === null ? "-" : id.slice(`${D}/`.length));
+
+/** The core's journal entries, one line each: `<signal> <id>: <from>→<to> [note]`. */
+export const coreSequence = (entries: TimedEntry[]): string[] =>
+  entries.filter((e) => !RUNNER_KINDS.has(e.signal.kind)).map((e) => {
+    const s = e.signal;
+    const what = s.kind === "result" ? `result ${local(s.id)}` : s.kind === "workItem_changed" ? "changed" : s.kind;
+    return `${what}: ${e.from ?? "∅"}→${e.to}${e.note ? ` [${e.note}]` : ""}`;
+  });
+
+/** Every id the core issued, and every id the Runner journaled as `sent`, in order. */
+export const issuedAndSent = (entries: TimedEntry[]): { issued: string[]; sent: string[] } => ({
+  issued: entries.flatMap((e) => e.issued),
+  sent: entries.flatMap((e) => (e.signal.kind === "sent" ? [e.signal.id] : [])),
+});
+
+/** The fake's calls, one line each: `<port>.<op> <id>`. */
+export const calls = (logged: Logged[]): string[] => logged.map((s) => `${s.port}.${s.op} ${local(s.id)}`);
+
+/** The payload the fake received for command `<D>/<suffix>`. */
+export const payloadOf = (logged: Logged[], suffix: string): unknown => logged.find((s) => s.id === `${D}/${suffix}`)?.payload;

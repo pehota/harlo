@@ -665,7 +665,7 @@ Rules for every step:
   - Test: `decide` and `ask` print the gate, options, evidence and a paste-ready `ship signal <d> <id> '{"status":"ok","body":{"answer":"…","by":"person"}}'` line to `--out` (default `/dev/tty`), and return `accepted`. `notify` prints and returns `ok`. `cancel` prints "withdrawn".
   - Impl: `adapters/principal-terminal.ts`.
   - Done when green.
-- [ ] **M0.21 End-to-end on fakes.**
+- [x] **M0.21 End-to-end on fakes.**
   - Test: `test/e2e/lifecycle.test.ts` drives `bin/ship` with a fake config through these scenarios:
     - happy path to Closed
     - fix round
