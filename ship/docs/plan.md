@@ -573,7 +573,7 @@ Rules for every step:
 
 ### M0 — walking skeleton (full lifecycle on fakes)
 
-- [ ] **M0.1 Scaffold.**
+- [x] **M0.1 Scaffold.**
   - Test: `smoke.test.ts` imports `src/core/types.ts` and asserts a trivial constant.
   - Impl: `package.json` (ajv ^8.20, typescript), strict `tsconfig.json`, scripts `test`, `typecheck` and `check`, and `bin/ship`.
   - Done when `bun run check` is green.

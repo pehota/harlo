@@ -1,0 +1,19 @@
+{
+  "name": "ship",
+  "type": "module",
+  "private": true,
+  "bin": { "ship": "bin/ship" },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "ajv": "^8.20"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "fast-check": "^4.10.2",
+    "typescript": "^7.0.2"
+  }
+}
