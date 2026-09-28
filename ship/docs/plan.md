@@ -577,7 +577,7 @@ Rules for every step:
   - Test: `smoke.test.ts` imports `src/core/types.ts` and asserts a trivial constant.
   - Impl: `package.json` (ajv ^8.20, typescript), strict `tsconfig.json`, scripts `test`, `typecheck` and `check`, and `bin/ship`.
   - Done when `bun run check` is green.
-- [ ] **M0.2 Ids.**
+- [x] **M0.2 Ids.**
   - Test: table for `deliveryId("PROJ-123", 2) = "PROJ-123-2"`, `nextId(seq, "land")` giving `land-1` then `land-2`, key regex accept/reject, and `parseCommandId`.
   - Impl: `core/ids.ts`.
   - Done when the table is green.
