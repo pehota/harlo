@@ -1,10 +1,10 @@
-// Port → op → {payload, result, stdout} schemas (plan §3.2). Each payload and `ok` body is written once as
+// Port → op → {stdin, payload, result, stdout} schemas (plan §3.2). Each payload and `ok` body is written once as
 // a TS type and once as a JSONSchemaType of it; `entry` composes the Result/Stdout variants per kind of call.
 import type { JSONSchemaType, SchemaObject } from "ajv";
 import type { CommandId, DeliveryId, Finding, GateEvidence, Port, PrincipalKind, WorkItem } from "./common";
 import {
   PORTS, acceptedSchema, decideSchema, failedSchema, findingsSchema, gateEvidenceSchema, okSchema,
-  principalKindSchema, questionSchema, stringsSchema, workItemSchema, nullSchema,
+  principalKindSchema, questionSchema, runnerStdinSchema, stdinSchema, stringsSchema, workItemSchema, nullSchema,
 } from "./common";
 import type { Snapshot } from "../core/types";
 import { snapshotSchema, timedEntrySchema, type TimedEntry } from "./snapshot";
@@ -56,17 +56,18 @@ export type StateJournalBody = { entries: TimedEntry[] };
 /**
  * step: ok | failed | question, and the adapter may print `accepted`.
  * service: no `question` (only step ports ask back).
- * runner: the Runner waits on it, so no `question` and never `accepted`.
+ * runner: the Runner waits on it, so no `question` and never `accepted`; its Stdin may lack a Delivery.
  */
 type Kind = "step" | "service" | "runner";
-export type PortOpSchemas = { payload: SchemaObject; result: SchemaObject; stdout: SchemaObject };
+export type PortOpSchemas = { stdin: SchemaObject; payload: SchemaObject; result: SchemaObject; stdout: SchemaObject };
 
 const entry = <P, B>(kind: Kind, payload: JSONSchemaType<P>, body: JSONSchemaType<B>): PortOpSchemas => {
   const resultVariants = kind === "step"
     ? [okSchema(body), failedSchema, questionSchema]
     : [okSchema(body), failedSchema];
   const stdoutVariants = kind === "runner" ? resultVariants : [...resultVariants, acceptedSchema];
-  return { payload, result: { oneOf: resultVariants }, stdout: { oneOf: stdoutVariants } };
+  const stdin = kind === "runner" ? runnerStdinSchema : stdinSchema;
+  return { stdin, payload, result: { oneOf: resultVariants }, stdout: { oneOf: stdoutVariants } };
 };
 
 // ── Payload and body schemas ──

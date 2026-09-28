@@ -30,6 +30,12 @@ export type Stdin = {
   payload: unknown;
   tools: string[]; // capability profile tools; secrets go in env only
 };
+/** Stdin of a Runner-only call (§3.2), which may run before a Delivery exists: no id, Delivery or WorkItem yet. */
+export type RunnerStdin = Omit<Stdin, "id" | "delivery" | "workItem"> & {
+  id: CommandId | null;
+  delivery: DeliveryId | null;
+  workItem: WorkItem | null;
+};
 
 export type DecidePoint = "accept" | "decision" | "land" | "failure" | "blocked"; // blocked is a state, not a Gate
 export type GateEvidence = {
@@ -136,6 +142,16 @@ export const stdinSchema: JSONSchemaType<Stdin> = {
   required: ["id", "delivery", "port", "op", "workItem", "workspace", "tools"],
   additionalProperties: false,
 };
+
+export const runnerStdinSchema: JSONSchemaType<RunnerStdin> = {
+  ...stdinSchema,
+  properties: {
+    ...stdinSchema.properties,
+    id: { anyOf: [{ type: "string" }, nullSchema] },
+    delivery: { anyOf: [{ type: "string" }, nullSchema] },
+    workItem: { anyOf: [workItemSchema, nullSchema] },
+  },
+} as JSONSchemaType<RunnerStdin>; // same fields as stdinSchema; only the three above may be null
 
 // Result variants. `ok` is built per body in ports.ts; the others are fixed.
 export type Ok<Body> = Extract<Result<Body>, { status: "ok" }>;

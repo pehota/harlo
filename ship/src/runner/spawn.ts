@@ -2,8 +2,7 @@
 // port's capability-profile env only. Returns as soon as the process exists, so the caller can journal
 // `sent{id, pid, host, started}` before awaiting `done` (§5.2).
 import { readFileSync } from "node:fs";
-import type { Port, Result, Stdin } from "../contracts/common";
-import { stdinSchema } from "../contracts/common";
+import type { Port, Result, RunnerStdin, Stdin } from "../contracts/common";
 import { schemaFor } from "../contracts/ports";
 import { check } from "../contracts/validate";
 import type { Command, Snapshot } from "../core/types";
@@ -83,11 +82,14 @@ const awaitedReply = (stdoutSchema: object, exitCode: number, stdout: string, st
 const fireReply = (exitCode: number, stderr: string): Reply =>
   exitCode === 0 ? { kind: "fired" } : { kind: "fire_error", info: `exit ${exitCode}: ${stderr}` };
 
-/** Spawn `spec` for `stdin.port`/`stdin.op`. Throws on a Stdin the contracts reject: that is a Runner bug. */
-export const spawnAdapter = (spec: AdapterSpec, stdin: Stdin, awaited: boolean): Spawned => {
+/**
+ * Spawn `spec` for `stdin.port`/`stdin.op`. Only a Runner-only call may leave id, Delivery and WorkItem null.
+ * Throws on a Stdin the contracts reject: that is a Runner bug.
+ */
+export const spawnAdapter = (spec: AdapterSpec, stdin: RunnerStdin, awaited: boolean): Spawned => {
   const contract = schemaFor(stdin.port, stdin.op);
   if (!contract) throw new Error(`runner bug: no contract for ${stdin.port}.${stdin.op}`);
-  const invalid = check(stdinSchema, stdin) ?? check(contract.payload, stdin.payload);
+  const invalid = check(contract.stdin, stdin) ?? check(contract.payload, stdin.payload);
   if (invalid) throw new Error(`runner bug: invalid stdin for ${stdin.port}.${stdin.op}: ${invalid}`);
 
   let proc: Bun.Subprocess<Blob, "pipe", "pipe">;

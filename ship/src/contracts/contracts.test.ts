@@ -31,7 +31,7 @@ describe("every port/op in §3.2 has a schema", () => {
   ];
   test.each(listed)("%s.%s", (port, op) => {
     const entry = must(schemaFor(port, op));
-    expect(Object.keys(entry).sort()).toEqual(["payload", "result", "stdout"]);
+    expect(Object.keys(entry).sort()).toEqual(["payload", "result", "stdin", "stdout"]);
   });
   test.each([
     ["define", "setup"],
@@ -133,6 +133,23 @@ describe("Stdin", () => {
     ["extra field", { ...stdin, secret: "x" }, false],
   ])("%s", (_, data, expected) => {
     expect(valid(stdinSchema, JSON.parse(JSON.stringify(data)))).toBe(expected);
+  });
+});
+
+describe("Stdin per kind of call", () => {
+  // Runner-only calls can run before a Delivery exists (tracker.next, state.list{}, tracker.read at start).
+  const noDelivery = { id: null, delivery: null, workItem: null, workspace: null, payload: {}, tools: [] };
+  const withDelivery = { id: "PROJ-1-1/define-1", delivery: "PROJ-1-1", workItem, workspace: null, payload: {}, tools: [] };
+  test.each([
+    ["runner-only tracker.next without a Delivery", "tracker", "next", noDelivery, true],
+    ["runner-only state.list without a Delivery", "state", "list", noDelivery, true],
+    ["runner-only state.load with a Delivery", "state", "load", withDelivery, true],
+    ["step define.run without a Delivery", "define", "run", noDelivery, false],
+    ["service principal.notify without a Delivery", "principal", "notify", noDelivery, false],
+    ["cancel without a Delivery", "state", "cancel", noDelivery, false],
+    ["step define.run with a Delivery", "define", "run", withDelivery, true],
+  ] as [string, Port, string, object, boolean][])("%s", (_, port, op, fields, expected) => {
+    expect(valid(must(schemaFor(port, op)).stdin, { ...fields, port, op })).toBe(expected);
   });
 });
 
