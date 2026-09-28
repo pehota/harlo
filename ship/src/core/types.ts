@@ -12,6 +12,7 @@ export type Step = (typeof STEPS)[number];
 export type Gate = (typeof GATES)[number];
 export type Node = Step | Gate; // names are disjoint
 export type Position = Node | "blocked" | "closed" | "abandoned"; // where the Delivery is now
+export const isTerminal = (at: Position): boolean => at === "closed" || at === "abandoned";
 export type Outcome = string; // core derives "delivered" | "accepted_with_failure"; others come from stop
 
 export type Command = {

@@ -586,7 +586,7 @@ Rules for every step:
   - Impl: `contracts/common.ts`, `contracts/ports.ts` with a registry lookup `schemaFor(port, op)`.
   - Done when every port/op in §3.2 has a schema and the tests are green.
   - **[verified]** `JSONSchemaType<T>` accepts `oneOf` discriminated unions with `const` and optional (`nullable`) fields under ajv 8.20 and TS 7.0.2.
-- [ ] **M0.4 `start`.**
+- [x] **M0.4 `start`.**
   - Test: rows S1–S6, one at a time.
   - Impl: `core/start.ts`.
   - Done when S1–S6 are green, including their entries.
