@@ -619,7 +619,7 @@ Rules for every step:
   - Test: `invariants.test.ts` runs every row fixture from M0.4–M0.12 and asserts I1–I6. It also scans `src/core/**` with the word-boundary regex `\b(claude|dod|jira|telegram|github|gh|git)\b` and fails on a match. It strips `//` and `/* */` comments before matching.
   - Caveat: the scan is a guard, not a proof. A tool name built from parts (`"gi" + "t"`) passes it, and an English word in a string literal that matches (for example `"git"` in a message) fails it on purpose.
   - Done when green.
-- [ ] **M0.14 File State adapter.**
+- [x] **M0.14 File State adapter.**
   - Test: table for save v1 → load, `EEXIST` conflict, highest-version load, list by key (`PROJ-1` vs `PROJ-12`), list all, journal order across versions, and a corrupt file failing load.
   - Impl: `adapters/state-files.ts --dir`.
   - Done when green by piping JSON into the executable.
