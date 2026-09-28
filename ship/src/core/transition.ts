@@ -5,7 +5,10 @@ import type {
 } from "../contracts/ports";
 import { enterGate } from "./gates";
 import { type Move, enterClose, enterStep, present, withFire } from "./steps";
-import type { Awaiting, Entry, Policy, Position, Signal, Snapshot, TransitionOutput } from "./types";
+import {
+  isTerminal, type Awaiting, type Entry, type Note, type Policy, type Position, type Signal, type Snapshot,
+  type TransitionOutput,
+} from "./types";
 
 type ResultSignal = Extract<Signal, { kind: "result" }>;
 type OnOk = (p: Policy, s: Snapshot, body: unknown) => Move;
@@ -59,13 +62,18 @@ const onOk: { [P in Position]?: OnOk } = {
   teardown: (_, s) => enterClosed(s),
 };
 
+/** Journal the signal and change nothing (I5). */
+const ignore = (s: Snapshot, sig: Signal, note: Note): TransitionOutput => ({
+  state: s, commands: [], entry: { delivery: s.delivery, signal: sig, from: s.at, to: s.at, issued: [], note },
+});
+
 /** Principal answers carry `by` (I6); it is journaled, never checked (ADR 0003, 0005). */
 const byOf = (awaiting: Awaiting, body: unknown): Pick<Entry, "by"> =>
   awaiting.port === "principal" ? { by: (body as DecideBody).by } : {};
 
 const onResult = (p: Policy, s: Snapshot, sig: ResultSignal): TransitionOutput => {
   const awaiting = s.awaiting;
-  if (awaiting === null || sig.id !== awaiting.id) throw unhandled(s, `stale result ${sig.id}`);
+  if (awaiting === null || sig.id !== awaiting.id) return ignore(s, sig, "ignored_stale"); // R1
   if (sig.result.status !== "ok") throw unhandled(s, sig.result.status);
 
   const result: Ok<unknown> = sig.result;
@@ -82,6 +90,7 @@ const onResult = (p: Policy, s: Snapshot, sig: ResultSignal): TransitionOutput =
 };
 
 export const transition = (p: Policy, s: Snapshot, sig: Signal): TransitionOutput => {
+  if (isTerminal(s.at)) return ignore(s, sig, "ignored_terminal"); // R2
   switch (sig.kind) {
     case "result": return onResult(p, s, sig);
     default: throw unhandled(s, sig.kind);

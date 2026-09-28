@@ -597,7 +597,7 @@ Rules for every step:
 - [x] **M0.6 Happy path, part 2.**
   - Test: rows H7–H12, including Close's `tracker.update` and the Closed notify.
   - Done when H7–H12 are green.
-- [ ] **M0.7 Ignored.**
+- [x] **M0.7 Ignored.**
   - Test: rows R1–R2, with state deep-equal (I5).
   - Done when green.
 - [ ] **M0.8 Fix rounds.**

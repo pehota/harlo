@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyTransition, transitionRows } from "./rows";
+import { applyTransition, ignoredRows, transitionRows } from "./rows";
 
 describe("transition (§4)", () => {
   test.each(transitionRows)("$id $name", (row) => {
@@ -11,5 +11,11 @@ describe("transition (§4)", () => {
     expect(out.state).toMatchObject(row.expect.state);
     expect(out.entry).toEqual({ delivery: row.state.delivery, signal: row.signal, ...row.expect.entry });
     expect(row.state).toEqual(before); // pure: the input snapshot is untouched
+  });
+});
+
+describe("ignored signals return the state deep-equal (I5)", () => {
+  test.each(ignoredRows)("$id $name", (row) => {
+    expect(applyTransition(row).state).toEqual(row.state);
   });
 });
