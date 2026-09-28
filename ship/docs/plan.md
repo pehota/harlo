@@ -629,7 +629,7 @@ Rules for every step:
     - a `cancel` command spawns the target's port adapter with argv `<port> cancel` and stdin payload `{target}`; it is a fire, so a non-zero exit lands in `errors`
   - Impl: `runner/spawn.ts`.
   - Done when each row maps as in §5.3.
-- [ ] **M0.16 Config.**
+- [x] **M0.16 Config.**
   - Test: table for valid, cross-layer key, unknown port, missing key, undeclared `$secrets`, a missing `delivered.status`, and an outcome without a mapping.
   - Impl: `runner/config.ts`.
   - Done when green, with exit 2 on each invalid case.
