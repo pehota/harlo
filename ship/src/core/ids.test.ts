@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commandId, deliveryId, isValidKey, nextId, parseCommandId } from "./ids";
+import { commandId, deliveryId, isDeliveryId, isValidKey, nextId, parseCommandId } from "./ids";
 
 describe("deliveryId", () => {
   test.each([
@@ -7,6 +7,19 @@ describe("deliveryId", () => {
     ["k", 1, "k-1"],
   ])("deliveryId(%p, %p) = %p", (key, attempt, expected) => {
     expect(deliveryId(key, attempt)).toBe(expected);
+  });
+});
+
+describe("isDeliveryId", () => {
+  test.each([
+    ["PROJ-123-2", true],
+    ["k-1", true],
+    ["k", false],
+    ["k-0", false],
+    ["../k-1", false],
+    ["k-1/setup-1", false],
+  ])("%p → %p", (id, expected) => {
+    expect(isDeliveryId(id)).toBe(expected);
   });
 });
 

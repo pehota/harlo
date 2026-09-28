@@ -646,7 +646,7 @@ Rules for every step:
     - commands `[cancel A, decide B → crash, notify C]`: C is still sent, then exit 5
   - Impl: `runner/apply.ts`.
   - Done when green.
-- [ ] **M0.18 CLI.**
+- [x] **M0.18 CLI.**
   - Test: subprocess tests per verb and exit code, including:
     - an id from another Delivery (exit 1)
     - an answer outside the options reaching the core (exit 0, `invalid_answer`)
