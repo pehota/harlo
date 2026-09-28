@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   D, answer, calls, coreSequence, criteria, defined, failed, implemented, issuedAndSent, lifecycle, ok, payloadOf,
-  question, verdict, workItem,
+  question, runbook, verdict, workItem,
 } from "../fixtures/lifecycle.fixture";
 import type { Position } from "../../src/core/types";
 
@@ -228,9 +228,10 @@ describe("lifecycle on fakes", () => {
     expect((await p.snapshot())).toMatchObject({ outcome: "abandoned", reason: "not needed", workspace: "/ws/k-1" });
   }, TIMEOUT);
 
-  test.concurrent("changed before Land re-asks Accept; changed after Land only notifies", async () => {
+  test.concurrent("changed before Land re-runs Define; changed after Land only notifies", async () => {
     const p = project({
       ...HAPPY, "integrate.run": [], // integrate accepts: still running when the second change arrives
+      "define.run": [defined, ok({ criteria: ["greets Ada by full name"], runbook })],
       "tracker.read": [workItem(), workItem("Greet by full name"), workItem("Greet by nickname")],
     });
     await start(p, "accept-1");
@@ -239,16 +240,19 @@ describe("lifecycle on fakes", () => {
     await signal(p, "land-1", answer("approve"), "integrate-1");
     await step(p, "integrate-1", "changed", D);
     await expectFinal(p, "integrate", [
-      ...TO_ACCEPT.core, "changed: accept→accept",
+      ...TO_ACCEPT.core, "changed: accept→define", "result define-2: define→accept",
       "result accept-2: accept→implement", "result implement-1: implement→check", "result check-1: check→land",
       "result land-1: land→integrate", "changed: integrate→integrate [workitem_changed_late]",
     ], [
-      ...TO_ACCEPT.calls, "tracker.read -", "principal.cancel cancel-1", "principal.decide accept-2",
+      ...TO_ACCEPT.calls, "tracker.read -", "principal.cancel cancel-1", "define.run define-2", "principal.decide accept-2",
       "implement.run implement-1", "check.run check-1", "principal.decide land-1", "integrate.run integrate-1",
       "tracker.read -", "principal.notify notify-1",
     ]);
     expect(payloadOf(p.log(), "cancel-1")).toEqual({ target: `${D}/accept-1` });
-    expect(payloadOf(p.log(), "accept-2")).toMatchObject({ evidence: { note: "workItem changed", workItem: { title: "Greet by full name" } } });
+    expect(p.log().find((s) => s.id === `${D}/define-2`)?.workItem).toMatchObject({ title: "Greet by full name" });
+    const accept2 = payloadOf(p.log(), "accept-2") as { evidence: Record<string, unknown> };
+    expect(accept2.evidence).toMatchObject({ workItem: { title: "Greet by full name" }, criteria: ["greets Ada by full name"] });
+    expect(accept2.evidence).not.toHaveProperty("note");
     expect(payloadOf(p.log(), "notify-1")).toEqual({ text: "WorkItem changed after Land; flow unchanged" });
     expect((await p.snapshot()).workItem.title).toBe("Greet by nickname");
   }, TIMEOUT);

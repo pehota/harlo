@@ -196,10 +196,9 @@ const onStop = (p: Policy, s: Snapshot, sig: StopSignal): Move =>
   andThen(cancelAwaited(s), (idle) => abandon(p, idle, sig.outcome, sig.reason));
 
 /** Where a changed WorkItem sends the Delivery, by the node it is at (or blocked at). */
-const ON_CHANGE: Record<Node, "stay" | "define" | "accept" | "late"> = {
+const ON_CHANGE: Record<Node, "stay" | "define" | "late"> = {
   setup: "stay", // W2: Define has not run yet; blocked at setup stays blocked
-  define: "define", // W3
-  accept: "accept", implement: "accept", check: "accept", decision: "accept", // W4, W5
+  define: "define", accept: "define", implement: "define", check: "define", decision: "define", // W3–W5
   land: "late", integrate: "late", deploy: "late", verify: "late", failure: "late", close: "late", teardown: "late", // W6
 };
 
@@ -215,7 +214,6 @@ const onChanged = (p: Policy, s: Snapshot, sig: ChangedSignal): Applied => {
   switch (ON_CHANGE[node]) {
     case "stay": return { state: changed, commands: [] };
     case "define": return andThen(leave(), (left) => enterStep(p, left, "define"));
-    case "accept": return andThen(leave(), (left) => enterGate(p, left, "accept", "workItem changed"));
     case "late": {
       const notified = withFire({ state: changed, commands: [] }, "principal", "notify", {
         text: "WorkItem changed after Land; flow unchanged",

@@ -24,12 +24,6 @@ const blocked1 = decide("blocked", 1, OPTIONS.blocked, "person");
 const clarify1 = ask(1, "define", "clarify", "Greet by first or full name?", "model");
 const locale1 = ask(1, "check", "clarify", "Which locale?", "model");
 
-/** The Accept gate re-entered after a change (W4, W5): its evidence shows the new WorkItem and the note. */
-const reaccept = (n: number, over: Parameters<typeof gateEvidence>[0] = {}) => ({
-  ...decide("accept", 1, OPTIONS.accept, "person", gateEvidence({ workItem: edited, note: "workItem changed", ...over })),
-  id: id(`accept-${n}`),
-});
-
 /** Blocked at `node`, awaiting the blocked decide (or nothing, after B6). */
 const blockedAt = (node: "setup" | "define" | "accept" | "check" | "deploy", awaiting: typeof blocked1 | null = blocked1) =>
   snapshotAt("blocked", awaiting, { blockedAt: node, blockedCmd: setup1, seq: { blocked: 1 } });
@@ -141,69 +135,69 @@ export const deliveryRows: TransitionRow[] = [
     },
   },
   {
-    id: "W4", name: "changed at accept → cancel the decide, decide accept again with the note",
-    state: snapshotAt("accept", accept1, { changeset: null }),
+    id: "W4", name: "changed at accept → cancel the decide, run define again",
+    state: snapshotAt("accept", accept1, { changeset: null, seq: { define: 1, accept: 1 } }),
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, accept1), cmd(reaccept(2, { changeset: null }))],
-      state: { workItem: edited, awaiting: reaccept(2, { changeset: null }) },
-      entry: { from: "accept", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, accept1), cmd(define(2))],
+      state: { workItem: edited, awaiting: define(2), lastRun: define(2) },
+      entry: { from: "accept", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
-    id: "W4", name: "changed while blocked at accept → accept, blockedAt = null",
-    state: { ...blockedAt("accept"), blockedCmd: accept1, seq: { accept: 1, blocked: 1 } },
+    id: "W4", name: "changed while blocked at accept → define, blockedAt = null",
+    state: { ...blockedAt("accept"), blockedCmd: accept1, seq: { define: 1, accept: 1, blocked: 1 } },
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, blocked1), cmd(reaccept(2))],
-      state: { blockedAt: null, blockedCmd: null, awaiting: reaccept(2) },
-      entry: { from: "blocked", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, blocked1), cmd(define(2))],
+      state: { workItem: edited, blockedAt: null, blockedCmd: null, awaiting: define(2) },
+      entry: { from: "blocked", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
-    id: "W5", name: "changed at implement → cancel, back to accept; fix rounds and findings unchanged",
-    state: snapshotAt("implement", implement1, { fixRounds: 1, findings, seq: { implement: 1, accept: 1 } }),
+    id: "W5", name: "changed at implement → cancel, back to define; fix rounds and findings unchanged",
+    state: snapshotAt("implement", implement1, { fixRounds: 1, findings, seq: { define: 1, accept: 1, implement: 1 } }),
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, implement1), cmd(reaccept(2, { findings }))],
-      state: { workItem: edited, fixRounds: 1, findings, awaiting: reaccept(2, { findings }) },
-      entry: { from: "implement", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, implement1), cmd(define(2))],
+      state: { workItem: edited, fixRounds: 1, findings, awaiting: define(2), lastRun: define(2) },
+      entry: { from: "implement", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
-    id: "W5", name: "changed while check awaits an ask → cancel the ask, back to accept",
-    state: snapshotAt("check", locale1, { lastRun: check1, seq: { check: 1, ask: 1, accept: 1 } }),
+    id: "W5", name: "changed while check awaits an ask → cancel the ask, back to define",
+    state: snapshotAt("check", locale1, { lastRun: check1, seq: { define: 1, accept: 1, check: 1, ask: 1 } }),
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, locale1), cmd(reaccept(2))],
-      state: { workItem: edited, awaiting: reaccept(2) },
-      entry: { from: "check", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, locale1), cmd(define(2))],
+      state: { workItem: edited, awaiting: define(2), lastRun: define(2) },
+      entry: { from: "check", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
-    id: "W5", name: "changed at decision → cancel the decide, back to accept",
-    state: snapshotAt("decision", decision1, { fixRounds: 2, findings, seq: { decision: 1, accept: 1 } }),
+    id: "W5", name: "changed at decision → cancel the decide, back to define; fix rounds and findings unchanged",
+    state: snapshotAt("decision", decision1, { fixRounds: 2, findings, seq: { define: 1, accept: 1, decision: 1 } }),
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, decision1), cmd(reaccept(2, { findings }))],
-      state: { fixRounds: 2, findings },
-      entry: { from: "decision", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, decision1), cmd(define(2))],
+      state: { workItem: edited, fixRounds: 2, findings, awaiting: define(2) },
+      entry: { from: "decision", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
-    id: "W5", name: "changed while blocked at check → accept, blockedAt = null",
-    state: { ...blockedAt("check"), blockedCmd: check1, seq: { check: 1, blocked: 1, accept: 1 } },
+    id: "W5", name: "changed while blocked at check → define, blockedAt = null",
+    state: { ...blockedAt("check"), blockedCmd: check1, seq: { define: 1, check: 1, blocked: 1 } },
     signal: edit,
     expect: {
-      at: "accept",
-      commands: [cancel(1, blocked1), cmd(reaccept(2))],
-      state: { blockedAt: null, blockedCmd: null, awaiting: reaccept(2) },
-      entry: { from: "blocked", to: "accept", issued: [id("cancel-1"), id("accept-2")] },
+      at: "define",
+      commands: [cancel(1, blocked1), cmd(define(2))],
+      state: { workItem: edited, blockedAt: null, blockedCmd: null, retries: 0, awaiting: define(2) },
+      entry: { from: "blocked", to: "define", issued: [id("cancel-1"), id("define-2")] },
     },
   },
   {
