@@ -29,3 +29,19 @@
 - **Rule:** derive every check verdict from that run's actual exit code/log
   (parse it in the same script that writes the result); never reuse a prior
   round's verdict values.
+
+## Test data is named and placed as test data
+
+- **Pattern:** transition-row tables used only by tests lived in
+  `src/core/rows/*.ts`, which reads like production code.
+- **Why wrong:** a reader cannot tell test data from runtime code; it
+  invites production imports of fixtures.
+- **Rule:** test-only data gets a test name (`*.fixture.ts`, a `fixtures/`
+  dir) and sits next to the tests that use it. Tell implementers this up
+  front when asking for shared tables.
+
+## Answer only the question asked
+
+- **Pattern:** "how many batches?" got a full status table.
+- **Why wrong:** the user asked for a number; extra content costs reading time.
+- **Rule:** a closed question gets the bare answer. Add detail only if asked.

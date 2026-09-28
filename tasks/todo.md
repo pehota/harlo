@@ -1,3 +1,25 @@
+# ship M0 — walking skeleton (plan.md §6)
+
+Branch: `main`. Baseline: `536f0ca`. Contract: `.dod/main/contract.json`. Brief: `.dod/main/brief.md`.
+
+- [x] A. M0.1–M0.3 scaffold, ids, contract schemas
+- [x] B. M0.4–M0.7 start, happy path, ignored
+- [x] C. M0.8–M0.13 fix rounds, failure, questions, blocked, delivery signals, invariants
+- [x] D. M0.14–M0.16 file State, spawn, config
+- [x] E. M0.17–M0.18 apply loop, CLI
+- [x] F. M0.19–M0.21 fakes, terminal Principal, e2e lifecycle
+- [x] G. M0.22 property tests
+- [x] H. M0.23 docs + README e2e + scenario script
+- [x] Verify: /dod:verify (fresh review), manual paste run handed to user
+
+## Review
+
+- 29 commits on main (23 steps, 1 prep, 1 fixture move, 4 review fixes). 922 tests green.
+- /dod:verify: round 1 pass (7 advisories: 4 fixed, 3 skipped by user), round 2 blocking-only pass.
+- Pending: user's manual paste run.
+
+---
+
 # ADR 0004 — context brief + impact trace (dod plugin)
 
 Branch: `main`. Baseline: `749dfb0`. Contract: `.dod/main/contract.json`.
