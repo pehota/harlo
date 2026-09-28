@@ -615,7 +615,7 @@ Rules for every step:
 - [x] **M0.12 Delivery signals.**
   - Test: rows D1–D3 and W1–W6, including W3–W5 entered from Blocked (blockedAt = null) and W2 blocked at setup (blockedAt kept).
   - Done when green.
-- [ ] **M0.13 Invariants.**
+- [x] **M0.13 Invariants.**
   - Test: `invariants.test.ts` runs every row fixture from M0.4–M0.12 and asserts I1–I6. It also scans `src/core/**` with the word-boundary regex `\b(claude|dod|jira|telegram|github|gh|git)\b` and fails on a match. It strips `//` and `/* */` comments before matching.
   - Caveat: the scan is a guard, not a proof. A tool name built from parts (`"gi" + "t"`) passes it, and an English word in a string literal that matches (for example `"git"` in a message) fails it on purpose.
   - Done when green.
