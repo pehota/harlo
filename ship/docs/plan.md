@@ -612,7 +612,7 @@ Rules for every step:
 - [x] **M0.11 Retries and Blocked.**
   - Test: rows B1–B7, plus a cap of 0 (the first `failed` goes straight to Blocked).
   - Done when green.
-- [ ] **M0.12 Delivery signals.**
+- [x] **M0.12 Delivery signals.**
   - Test: rows D1–D3 and W1–W6, including W3–W5 entered from Blocked (blockedAt = null) and W2 blocked at setup (blockedAt kept).
   - Done when green.
 - [ ] **M0.13 Invariants.**

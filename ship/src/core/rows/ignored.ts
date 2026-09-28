@@ -2,7 +2,7 @@
 import type { Note, Signal, Snapshot } from "../types";
 import { type TransitionRow, awaited, ok, snapshotAt, workItem } from "./fixtures";
 
-const ignored = (id: string, name: string, state: Snapshot, signal: Signal, note: Note): TransitionRow => ({
+export const ignored = (id: string, name: string, state: Snapshot, signal: Signal, note: Note): TransitionRow => ({
   id, name, state, signal,
   expect: { at: state.at, commands: [], state, entry: { from: state.at, to: state.at, issued: [], note } },
 });

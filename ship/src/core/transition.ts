@@ -4,13 +4,15 @@ import type {
   AskBody, CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
 import { enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
-import { type Move, abandon, enterClose, enterStep, present, reissue, withFire } from "./steps";
+import { type Move, abandon, andThen, cancelAwaited, enterClose, enterStep, present, reissue, withFire } from "./steps";
 import {
-  isTerminal, type Awaiting, type Entry, type Note, type Policy, type Position, type Signal, type Snapshot,
+  isTerminal, type Awaiting, type Entry, type Node, type Note, type Policy, type Position, type Signal, type Snapshot,
   type TransitionOutput,
 } from "./types";
 
 type ResultSignal = Extract<Signal, { kind: "result" }>;
+type StopSignal = Extract<Signal, { kind: "stop" }>;
+type ChangedSignal = Extract<Signal, { kind: "workItem_changed" }>;
 type OnOk = (p: Policy, s: Snapshot, body: unknown) => Move;
 type Applied = Move & { note?: Note }; // a move plus the note its entry carries
 
@@ -109,10 +111,18 @@ const onOk: { [P in Position]?: OnOk } = {
   teardown: (_, s) => enterClosed(s),
 };
 
+/** Journal the applied signal: one entry per application (ADR 0005). */
+const settle = (s: Snapshot, sig: Signal, applied: Applied, by: Pick<Entry, "by"> = {}): TransitionOutput => {
+  const { note, ...move } = applied;
+  const entry: Entry = {
+    delivery: s.delivery, signal: sig, from: s.at, to: move.state.at,
+    issued: move.commands.map((c) => c.id), ...by, ...(note === undefined ? {} : { note }),
+  };
+  return { ...move, entry };
+};
+
 /** Journal the signal and change nothing (I5). */
-const ignore = (s: Snapshot, sig: Signal, note: Note): TransitionOutput => ({
-  state: s, commands: [], entry: { delivery: s.delivery, signal: sig, from: s.at, to: s.at, issued: [], note },
-});
+const ignore = (s: Snapshot, sig: Signal, note: Note): TransitionOutput => settle(s, sig, { state: s, commands: [], note });
 
 /** Principal answers carry `by` (I6); it is journaled, never checked (ADR 0003, 0005). */
 const byOf = (awaiting: Awaiting, result: Result): Pick<Entry, "by"> =>
@@ -178,19 +188,48 @@ const onResult = (p: Policy, s: Snapshot, sig: ResultSignal): TransitionOutput =
   const result = sig.result;
   const passed = result.status === "failed" ? [] : result.evidence ?? []; // appended, never read (P9)
   const consumed: Snapshot = { ...s, awaiting: null, evidence: [...s.evidence, ...passed] };
-  const { note, ...move } = onAwaited(p, consumed, awaiting, result);
+  return settle(s, sig, onAwaited(p, consumed, awaiting, result), byOf(awaiting, result));
+};
 
-  const entry: Entry = {
-    delivery: s.delivery, signal: sig, from: s.at, to: move.state.at,
-    issued: move.commands.map((c) => c.id), ...byOf(awaiting, result), ...(note === undefined ? {} : { note }),
+/** stop: cancel what is outstanding, then abandon with stop's outcome, which wins over one already set (D1–D3). */
+const onStop = (p: Policy, s: Snapshot, sig: StopSignal): Move =>
+  andThen(cancelAwaited(s), (idle) => abandon(p, idle, sig.outcome, sig.reason));
+
+/** Where a changed WorkItem sends the Delivery, by the node it is at (or blocked at). */
+const ON_CHANGE: Record<Node, "stay" | "define" | "accept" | "late"> = {
+  setup: "stay", // W2: Define has not run yet; blocked at setup stays blocked
+  define: "define", // W3
+  accept: "accept", implement: "accept", check: "accept", decision: "accept", // W4, W5
+  land: "late", integrate: "late", deploy: "late", verify: "late", failure: "late", close: "late", teardown: "late", // W6
+};
+
+const onChanged = (p: Policy, s: Snapshot, sig: ChangedSignal): Applied => {
+  const { title, body } = sig.workItem;
+  if (title === s.workItem.title && body === s.workItem.body) return { state: s, commands: [], note: "workitem_unchanged" }; // W1
+  const changed: Snapshot = { ...s, workItem: sig.workItem };
+  const node = s.at === "blocked" ? present(s, "blockedAt") : (s.at as Node);
+  const leave = (): Move => {
+    const idle = cancelAwaited(changed);
+    return { ...idle, state: { ...idle.state, blockedAt: null, blockedCmd: null } };
   };
-  return { ...move, entry };
+  switch (ON_CHANGE[node]) {
+    case "stay": return { state: changed, commands: [] };
+    case "define": return andThen(leave(), (left) => enterStep(p, left, "define"));
+    case "accept": return andThen(leave(), (left) => enterGate(p, left, "accept", "workItem changed"));
+    case "late": {
+      const notified = withFire({ state: changed, commands: [] }, "principal", "notify", {
+        text: "WorkItem changed after Land; flow unchanged",
+      });
+      return { ...notified, note: "workitem_changed_late" };
+    }
+  }
 };
 
 export const transition = (p: Policy, s: Snapshot, sig: Signal): TransitionOutput => {
   if (isTerminal(s.at)) return ignore(s, sig, "ignored_terminal"); // R2
   switch (sig.kind) {
     case "result": return onResult(p, s, sig);
-    default: throw unhandled(s, sig.kind);
+    case "stop": return settle(s, sig, onStop(p, s, sig));
+    case "workItem_changed": return settle(s, sig, onChanged(p, s, sig));
   }
 };

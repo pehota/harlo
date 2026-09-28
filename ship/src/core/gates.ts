@@ -17,21 +17,24 @@ export const GATE_OPTIONS = {
 export const CONFLICT_OPTIONS = ["resolved", "rework"] as const;
 
 /** What the Principal sees: the core passes it through and never reads `evidence` (P9). */
-export const evidenceBundle = (s: Snapshot): GateEvidence => ({
+export const evidenceBundle = (s: Snapshot, note?: string): GateEvidence => ({
   workItem: s.workItem, criteria: s.criteria, runbook: s.runbook, changeset: s.changeset,
-  findings: s.findings, evidence: s.evidence,
+  findings: s.findings, evidence: s.evidence, ...(note === undefined ? {} : { note }),
 });
 
 /** Await `principal.decide` at a decide point with its constant options (`decide G`). */
-const awaitDecide = (s: Snapshot, on: DecidePoint, min: PrincipalKind): Move => {
+const awaitDecide = (s: Snapshot, on: DecidePoint, min: PrincipalKind, note?: string): Move => {
   const options = [...GATE_OPTIONS[on]];
-  const payload: Decide = { on, options, min, evidence: evidenceBundle(s) };
+  const payload: Decide = { on, options, min, evidence: evidenceBundle(s, note) };
   return awaitOn(s, on, { port: "principal", op: "decide", payload, node: on, kind: "decide", options });
 };
 
-/** Enter a gate whose Minimum Principal is one policy value: reset retries and await `principal.decide`. */
-export const enterGate = (p: Policy, s: Snapshot, gate: Exclude<Gate, "decision">): Move =>
-  awaitDecide({ ...s, at: gate, retries: 0 }, gate, p.minimum[gate]);
+/**
+ * Enter a gate whose Minimum Principal is one policy value: reset retries and await `principal.decide`.
+ * `note` tells the Principal why the gate is shown again (W4, W5).
+ */
+export const enterGate = (p: Policy, s: Snapshot, gate: Exclude<Gate, "decision">, note?: string): Move =>
+  awaitDecide({ ...s, at: gate, retries: 0 }, gate, p.minimum[gate], note);
 
 /** Enter the Decision gate; the kind of decision picks the Minimum Principal (N rounds used → scope). */
 export const enterDecision = (p: Policy, s: Snapshot, about: keyof Policy["minimum"]["decision"]): Move =>

@@ -36,6 +36,19 @@ export const withFire = (move: Move, port: Port, op: string, payload: unknown): 
   return { state: { ...move.state, seq }, commands: [...move.commands, { id, port, op, await: false, payload }] };
 };
 
+/** Run `next` on the state `first` leaves; its commands follow `first`'s. */
+export const andThen = (first: Move, next: (s: Snapshot) => Move): Move => {
+  const second = next(first.state);
+  return { state: second.state, commands: [...first.commands, ...second.commands] };
+};
+
+/** A Delivery signal made the outstanding command moot: fire `cancel` at its port, before anything else (I3). */
+export const cancelAwaited = (s: Snapshot): Move => {
+  const moot = s.awaiting;
+  const idle: Move = { state: { ...s, awaiting: null }, commands: [] };
+  return moot === null ? idle : withFire(idle, moot.port, "cancel", { target: moot.id });
+};
+
 /** A snapshot field the position guarantees; null here is a core bug, not an input case. */
 export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome" | "lastRun" | "blockedAt" | "blockedCmd",
 >(

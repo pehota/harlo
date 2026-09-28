@@ -145,3 +145,10 @@ export const question = (
 export const failed = (to: Awaiting, info: string): Signal => ({ kind: "result", id: to.id, result: { status: "failed", info } });
 
 export const withRetryCap = (retryCap: Policy["retryCap"]): Policy => ({ ...policy, retryCap });
+
+export const stop = (outcome: string, reason: string): Signal => ({ kind: "stop", outcome, reason });
+
+export const changed = (over: Partial<WorkItem>): Signal => ({ kind: "workItem_changed", workItem: { ...workItem, ...over } });
+
+/** The fire that cancels an outstanding command, sent to that command's port. */
+export const cancel = (n: number, target: Awaiting): Command => fire(`cancel-${n}`, target.port, "cancel", { target: target.id });
