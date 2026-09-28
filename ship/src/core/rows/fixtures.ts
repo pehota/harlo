@@ -141,3 +141,7 @@ export const question = (
   kind: "result", id: to.id,
   result: { status: "question", prompt, about, ...(options ? { options } : {}), ...(evidence ? { evidence } : {}) },
 });
+
+export const failed = (to: Awaiting, info: string): Signal => ({ kind: "result", id: to.id, result: { status: "failed", info } });
+
+export const withRetryCap = (retryCap: Policy["retryCap"]): Policy => ({ ...policy, retryCap });

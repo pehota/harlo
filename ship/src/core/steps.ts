@@ -37,7 +37,8 @@ export const withFire = (move: Move, port: Port, op: string, payload: unknown): 
 };
 
 /** A snapshot field the position guarantees; null here is a core bug, not an input case. */
-export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome" | "lastRun">(
+export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome" | "lastRun" | "blockedAt" | "blockedCmd",
+>(
   s: Snapshot, field: F,
 ): NonNullable<Snapshot[F]> => {
   const value = s[field];

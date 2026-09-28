@@ -2,7 +2,7 @@
 import type { Decide, DecidePoint, GateEvidence, PrincipalKind, Question } from "../contracts/common";
 import type { AskPayload } from "../contracts/ports";
 import { type Move, awaitOn } from "./steps";
-import type { Awaiting, Gate, Policy, Snapshot } from "./types";
+import type { Awaiting, Gate, Node, Policy, Snapshot } from "./types";
 
 /** Core constants, not config: the core branches on them. */
 export const GATE_OPTIONS = {
@@ -36,6 +36,10 @@ export const enterGate = (p: Policy, s: Snapshot, gate: Exclude<Gate, "decision"
 /** Enter the Decision gate; the kind of decision picks the Minimum Principal (N rounds used → scope). */
 export const enterDecision = (p: Policy, s: Snapshot, about: keyof Policy["minimum"]["decision"]): Move =>
   awaitDecide({ ...s, at: "decision", retries: 0 }, "decision", p.minimum.decision[about]);
+
+/** Enter Blocked: `node` stayed failed past its cap; keep the failed command for `retry` (B2, B3). */
+export const enterBlocked = (p: Policy, s: Snapshot, node: Node, failed: Awaiting): Move =>
+  awaitDecide({ ...s, at: "blocked", blockedAt: node, blockedCmd: failed }, "blocked", p.minimum.blocked);
 
 /** Minimum Principal for a question's `about`; an unknown category gets the strictest, person. */
 const questionMinimum = (p: Policy, about: string): PrincipalKind =>

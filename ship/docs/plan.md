@@ -609,7 +609,7 @@ Rules for every step:
 - [x] **M0.10 Questions.**
   - Test: rows Q1–Q6.
   - Done when green.
-- [ ] **M0.11 Retries and Blocked.**
+- [x] **M0.11 Retries and Blocked.**
   - Test: rows B1–B7, plus a cap of 0 (the first `failed` goes straight to Blocked).
   - Done when green.
 - [ ] **M0.12 Delivery signals.**

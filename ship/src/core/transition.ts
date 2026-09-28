@@ -3,7 +3,7 @@ import type { Finding, Question, Result } from "../contracts/common";
 import type {
   AskBody, CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
-import { enterAsk, enterDecision, enterGate } from "./gates";
+import { enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
 import { type Move, abandon, enterClose, enterStep, present, reissue, withFire } from "./steps";
 import {
   isTerminal, type Awaiting, type Entry, type Note, type Policy, type Position, type Signal, type Snapshot,
@@ -98,6 +98,14 @@ const onOk: { [P in Position]?: OnOk } = {
     accept: () => enterClose(p, s, "accepted_with_failure"),
   }),
   close: (p, s) => enterStep(p, s, "teardown"),
+  blocked: (p, s, body) => {
+    const b = body as DecideBody;
+    const node = present(s, "blockedAt");
+    return branch(s, b.answer, {
+      retry: () => reissue({ ...s, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd")),
+      stop: () => abandon(p, s, "abandoned", b.comment ?? `stopped at blocked ${node}`),
+    });
+  },
   teardown: (_, s) => enterClosed(s),
 };
 
@@ -125,6 +133,18 @@ const onAsk = (p: Policy, s: Snapshot, asked: Awaiting, value: string): Move => 
   return reissue({ ...s, retries: 0 }, { ...run, payload: { ...(run.payload as object), answer: value } });
 };
 
+/**
+ * `failed` changed nothing, so re-issue it up to the node's cap (an ask uses its step's cap), then Blocked.
+ * The Principal failing at Blocked leaves it awaiting nothing; only a Delivery signal moves it (B6).
+ */
+const onFailed = (p: Policy, s: Snapshot, failed: Awaiting): Move => {
+  if (failed.node === "blocked") return { state: s, commands: [] };
+  const cap = p.retryCap[failed.node] ?? p.retryCap.default;
+  return s.retries < cap
+    ? reissue({ ...s, retries: s.retries + 1 }, failed)
+    : enterBlocked(p, s, failed.node, failed);
+};
+
 /** A step's ok result or a gate's answer, by the position it arrives at. */
 const onPosition = (p: Policy, s: Snapshot, body: unknown): Move => {
   const handler = onOk[s.at];
@@ -146,7 +166,7 @@ const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Ap
 const onAwaited = (p: Policy, s: Snapshot, awaiting: Awaiting, result: Result): Applied => {
   switch (result.status) {
     case "question": return onQuestion(p, s, awaiting, result);
-    case "failed": throw unhandled(s, "failed");
+    case "failed": return onFailed(p, s, awaiting);
     case "ok": return awaiting.kind === "run" ? onPosition(p, s, result.body) : onAnswer(p, s, awaiting, result.body);
   }
 };
