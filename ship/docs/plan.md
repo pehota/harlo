@@ -963,3 +963,4 @@ The Runner starts no listeners. The environment must provide what follows.
 ### 8.4 Follow-ups
 
 - **Formal model.** If the M0.22 property tests find interleaving bugs, the follow-up is a Quint or TLA+ model of core + Runner + environment, checking the same invariants.
+- **Gate evidence shows what produced it.** A re-issued gate looks identical to the one before it: after Accept `adjust`, the new Accept gate does not show the feedback that produced it, or that it is a later round. Add the last Principal comment (and the round, e.g. from `seq`) to `GateEvidence.note`, or a dedicated field. Same gap at Blocked (B2): the decide carries no failure `info`, so the Principal answers `retry`/`stop` blind; the info is only in the journal. Found while trying M0 by hand.
