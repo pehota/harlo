@@ -705,7 +705,7 @@ Rules for every step:
     - pid reuse: the dead adapter's pid is reused by an unrelated process with a different start time; it still counts as dead and is flagged.
   - Impl: crash-injection hooks in the fake State and fake spawn; no change to the core.
   - Done when green over the default fast-check run count, with a fixed seed recorded for any failure found.
-- [ ] **M0.23 Docs.**
+- [x] **M0.23 Docs.**
   - Test: `test/e2e/readme.test.ts` extracts the happy-path shell block from `README.md` and runs it against the fake config. It must reach Closed.
   - Impl:
     - `README.md` (install, config, CLI, including `status`)

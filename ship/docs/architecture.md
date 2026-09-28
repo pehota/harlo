@@ -148,10 +148,13 @@ Rules:
 
 - The command id identifies one instance of a step or gate. A **Result** whose
   id the core is not waiting for (duplicate, stale answer) is ignored.
-  **Delivery signals** are always applied.
+  **Delivery signals** are applied unless the Delivery is Closed or Abandoned,
+  or a `workItem_changed` leaves its title and body unchanged (both ignored,
+  journaled).
 - When a Delivery signal makes an outstanding command moot (`stop`, or
-  `workItem_changed` sending it back to Accept), the core issues `cancel{id}`;
-  the environment carries it out.
+  `workItem_changed` sending it back to Accept), the core issues
+  `cancel{target}` to the port that runs the target; the adapter carries it
+  out.
 - One signal is applied per Delivery at a time.
 - **Save before execute.** The Runner saves the state that awaits a command
   before it sends the command. As soon as the adapter process has started,
@@ -179,17 +182,18 @@ stateDiagram-v2
   [*] --> Setup
   Setup --> Define
   Define --> AcceptGate
-  AcceptGate --> Implement: accepted
+  AcceptGate --> Implement: accept
   AcceptGate --> Define: adjust
   Implement --> Check
   Check --> Implement: fix (≤ N rounds)
   Check --> DecisionGate: decide / N rounds used
   Check --> LandGate: pass
-  DecisionGate --> Implement: fix / keep going
+  DecisionGate --> Implement: keep going
   DecisionGate --> LandGate: accept
-  LandGate --> Integrate: approved
-  LandGate --> Implement: reject, rework
-  LandGate --> Define: reject, re-scope
+  DecisionGate --> Abandoned: stop
+  LandGate --> Integrate: approve
+  LandGate --> Implement: rework
+  LandGate --> Define: rescope
   Integrate --> Deploy: landed
   Integrate --> Implement: fix (red CI) / rework (conflict)
   Integrate --> DecisionGate: fix, N rounds used
@@ -261,7 +265,10 @@ stateDiagram-v2
 | Integrate | conflict (`question`) | answer "resolved" → re-issue Integrate; "rework" → Implement |
 | Blocked | on entry | issue Principal `decide{retry \| stop}`, giving `retry` an id |
 | Blocked | Principal adapter `failed` | stay Blocked, issue nothing; the environment alerts; only a Delivery signal moves it |
+| Setup | `workItem_changed` | keep the new WorkItem, flow unchanged (Define has not run yet) |
 | Define | `workItem_changed` | cancel Define, re-issue it with the new WorkItem |
+| Blocked | `workItem_changed` | as at the step or gate it is blocked at |
+| any | `workItem_changed`, title and body unchanged | ignored, journaled |
 | any gate | answer outside the allowed options | re-ask: re-issue the gate with a new id; invalid answer journaled |
 | any gate | Principal adapter `failed` | re-issue up to the gate's retry cap, then Blocked |
 | any gate | Principal asks back | out of scope in v1; the adapter handles it, or the Principal answers "adjust" with a comment |
@@ -353,8 +360,8 @@ is the Delivery's position. It never calls the core.
 
 | Layer | Holds |
 |---|---|
-| Project (in the repo) | adapter per port, minimum Principal per gate and per decision kind (incl. question `about`) and for Blocked, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N |
-| Machine (outside the repo) | Principal channel, State adapter, secrets, capability profile per port |
+| Project (`ship.config.json` in the repo) | adapter per project port, minimum Principal per gate and per decision kind (incl. question `about`) and for Blocked, stop outcomes, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N |
+| Machine (`$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json`) | Principal channel, State adapter, secrets, capability profile per port |
 
 Gate options are core constants, not config. Listeners (bot, webhook, cron)
 are not configured in ship: the environment runs them (P6).
@@ -383,7 +390,7 @@ the environment owns delivery, time and rollback (0004), snapshot + journal (000
 | Retries | the core re-issues a `failed` command up to a per-step or per-gate cap, immediately; delays and backoff are the environment's |
 | Input | `start <workItem>`, `next`, `signal <delivery> <id> <result>`, `stop <delivery> <outcome> <reason>`, `changed <delivery>`; read-only `status [<delivery>]` |
 | State | snapshot + journal |
-| Identity | Tracker adapter returns a stable, slug-safe WorkItem key; Delivery = `<key>-<attempt>` (e.g. `PROJ-123-2`); command id = `<delivery>/<step>-<n>` (e.g. `PROJ-123-2/land-1`) |
+| Identity | Tracker adapter returns a stable, slug-safe WorkItem key; Delivery = `<key>-<attempt>` (e.g. `PROJ-123-2`); command id = `<delivery>/<name>-<n>`, name = the step or gate, `ask`, `blocked`, or a fire op such as `notify` (e.g. `PROJ-123-2/land-1`) |
 | Location | `ship/` bundle in harlo |
 
 ## Open
