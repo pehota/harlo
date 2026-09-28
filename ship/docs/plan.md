@@ -682,7 +682,7 @@ Rules for every step:
 
     Each asserts the final position (`Snapshot.at`), the journal sequence and the adapter stdin log.
   - Done when every scenario is green.
-- [ ] **M0.22 Property tests.**
+- [x] **M0.22 Property tests.**
   - Test: `test/property/lifecycle.property.test.ts` uses fast-check. It drives the real core and Runner against a simulated environment (in-process fake State and fake adapters). The simulation may, at any point:
     - crash the Runner between load, apply, save and execute
     - duplicate, reorder or drop signals; a dropped signal is eventually followed by a `stop`
