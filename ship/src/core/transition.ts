@@ -1,8 +1,10 @@
 // transition(): apply one signal to a Delivery (plan §4). Dispatch is by position (Snapshot.at).
 import type { Ok } from "../contracts/common";
-import type { CheckBody, DecideBody, DefineBody, ImplementBody, SetupBody } from "../contracts/ports";
+import type {
+  CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
+} from "../contracts/ports";
 import { enterGate } from "./gates";
-import { type Move, enterStep } from "./steps";
+import { type Move, enterClose, enterStep, present, withFire } from "./steps";
 import type { Awaiting, Entry, Policy, Position, Signal, Snapshot, TransitionOutput } from "./types";
 
 type ResultSignal = Extract<Signal, { kind: "result" }>;
@@ -16,6 +18,10 @@ const branch = (s: Snapshot, key: string, cases: Record<string, () => Move>): Mo
   if (!next) throw unhandled(s, `"${key}"`);
   return next();
 };
+
+/** Teardown done: the Delivery is Closed and the Principal is told (H12). */
+const enterClosed = (s: Snapshot): Move =>
+  withFire({ state: { ...s, at: "closed" }, commands: [] }, "principal", "notify", { text: `closed: ${present(s, "outcome")}` });
 
 const feedback = (b: DecideBody) => (b.comment === undefined ? {} : { feedback: b.comment });
 
@@ -37,6 +43,20 @@ const onOk: { [P in Position]?: OnOk } = {
   check: (p, s, body) => branch(s, (body as CheckBody).verdict, {
     pass: () => enterGate(p, { ...s, findings: [] }, "land"),
   }),
+  land: (p, s, body) => branch(s, (body as DecideBody).answer, {
+    approve: () => enterStep(p, s, "integrate"),
+  }),
+  integrate: (p, s, body) => branch(s, (body as IntegrateBody).verdict, {
+    landed: () => enterStep(p, s, "deploy"),
+  }),
+  deploy: (p, s, body) => branch(s, (body as DeployBody).verdict, {
+    live: () => enterStep(p, s, "verify"),
+  }),
+  verify: (p, s, body) => branch(s, (body as VerifyBody).verdict, {
+    pass: () => enterClose(p, s, "delivered"),
+  }),
+  close: (p, s) => enterStep(p, s, "teardown"),
+  teardown: (_, s) => enterClosed(s),
 };
 
 /** Principal answers carry `by` (I6); it is journaled, never checked (ADR 0003, 0005). */

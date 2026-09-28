@@ -594,7 +594,7 @@ Rules for every step:
   - Test: rows H1–H6, including H3a (a step with a configured status fires `tracker.update`) and H3b (no status configured: no fire).
   - Impl: `transition.ts` dispatch, `steps.ts` builders, `gates.ts` decide builder and evidence bundle.
   - Done when H1–H6 are green.
-- [ ] **M0.6 Happy path, part 2.**
+- [x] **M0.6 Happy path, part 2.**
   - Test: rows H7–H12, including Close's `tracker.update` and the Closed notify.
   - Done when H7–H12 are green.
 - [ ] **M0.7 Ignored.**
