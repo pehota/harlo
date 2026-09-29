@@ -82,6 +82,25 @@ describe("mapReply on a decide gate", () => {
   });
 });
 
+describe("mapReply on an open-ended ask (placeholder answer)", () => {
+  // Shape of a real option-less `ask` block, e.g. this delivery's ask-1 (Define's clarifying question).
+  const ASK = ["── d-1: question (min 1) ──", "Should the reply mapper live in env/reply.ts?", "Answer (replace …):", line("d-1", "d-1/ask-1", "…")].join("\n");
+  const b = block(ASK, "d-1/ask-1");
+  test("any non-empty reply is the answer, verbatim, multi-paragraph and quotes intact", () => {
+    const reply = `No - keep it generic.\n\nIt's "env/text-to-signal-mapper.ts"; costs $5 & \`more\`.`;
+    expect(mapReply(reply, b)).toEqual({ ok: true, answer: reply, argv: ["signal", "d-1", "d-1/ask-1", json(reply)] });
+  });
+  test("a reply that looks like an option or alias is still just text", () => {
+    expect(mapReply("yes", b)).toMatchObject({ ok: true, answer: "yes" });
+  });
+  test("empty is still refused", () => {
+    expect(mapReply("  \n", b)).toMatchObject({ ok: false });
+  });
+  test("a placeholder among several candidates is not passthrough", () => {
+    expect(mapReply("maybe", block([ASK, line("d-1", "d-1/ask-1", "other")].join("\n"), "d-1/ask-1"))).toMatchObject({ ok: false });
+  });
+});
+
 describe("lastBlockFor", () => {
   test("takes the last block for the id, not a stale earlier one", () => {
     const text = [GATE, "── d-1: decide accept (min 1) ──", line("d-1", "d-1/accept-1", "accept")].join("\n");

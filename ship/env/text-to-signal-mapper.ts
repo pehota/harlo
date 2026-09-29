@@ -22,6 +22,8 @@ export type Mapped =
   | { ok: false; reason: string; options: string[] };
 
 const BLOCK_HEADER = "── ";
+/** The Principal adapter's stand-in answer for a gate with no options. */
+const PLACEHOLDER = "…";
 const COMMENT_HINT = /add\s+"comment"/;
 
 /** Split one printed shell line into words: bare words and `'…'` runs (with `'\''` for a quote), as `shellQuote` prints. */
@@ -115,6 +117,14 @@ export const mapReply = (reply: string, block: Block): Mapped => {
   const refuse = (reason: string): Mapped => ({ ok: false, reason, options });
   const text = reply.trim();
   if (text === "") return refuse("empty reply");
+
+  // An open-ended ask/decide prints one line whose answer is the placeholder to hand-replace: the whole reply is the answer.
+  const [only] = block.candidates;
+  if (block.candidates.length === 1 && only!.answer === PLACEHOLDER) {
+    const body = JSON.parse(only!.json) as { body: Record<string, unknown> };
+    body.body.answer = text;
+    return { ok: true, argv: ["signal", only!.delivery, only!.id, JSON.stringify(body)], answer: text };
+  }
 
   const vocab = vocabulary(block.candidates);
   const phrases = [...vocab.keys()].sort((a, b) => b.length - a.length);
