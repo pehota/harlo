@@ -799,9 +799,10 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 - [x] **M1.11 Agent adapter: Check.**
   - Test: the adapter always starts a fresh session (P8; it asserts no resume flag) and maps output to the `pass`, `fix` and `decide` verdicts.
   - Done when green on the fake plus one real run.
-- [ ] **M1.12 Home dogfood.**
+- [x] **M1.12 Home dogfood.**
   - Test: a manual end-to-end run on one real harlo WorkItem: md tracker, worktree, the agent adapter, local merge, ask-principal, terminal Principal.
   - Done when the WorkItem is Closed, the journal is complete, and every issue found is fixed or logged.
+  - Ran 2026-09-29 against real `ship/README.md`'s stale adapter table (an isolated local clone as the main line, no remote — see `docs/adapters.md` for the real coding-agent findings this run surfaced: `--safe-mode`, `--disallowedTools` on Define/Check, resumed-call prompt content, `--permission-mode`, and `checkSchema`'s top-level `oneOf` being API-illegal). Delivery reached `closed: delivered`; the journal is complete. Every issue found was fixed same-session, each with its own commit and test coverage.
 
 ### M2 — Home setup complete
 
