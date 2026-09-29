@@ -93,7 +93,7 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 
-Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-claude.ts` (M1.9–M1.11):
+Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-claude/index.ts` (M1.9–M1.11):
 
 - **Structured output.** `-p/--print --output-format json --json-schema '<inline
   JSON Schema>'` works, but `--json-schema` takes the schema **inline**, not a
@@ -120,7 +120,7 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   feature, or file/component? Please point to the concrete symptom or
   file.","criteria":[],"runbook":[]}`. Only tested with an explicit ad hoc
   prompt instruction to ask when ambiguous, added on top of the spike's test
-  prompt — the shipped `definePrompt` (agent-claude.ts) does **not** currently
+  prompt — the shipped `definePrompt` (agent-claude/index.ts) does **not** currently
   include any such instruction, so this does not mirror production; an
   ambiguous WorkItem run through the real `definePrompt` as it ships today
   was not tried, so it's unverified whether the agent volunteers a question
@@ -188,9 +188,9 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   explicitly via repeatable `--plugin-dir <path>`, never by ambient
   accident. **[verified]** `--safe-mode` is documented to keep "auth, model
   selection, built-in tools and plugins, and permissions" working; adopted
-  in `agent-claude.ts` (M1.9-M1.11) accordingly.
+  in `agent-claude/index.ts` (M1.9-M1.11) accordingly.
 
-Net for `agent-claude.ts`: build the payload → prompt text, call `claude -p
+Net for `agent-claude/index.ts`: build the payload → prompt text, call `claude -p
 --output-format json --json-schema '<schema for the op>' --safe-mode
 [--plugin-dir <dir>]... [--resume <stored-session-id>]`, parse stdout as
 JSON unconditionally, and branch on `is_error` (→ `failed`, nothing

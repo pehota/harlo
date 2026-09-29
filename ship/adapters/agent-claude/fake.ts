@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// TEST-ONLY fake `claude` CLI, for adapters/agent-claude.test.ts (--agent-bin points here instead of the real
+// TEST-ONLY fake `claude` CLI, for adapters/agent-claude/index.test.ts (--agent-bin points here instead of the real
 // `claude`). Mimics the real CLI's argv/stdout shape confirmed by the M1.8 spike: called as
 // `<this> -p <prompt> --output-format json --json-schema <schema> [--resume <id>]`, it prints one JSON line
 // shaped like the real reply ({is_error, result, structured_output?, session_id?}) — even on a non-zero exit,
@@ -42,7 +42,7 @@ if (log) appendFileSync(log, `${JSON.stringify(args)}\n`);
 
 const repliesFile = process.env.FAKE_AGENT_REPLIES;
 if (!repliesFile) {
-  console.error("usage: FAKE_AGENT_REPLIES=<file> [FAKE_AGENT_LOG=<file>] agent-claude.fake.ts -p ...");
+  console.error("usage: FAKE_AGENT_REPLIES=<file> [FAKE_AGENT_LOG=<file>] fake.ts -p ...");
   process.exit(2);
 }
 const { replies } = JSON.parse(readFileSync(repliesFile, "utf8")) as Script;

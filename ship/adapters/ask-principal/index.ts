@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 // ask-principal adapter (plan M1.7): a manual gate standing in for a real Deploy or Verify system, for setups that
 // don't have one yet — it asks the Principal directly instead. Cross-cutting: serves both `deploy` and `verify`
-// (plan §6 amendment), so it stays flat under adapters/, not nested per port.
+// (plan §6 amendment), so it lives in its own module folder (adapters/ask-principal/) rather than a per-port
+// folder — it isn't split into port-specific variants.
 // argv: ask-principal <port> <op>, port one of "deploy" | "verify".
 //   run, no `answer`  → question{about: "manual", prompt, options}: [live, not_live] for deploy, [pass, fail] for verify
 //   run, `answer` set → the matching ok{verdict}; a negative answer (not_live/fail) also attaches findings:[{text: answer}]
 //   cancel            → nothing runs in the background, so there is never anything to cancel: ok{}
-import type { DeployPayload, VerifyPayload } from "../src/contracts/ports";
-import { schemaFor } from "../src/contracts/ports";
-import { check } from "../src/contracts/validate";
+import type { DeployPayload, VerifyPayload } from "../../src/contracts/ports";
+import { schemaFor } from "../../src/contracts/ports";
+import { check } from "../../src/contracts/validate";
 
 type GatedPort = "deploy" | "verify";
 type RunPayload = DeployPayload | VerifyPayload;
