@@ -168,14 +168,35 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   steered by this host's unrelated tooling — **but** `--bare` also disables
   OAuth/keychain auth, so it only works when the adapter's capability-profile
   env supplies `ANTHROPIC_API_KEY` directly. **[verified]** the tradeoff
-  exists; **[unverified]** which auth path M1's actual deployment will use.
+  exists; **resolved by M1.12 dogfooding**, see the next bullet.
+- **Skill/plugin contamination, and `--safe-mode` as the fix (M1.12
+  dogfood finding).** Running the real agent WITHOUT `--bare`/`--safe-mode`
+  (to keep OAuth auth working, per the bullet above) let it auto-discover
+  this machine's own installed skills/plugins — including an unrelated
+  project's `dod:dod-define` skill, whose "MANDATORY self-invoke before any
+  edit" rule the agent then applied to the WorkItem it was merely asked to
+  *define*. It spontaneously opened its own DoD contract, tried to spawn a
+  context-collector sub-agent (denied, no permission mode configured), and
+  got stuck referencing an internal "verification table" that never reached
+  the `question` field's schema — the ship Principal saw a dangling
+  reference with no way to see the table. **[verified]** real, reproducible:
+  the exact same host machine, same install, contaminates a plain `-p`
+  call. **Fix:** always pass `--safe-mode` (not `--bare`) — it disables the
+  same ambient CLAUDE.md/skills/plugins/hooks but, unlike `--bare`, leaves
+  OAuth/keychain auth working normally. A project that wants specific
+  skills/plugins available during define/implement/check opts in
+  explicitly via repeatable `--plugin-dir <path>`, never by ambient
+  accident. **[verified]** `--safe-mode` is documented to keep "auth, model
+  selection, built-in tools and plugins, and permissions" working; adopted
+  in `agent-claude.ts` (M1.9-M1.11) accordingly.
 
 Net for `agent-claude.ts`: build the payload → prompt text, call `claude -p
---output-format json --json-schema '<schema for the op>' [--resume
-<stored-session-id>]`, parse stdout as JSON unconditionally, and branch on
-`is_error` (→ `failed`, nothing committed yet, or a crash if a commit already
-happened per the crash-vs-`failed` rule above) vs. `structured_output` present
-(→ map its fields to the op's `ok`/`question` body).
+--output-format json --json-schema '<schema for the op>' --safe-mode
+[--plugin-dir <dir>]... [--resume <stored-session-id>]`, parse stdout as
+JSON unconditionally, and branch on `is_error` (→ `failed`, nothing
+committed yet, or a crash if a commit already happened per the
+crash-vs-`failed` rule above) vs. `structured_output` present (→ map its
+fields to the op's `ok`/`question` body).
 
 ## Idempotency on the command id
 

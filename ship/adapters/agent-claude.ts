@@ -2,16 +2,24 @@
 // Coding-agent adapter (plan §6 M1.9–M1.11; spike M1.8, docs/adapters.md). Cross-cutting: serves `define`,
 // `implement` and `check` (plan §6 amendment), so it stays flat under adapters/, not nested per port.
 //
-// argv: [--agent-bin <path>] <port> <op>, port one of "define" | "implement" | "check"; --agent-bin defaults
-// to `claude` on PATH (a fake executable in tests, per M1.9's own test spec). stdin: Stdin (§3.1); stdout: one
-// Result JSON line.
+// argv: [--agent-bin <path>] [--plugin-dir <path>]... <port> <op>, port one of "define" | "implement" |
+// "check"; --agent-bin defaults to `claude` on PATH (a fake executable in tests, per M1.9's own test spec).
+// stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
-// [--resume <session-id>]` (M1.8 spike shape), parses stdout as JSON unconditionally, and branches on
-// `is_error` vs `.structured_output`. `define` and `implement` each keep their OWN session id, keyed by
-// Delivery, in their own small state file (P5: adapters own their state, never read another's — `implement`
-// never reads `define`'s file, and vice versa). `check` never stores or reads a session id: P8 requires a
-// fresh session on every call, so it simply never touches either state file.
+// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>]` (M1.8 spike shape), parses stdout as JSON
+// unconditionally, and branches on `is_error` vs `.structured_output`. `--safe-mode` is always passed: found
+// by dogfooding M1.12, a real agent invoked WITHOUT it auto-discovers the host machine's own CLAUDE.md and
+// installed skills/plugins/hooks and can apply the invoking session's own operational rules (e.g. another
+// project's "always self-invoke this before editing" skill) to the WorkItem it is meant to just define/
+// implement/check — contamination from whatever happens to be on the machine, not the project. `--safe-mode`
+// (not `--bare`) is the fix: it disables the same ambient customizations but leaves OAuth/keychain auth
+// working, unlike `--bare` (auth-only, see docs/adapters.md's spike section). A project that WANTS the agent
+// to have specific skills/plugins during these steps opts in explicitly via repeatable `--plugin-dir <path>`
+// in its own adapter config, never by ambient accident. `define` and `implement` each keep their OWN session
+// id, keyed by Delivery, in their own small state file (P5: adapters own their state, never read another's —
+// `implement` never reads `define`'s file, and vice versa). `check` never stores or reads a session id: P8
+// requires a fresh session on every call, so it simply never touches either state file.
 //
 // State file: ~/.local/state/ship/agent-claude/<port>.json = { [delivery]: session_id }. `check` has none.
 //
@@ -29,7 +37,7 @@ import { check } from "../src/contracts/validate";
 type StepPort = "define" | "implement" | "check";
 const STEP_PORTS = ["define", "implement", "check"] as const satisfies readonly StepPort[];
 
-type Ctx = { agentBin: string };
+type Ctx = { agentBin: string; pluginDirs: string[] };
 
 /** Thrown instead of returning `failed`, once a real commit has happened (implement only): a crash, never caught. */
 class Crash extends Error {}
@@ -56,10 +64,11 @@ const writeState = (port: "define" | "implement", state: Record<string, string>)
 type AgentReply = { is_error: boolean; result: string; structured_output?: unknown; session_id?: string };
 
 const callAgent = async (
-  agentBin: string, prompt: string, schema: unknown, resume: string | undefined, cwd?: string,
+  ctx: Ctx, prompt: string, schema: unknown, resume: string | undefined, cwd?: string,
 ): Promise<AgentReply> => {
   const args = [
-    agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema),
+    ctx.agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode",
+    ...ctx.pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
     ...(resume ? ["--resume", resume] : []),
   ];
   const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
@@ -103,7 +112,7 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
   const sessionId = resume ? state[stdin.delivery] : undefined;
-  const reply = await callAgent(ctx.agentBin, definePrompt(stdin.workItem, payload), defineSchema, sessionId);
+  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload), defineSchema, sessionId);
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
@@ -149,7 +158,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 
   let reply: AgentReply;
   try {
-    reply = await callAgent(ctx.agentBin, prompt, implementSchema, sessionId, workspace);
+    reply = await callAgent(ctx, prompt, implementSchema, sessionId, workspace);
   } catch (error) {
     if (headSha(workspace) !== before) throw new Crash(`agent call errored after a commit: ${String(error)}`);
     throw error;
@@ -222,7 +231,7 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const prompt = checkPrompt(stdin.workItem, payload);
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever.
-  const reply = await callAgent(ctx.agentBin, prompt, checkSchema, undefined, stdin.workspace ?? undefined);
+  const reply = await callAgent(ctx, prompt, checkSchema, undefined, stdin.workspace ?? undefined);
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
   let result: unknown;
@@ -252,17 +261,25 @@ const RUN: Record<StepPort, (ctx: Ctx, stdin: Stdin) => Promise<unknown>> = {
 };
 const cancelOp = async (): Promise<unknown> => ({ status: "ok", body: {} }); // nothing runs in the background
 
-/** argv after the script: `[--agent-bin <path>] <port> <op>`; --agent-bin defaults to `claude` on PATH. */
-const parseArgs = (args: string[]): { agentBin: string; port: string | undefined; op: string | undefined } => {
-  const at = args.indexOf("--agent-bin");
-  const agentBin = at === -1 ? "claude" : (args[at + 1] ?? "claude");
-  const positional = at === -1 ? args : [...args.slice(0, at), ...args.slice(at + 2)];
+/** argv after the script: `[--agent-bin <path>] [--plugin-dir <path>]... <port> <op>`; --agent-bin defaults
+ *  to `claude` on PATH; --plugin-dir is repeatable and defaults to none (a clean --safe-mode agent). */
+const parseArgs = (
+  args: string[],
+): { agentBin: string; pluginDirs: string[]; port: string | undefined; op: string | undefined } => {
+  let agentBin = "claude";
+  const pluginDirs: string[] = [];
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--agent-bin") { agentBin = args[i + 1] ?? agentBin; i += 1; }
+    else if (args[i] === "--plugin-dir") { if (args[i + 1] !== undefined) pluginDirs.push(args[i + 1] as string); i += 1; }
+    else positional.push(args[i] as string);
+  }
   const [port, op] = positional;
-  return { agentBin, port, op };
+  return { agentBin, pluginDirs, port, op };
 };
 
 const main = async (): Promise<unknown> => {
-  const { agentBin, port, op } = parseArgs(process.argv.slice(2));
+  const { agentBin, pluginDirs, port, op } = parseArgs(process.argv.slice(2));
   const stepPort = (STEP_PORTS as readonly string[]).includes(port ?? "") ? (port as StepPort) : undefined;
   const contract = stepPort && op ? schemaFor(stepPort, op) : undefined;
   const handler = op === "run" ? RUN[stepPort as StepPort] : op === "cancel" ? cancelOp : undefined;
@@ -270,7 +287,7 @@ const main = async (): Promise<unknown> => {
   const stdin = JSON.parse(await Bun.stdin.text()) as Stdin;
   const invalid = check(contract.payload, stdin.payload);
   if (invalid) throw new Error(`invalid payload: ${invalid}`);
-  return op === "cancel" ? cancelOp() : RUN[stepPort]({ agentBin }, stdin);
+  return op === "cancel" ? cancelOp() : RUN[stepPort]({ agentBin, pluginDirs }, stdin);
 };
 
 try {

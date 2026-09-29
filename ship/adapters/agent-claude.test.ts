@@ -72,16 +72,18 @@ type CallOpts = {
   delivery?: string;
   workspace?: string | null;
   log?: string;
+  pluginDirs?: string[];
 };
 
-/** Run `agent-claude.ts --agent-bin <fake> <port> <op>` with a Stdin envelope, as the Runner does. */
+/** Run `agent-claude.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
 const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown }> => {
   const delivery = opts.delivery ?? "PROJ-1-1";
   const stdin: Stdin = {
     id: `${delivery}/${opts.port}-1`, delivery, port: opts.port, op: opts.op,
     workItem, workspace: opts.workspace ?? null, payload: opts.payload, tools: [],
   };
-  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, opts.port, opts.op], {
+  const pluginDirArgs = (opts.pluginDirs ?? []).flatMap((dir) => ["--plugin-dir", dir]);
+  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, opts.port, opts.op], {
     stdin: new Blob([JSON.stringify(stdin)]),
     stdout: "pipe",
     stderr: "pipe",
@@ -145,6 +147,31 @@ describe("agent-claude adapter: define", () => {
     expect(first).not.toContain("--resume");
     expect(second).toContain("--resume");
     expect(second![second!.indexOf("--resume") + 1]).toBe("sess-def-2");
+  });
+
+  test("always passes --safe-mode to the agent bin", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
+    });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log });
+    expect(readLog(log)[0]).toContain("--safe-mode");
+  });
+
+  test("forwards configured --plugin-dir entries to the agent bin, in order", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
+    });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, pluginDirs: ["/a/dod", "/b/other"] });
+    const argv = readLog(log)[0]!;
+    expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(2);
+    expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
+    expect(argv[argv.lastIndexOf("--plugin-dir") + 1]).toBe("/b/other");
   });
 });
 
