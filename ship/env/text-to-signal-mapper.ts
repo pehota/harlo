@@ -81,7 +81,9 @@ export const lastBlockFor = (text: string, delivery: string, id: string): Block 
 };
 
 // ── Matching ──
-// Aliases only ever pick between the candidates a gate offered, by polarity. Exact option names need no vocabulary.
+// Decision (AC2/AC4): these word lists are the alias mechanism and nothing else. An alias ("yes", "no") can only
+// select an option by the option's polarity, and the candidate lines carry none, so a small polarity vocabulary is
+// unavoidable. Exact option names never consult it; an alias fitting zero or several options is refused.
 const POSITIVE_ALIASES = ["yes", "y", "yep", "yeah", "ok", "okay", "sure", "lgtm", "looks good", "looks fine", "good", "go ahead", "approve", "accept"];
 const NEGATIVE_ALIASES = ["no", "n", "nope", "reject", "deny", "not ok", "not good", "fail"];
 const POSITIVE_STEMS = new Set(["accept", "approve", "pass", "live", "yes", "ok", "good", "go", "ship", "land", "done"]);
@@ -118,7 +120,8 @@ export const mapReply = (reply: string, block: Block): Mapped => {
   const text = reply.trim();
   if (text === "") return refuse("empty reply");
 
-  // An open-ended ask/decide prints one line whose answer is the placeholder to hand-replace: the whole reply is the answer.
+  // Deliberate extension beyond AC4/AC5: this is the one case where the printed JSON's `answer` is rewritten, and
+  // the placeholder is the Principal's printed convention. An open-ended ask/decide prints one line whose answer is the placeholder to hand-replace: the whole reply is the answer.
   const [only] = block.candidates;
   if (block.candidates.length === 1 && only!.answer === PLACEHOLDER) {
     const body = JSON.parse(only!.json) as { body: Record<string, unknown> };
