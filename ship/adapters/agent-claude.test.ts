@@ -173,6 +173,20 @@ describe("agent-claude adapter: define", () => {
     expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
     expect(argv[argv.lastIndexOf("--plugin-dir") + 1]).toBe("/b/other");
   });
+
+  test("never lets the agent edit files: --disallowedTools Edit Write NotebookEdit", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
+    });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log });
+    const argv = readLog(log)[0]!;
+    const at = argv.indexOf("--disallowedTools");
+    expect(at).toBeGreaterThan(-1);
+    expect(argv.slice(at + 1, at + 4)).toEqual(["Edit", "Write", "NotebookEdit"]);
+  });
 });
 
 describe("agent-claude adapter: implement", () => {
@@ -291,6 +305,19 @@ describe("agent-claude adapter: check", () => {
     // assertion before this expectation ever ran).
     expect(exitCode).toBe(0);
     expect(stdout).toMatchObject({ status: "failed" });
+  });
+
+  test("never lets the agent edit files: --disallowedTools Edit Write NotebookEdit", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "ok", structured_output: { verdict: "pass" } });
+    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
+    await call({ port: "check", op: "run", payload, home, agentReplies, log });
+    const argv = readLog(log)[0]!;
+    const at = argv.indexOf("--disallowedTools");
+    expect(at).toBeGreaterThan(-1);
+    expect(argv.slice(at + 1, at + 4)).toEqual(["Edit", "Write", "NotebookEdit"]);
   });
 });
 

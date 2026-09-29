@@ -7,8 +7,13 @@
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
-// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>]` (M1.8 spike shape), parses stdout as JSON
-// unconditionally, and branches on `is_error` vs `.structured_output`. `--safe-mode` is always passed: found
+// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>] [--disallowedTools Edit Write NotebookEdit]`
+// (M1.8 spike shape), parses stdout as JSON unconditionally, and branches on `is_error` vs
+// `.structured_output`. Define and Check always get `--disallowedTools Edit Write NotebookEdit`: found by
+// dogfooding M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during Define
+// (or poke at files during Check) rather than stay in its planning/review role, then get stuck when headless
+// mode silently refuses the write — Implement is the only step allowed to touch files. `--safe-mode` is
+// always passed too: found
 // by dogfooding M1.12, a real agent invoked WITHOUT it auto-discovers the host machine's own CLAUDE.md and
 // installed skills/plugins/hooks and can apply the invoking session's own operational rules (e.g. another
 // project's "always self-invoke this before editing" skill) to the WorkItem it is meant to just define/
@@ -63,13 +68,20 @@ const writeState = (port: "define" | "implement", state: Record<string, string>)
 // ── The agent binary ──
 type AgentReply = { is_error: boolean; result: string; structured_output?: unknown; session_id?: string };
 
+/** Define and Check are planning/review steps, never editors (P1: control flow, including whether a change
+ *  happens, lives in the core, not the agent) — found by dogfooding M1.12: a fully-tooled real agent will
+ *  otherwise just try to make the edit itself during Define, then get stuck when headless mode silently
+ *  refuses the write. Implement is the only step allowed to touch files. */
+const NO_EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
+
 const callAgent = async (
-  ctx: Ctx, prompt: string, schema: unknown, resume: string | undefined, cwd?: string,
+  ctx: Ctx, prompt: string, schema: unknown, resume: string | undefined, cwd?: string, disallowedTools?: string[],
 ): Promise<AgentReply> => {
   const args = [
     ctx.agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode",
     ...ctx.pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
     ...(resume ? ["--resume", resume] : []),
+    ...(disallowedTools && disallowedTools.length > 0 ? ["--disallowedTools", ...disallowedTools] : []),
   ];
   const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
   // M1.8 spike: even a non-zero exit (e.g. auth failure) still prints one valid JSON object, so stdout is
@@ -112,7 +124,7 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
   const sessionId = resume ? state[stdin.delivery] : undefined;
-  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload), defineSchema, sessionId);
+  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload), defineSchema, sessionId, undefined, NO_EDIT_TOOLS);
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
@@ -231,7 +243,7 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const prompt = checkPrompt(stdin.workItem, payload);
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever.
-  const reply = await callAgent(ctx, prompt, checkSchema, undefined, stdin.workspace ?? undefined);
+  const reply = await callAgent(ctx, prompt, checkSchema, undefined, stdin.workspace ?? undefined, NO_EDIT_TOOLS);
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
   let result: unknown;
