@@ -107,6 +107,24 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   that session) and returns the same `session_id`, exit 0. Use the first
   call's `session_id` from its JSON reply — nothing needs to be invented or
   pre-assigned via `--session-id` for the resume case. **[verified]**
+- **A `question` field in the structured output.** Ran the real `defineSchema`
+  (`{criteria: string[], runbook: string[], question: string}`, none required)
+  against a deliberately underspecified WorkItem ("Make it better" / "Fix the
+  thing so it works properly"), instructing the agent to set `question` and
+  leave `criteria`/`runbook` empty when the request is too ambiguous. Two
+  separate calls both came back well-behaved: exit 0, `is_error:false`,
+  `structured_output.question` populated with a real clarifying question,
+  `criteria`/`runbook` both `[]`. e.g. `structured_output:
+  {"question":"Which thing needs fixing, and what does \"not working
+  properly\" look like — a specific error message, failing test, broken
+  feature, or file/component? Please point to the concrete symptom or
+  file.","criteria":[],"runbook":[]}`. Only tested with an explicit prompt
+  instruction to ask when ambiguous (mirroring what `definePrompt` already
+  says); an ambiguous WorkItem with no such instruction was not tried, so it's
+  unverified whether the agent volunteers a question unprompted. **[verified]**
+  for the instructed case that `defineRun`'s `if (out?.question) return
+  {status:"question", ...}` branch is reachable against the real CLI, not just
+  the fake test binary.
 - **Fresh session (P8, for Check).** A plain `claude -p ...` with no
   `--resume`/`--session-id` starts a new session every call; this is all
   Check needs to guarantee independence from Implement's session.
