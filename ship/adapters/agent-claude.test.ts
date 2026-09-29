@@ -247,6 +247,24 @@ describe("agent-claude adapter: check", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "ok", body });
   });
+
+  test("a 'decide' reply missing 'about' does not print a schema-violating Result (crash-worthy, not a bad ok)", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    // Even though checkSchema now requires `about` on a "decide" verdict, the agent's actual reply is never
+    // trusted blindly: the fake bin is free to hand back a schema-violating shape (a real agent might too),
+    // and the adapter must still refuse to forward it as a contract-violating `ok{verdict:"decide"}` Result.
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "r", structured_output: { verdict: "decide", findings: [{ text: "f2" }] },
+    });
+    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
+    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, agentReplies });
+    // Nothing was committed at Check time, so a clean `failed` is safe (and `call`'s own ajv check already
+    // asserts stdout fits the port's contract — a schema-violating `ok{verdict:"decide"}` would fail that
+    // assertion before this expectation ever ran).
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatchObject({ status: "failed" });
+  });
 });
 
 describe("agent-claude adapter: cancel", () => {

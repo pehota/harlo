@@ -111,6 +111,14 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   `--resume`/`--session-id` starts a new session every call; this is all
   Check needs to guarantee independence from Implement's session.
   **[verified]**
+- **Working directory.** `Bun.spawn([...], { cwd: <dir> })` genuinely runs the
+  agent inside `<dir>`: a call with a distinct `cwd` and a prompt asking the
+  agent to run `pwd` and report it (schema `{"type":"object","properties":
+  {"cwd":{"type":"string"}},"required":["cwd"]}`) returned
+  `structured_output.cwd` equal to the launch directory, byte-for-byte, both
+  via a plain `cd <dir> && claude -p ...` and via `Bun.spawn`'s own `cwd`
+  option. This is what `implement`/`check` rely on to run the agent inside
+  the Delivery's workspace. **[verified]**
 - **Auth failure.** With `--bare` (which forces `ANTHROPIC_API_KEY`/
   `apiKeyHelper` and never reads OAuth/keychain) and no key configured: process
   exit code **1**, and stdout is still one valid JSON object

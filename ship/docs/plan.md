@@ -962,7 +962,7 @@ The Runner starts no listeners. The environment must provide what follows.
 | Bun 1.4.x with `bun:test` `test.each` | **[verified]** Bun 1.4.2 |
 | `JSONSchemaType<T>` with `oneOf` unions and optional fields type-checks | **[verified]** ajv 8.20.0, TypeScript 7.0.2, 2-variant unions; larger unions **[unverified]** |
 | `linkSync` throws `EEXIST` atomically | **[verified]** macOS / Bun 1.4.2; Linux **[unverified]** |
-| Headless coding-agent CLI: structured output, session resume, a question field, exit codes | **[unverified]**; spike M1.8 |
+| Headless coding-agent CLI: structured output, session resume, a question field, exit codes | spike M1.8 done — structured output via inline `--json-schema`: **[verified]**; session resume via `--resume`: **[verified]**; working directory via `cwd`: **[verified]**; auth-failure exit code: **[verified]**; see docs/adapters.md's M1.8 spike section for detail |
 | Whether a quality-check plugin can serve as the Check adapter's internals | **[unverified]**; not read on purpose; adapter choice only |
 | A Jira webhook can reach the machine from the corporate network | **[unverified]**; plan uses polling |
 | Telegram `callback_data` limit (≈64 bytes) | handled by short tokens either way; exact limit **[unverified]** |

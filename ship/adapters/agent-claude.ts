@@ -168,22 +168,42 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 };
 
 // ── check ──
+// Keyed on `verdict`, mirroring `checkBody` in src/contracts/ports.ts: only the "decide" branch requires
+// `about`, so a schema-conformant "decide" reply can never omit it (a plain `enum`+`required: ["verdict"]`
+// shape let a conformant reply carry `verdict:"decide"` with no `about`, which checkRun then forwarded
+// unchecked into a Result that violated `checkBody`'s own schema).
+const findingSchema = {
+  type: "object",
+  properties: { text: { type: "string" }, ref: { type: "string" } },
+  required: ["text"],
+} as const;
+
 const checkSchema = {
   type: "object",
-  properties: {
-    verdict: { type: "string", enum: ["pass", "fix", "decide"] },
-    about: { type: "string", enum: ["scope", "advisory"] },
-    findings: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { text: { type: "string" }, ref: { type: "string" } },
-        required: ["text"],
-      },
+  oneOf: [
+    {
+      type: "object",
+      properties: { verdict: { type: "string", const: "pass" } },
+      required: ["verdict"],
+      additionalProperties: false,
     },
-  },
-  required: ["verdict"],
-  additionalProperties: false,
+    {
+      type: "object",
+      properties: { verdict: { type: "string", const: "fix" }, findings: { type: "array", items: findingSchema } },
+      required: ["verdict", "findings"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        verdict: { type: "string", const: "decide" },
+        about: { type: "string", enum: ["scope", "advisory"] },
+        findings: { type: "array", items: findingSchema },
+      },
+      required: ["verdict", "about", "findings"],
+      additionalProperties: false,
+    },
+  ],
 } as const;
 
 const checkPrompt = (workItem: WorkItem, payload: CheckPayload): string => {
@@ -204,11 +224,27 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   // and no read of either `define`'s or `implement`'s state file, ever.
   const reply = await callAgent(ctx.agentBin, prompt, checkSchema, undefined, stdin.workspace ?? undefined);
   if (reply.is_error) return { status: "failed", info: reply.result };
-  const out = reply.structured_output as { verdict?: string; about?: "scope" | "advisory"; findings?: Finding[] } | undefined;
-  if (out?.verdict === "pass") return { status: "ok", body: { verdict: "pass" } };
-  if (out?.verdict === "fix") return { status: "ok", body: { verdict: "fix", findings: out.findings ?? [] } };
-  if (out?.verdict === "decide") return { status: "ok", body: { verdict: "decide", about: out.about, findings: out.findings ?? [] } };
-  throw new Error(`agent reply had an unexpected verdict: ${reply.result}`);
+  const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
+  let result: unknown;
+  if (out?.verdict === "pass") result = { status: "ok", body: { verdict: "pass" } };
+  else if (out?.verdict === "fix") result = { status: "ok", body: { verdict: "fix", findings: out.findings ?? [] } };
+  else if (out?.verdict === "decide") {
+    // A schema-conformant reply can't get here with `about` missing/invalid any more (see checkSchema above),
+    // but the agent's actual reply is never trusted blindly: guard again at runtime, never forward an `about`
+    // that isn't one of the two values `checkBody` accepts, so a bad reply can't produce a contract-violating
+    // Result. Nothing has been committed at Check time, so `failed` (via the top-level catch, below) is safe.
+    if (out.about !== "scope" && out.about !== "advisory") {
+      throw new Error(`agent reply had verdict "decide" without a valid "about" (scope|advisory): ${reply.result}`);
+    }
+    result = { status: "ok", body: { verdict: "decide", about: out.about, findings: out.findings ?? [] } };
+  } else {
+    throw new Error(`agent reply had an unexpected verdict: ${reply.result}`);
+  }
+  // Belt-and-braces: validate the mapped Result against the port's own stdout contract before printing it,
+  // mirroring how adapters/state/files.ts validates its own stored payload on the way in.
+  const invalid = check(schemaFor("check", "run")!.stdout, result);
+  if (invalid) throw new Error(`agent-claude check would have printed a contract-violating Result: ${invalid}`);
+  return result;
 };
 
 const RUN: Record<StepPort, (ctx: Ctx, stdin: Stdin) => Promise<unknown>> = {
