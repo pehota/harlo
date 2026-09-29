@@ -14,12 +14,15 @@
 // locally, matching how the pollers avoid importing runner internals.
 //
 // argv: --ship <path to bin/ship> (--key <workItem-key> | --delivery <id>) [--interval <ms>]
-//       [--grace <ms>] [--max-runtime <ms>] --state <state-adapter argv…>
+//       [--grace <ms>] [--max-runtime <ms>] [--gate-log <file>] --state <state-adapter argv…>
 //   `--key` starts a new Delivery via `ship start <key>`; `--delivery` drives an already-started one (no
 //   `ship start` call). `--state` takes the rest of argv, passed straight through to `poll/stalled.ts`: the
 //   state adapter's own spawn argv, exactly as the machine config's `state` entry does. `--grace`/`--max-runtime`
 //   are forwarded to `poll/stalled.ts` only when given (it supplies its own defaults otherwise). `--interval`
-//   defaults to 5000ms.
+//   defaults to 5000ms. `--gate-log` names the file the Principal adapter appends gates to (its `--out`): each
+//   pass, content appended since the last pass is echoed to stdout once, so a new gate appears in this terminal.
+//   Content already there at startup is not re-printed.
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { DeliveryId } from "../src/contracts/common";
 
@@ -35,7 +38,7 @@ const parseArgs = (
   args: string[],
 ): {
   ship: string | undefined; key: string | undefined; delivery: DeliveryId | undefined;
-  interval: number; grace: string | undefined; maxRuntime: string | undefined; state: string[];
+  interval: number; grace: string | undefined; maxRuntime: string | undefined; gateLog: string | undefined; state: string[];
 } => {
   const stateAt = args.indexOf("--state");
   const head = stateAt === -1 ? args : args.slice(0, stateAt);
@@ -45,7 +48,7 @@ const parseArgs = (
   return {
     ship: flag("--ship"), key: flag("--key"), delivery: flag("--delivery"),
     interval: num("--interval", DEFAULT_INTERVAL_MS), grace: flag("--grace"), maxRuntime: flag("--max-runtime"),
-    state,
+    gateLog: flag("--gate-log"), state,
   };
 };
 
@@ -67,6 +70,18 @@ const runBun = async (args: string[]): Promise<{ exitCode: number; stdout: strin
   return { exitCode, stdout, stderr };
 };
 
+/** Bytes of `path` (0 if it does not exist yet). */
+const sizeOf = (path: string): number => (existsSync(path) ? statSync(path).size : 0);
+
+/** Content appended to `path` since byte `offset`, and the new offset; a truncated file is re-read from its start. */
+export const readAppended = async (path: string, offset: number): Promise<{ text: string; offset: number }> => {
+  const size = sizeOf(path);
+  const from = size < offset ? 0 : offset;
+  if (size === from) return { text: "", offset: size };
+  const bytes = new Uint8Array(await Bun.file(path).slice(from, size).arrayBuffer());
+  return { text: new TextDecoder().decode(bytes), offset: size };
+};
+
 /** `--delivery` drives it directly; `--key` starts a fresh one. A failed or delivery-less start is fatal. */
 const resolveDelivery = async (ship: string, key: string | undefined, delivery: DeliveryId | undefined): Promise<DeliveryId> => {
   if (delivery !== undefined) return delivery;
@@ -80,14 +95,15 @@ const resolveDelivery = async (ship: string, key: string | undefined, delivery: 
 };
 
 const main = async (): Promise<void> => {
-  const { ship, key, delivery: deliveryArg, interval, grace, maxRuntime, state } = parseArgs(process.argv.slice(2));
+  const { ship, key, delivery: deliveryArg, interval, grace, maxRuntime, gateLog, state } = parseArgs(process.argv.slice(2));
   if (!ship || (!key && !deliveryArg) || state.length === 0) {
     throw new Error(
       "usage: drive.ts --ship <path to bin/ship> (--key <workItem-key> | --delivery <id>) " +
-        "[--interval <ms>] [--grace <ms>] [--max-runtime <ms>] --state <state-adapter argv…>",
+        "[--interval <ms>] [--grace <ms>] [--max-runtime <ms>] [--gate-log <file>] --state <state-adapter argv…>",
     );
   }
 
+  let gateOffset = gateLog === undefined ? 0 : sizeOf(gateLog); // before `ship start`: its first gate is new
   const delivery = await resolveDelivery(ship, key, deliveryArg);
 
   for (;;) {
@@ -101,6 +117,12 @@ const main = async (): Promise<void> => {
     ];
     const stalled = await runBun(stalledArgs);
     if (stalled.stdout) process.stdout.write(stalled.stdout); // stall flags: for a human watching
+
+    if (gateLog !== undefined) {
+      const appended = await readAppended(gateLog, gateOffset);
+      gateOffset = appended.offset;
+      if (appended.text) process.stdout.write(appended.text);
+    }
 
     const status = await runShip(ship, ["status", delivery]);
     if (status.exitCode !== 0) throw new Error(`ship status ${delivery}: exit ${status.exitCode}\n${status.stderr}`);
