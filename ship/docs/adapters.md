@@ -118,13 +118,19 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   {"question":"Which thing needs fixing, and what does \"not working
   properly\" look like — a specific error message, failing test, broken
   feature, or file/component? Please point to the concrete symptom or
-  file.","criteria":[],"runbook":[]}`. Only tested with an explicit prompt
-  instruction to ask when ambiguous (mirroring what `definePrompt` already
-  says); an ambiguous WorkItem with no such instruction was not tried, so it's
-  unverified whether the agent volunteers a question unprompted. **[verified]**
-  for the instructed case that `defineRun`'s `if (out?.question) return
-  {status:"question", ...}` branch is reachable against the real CLI, not just
-  the fake test binary.
+  file.","criteria":[],"runbook":[]}`. Only tested with an explicit ad hoc
+  prompt instruction to ask when ambiguous, added on top of the spike's test
+  prompt — the shipped `definePrompt` (agent-claude.ts) does **not** currently
+  include any such instruction, so this does not mirror production; an
+  ambiguous WorkItem run through the real `definePrompt` as it ships today
+  was not tried, so it's unverified whether the agent volunteers a question
+  unprompted, and the `question` branch below may never actually trigger in
+  production until `definePrompt` is given an ask-when-ambiguous instruction.
+  **[verified]** only that `defineRun`'s `if (out?.question) return
+  {status:"question", ...}` branch is reachable and correctly wired against
+  the real CLI (not just the fake test binary) when the agent is explicitly
+  told to ask — **not** that the shipped define op will ask clarifying
+  questions on ambiguous WorkItems today.
 - **Fresh session (P8, for Check).** A plain `claude -p ...` with no
   `--resume`/`--session-id` starts a new session every call; this is all
   Check needs to guarantee independence from Implement's session.
