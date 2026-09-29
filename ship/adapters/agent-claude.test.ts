@@ -180,6 +180,20 @@ describe("agent-claude adapter: define", () => {
     expect(readLog(log)[0]).toContain("--safe-mode");
   });
 
+  test("always passes --permission-mode bypassPermissions, unconditionally", async () => {
+    // Unattended calls have no person at a terminal to approve anything, so the loosest mode is always
+    // correct — this is not conditional on the op the way --disallowedTools is.
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
+    });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log });
+    const argv = readLog(log)[0]!;
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+  });
+
   test("forwards configured --plugin-dir entries to the agent bin, in order", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
@@ -222,7 +236,7 @@ describe("agent-claude adapter: implement", () => {
     expect(readLog(log)[0]).not.toContain("--resume");
   });
 
-  test("passes --permission-mode acceptEdits so headless mode doesn't silently deny its own edits", async () => {
+  test("passes --permission-mode bypassPermissions so headless mode doesn't silently deny its own edits", async () => {
     const home = tempDir("ship-agent-home-");
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
@@ -231,7 +245,7 @@ describe("agent-claude adapter: implement", () => {
     const payload: ImplementPayload = { criteria: ["c"], findings: [] };
     await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     const argv = readLog(log)[0]!;
-    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
   });
 
   test("commits in the workspace and returns ok{changeset: ship/<d>@<sha>} from a real commit", async () => {

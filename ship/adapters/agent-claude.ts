@@ -7,16 +7,17 @@
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
-// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>] [--disallowedTools Edit Write NotebookEdit]
-// [--permission-mode acceptEdits]` (M1.8 spike shape), parses stdout as JSON unconditionally, and branches on
-// `is_error` vs `.structured_output`. Define and Check always get `--disallowedTools Edit Write NotebookEdit`:
-// found by dogfooding M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during
-// Define (or poke at files during Check) rather than stay in its planning/review role, then get stuck when
-// headless mode silently refuses the write. Implement is the only step allowed to touch files, and — also
-// found by dogfooding M1.12 — it needs `--permission-mode acceptEdits` to actually use that access: headless
-// `-p` mode with no permission mode set silently DENIES every Edit/Write prompt, so without this flag
-// Implement always "finishes without committing" no matter how clear the criteria are. `--safe-mode` is
-// always passed too: found
+// --safe-mode --permission-mode bypassPermissions [--plugin-dir <dir>]... [--resume <session-id>]
+// [--disallowedTools Edit Write NotebookEdit]` (M1.8 spike shape), parses stdout as JSON unconditionally, and
+// branches on `is_error` vs `.structured_output`. `--permission-mode bypassPermissions` is always passed,
+// unconditionally, on every call: these are unattended calls with no person at a terminal to approve
+// anything, so the loosest mode is simply always correct — found by dogfooding M1.12, headless `-p` mode with
+// no permission mode set silently DENIES every Edit/Write prompt, so Implement kept "finishing without
+// committing" no matter how clear the criteria were, until this was added. What actually keeps Define/Check
+// read-only is `--disallowedTools Edit Write NotebookEdit`, not the permission mode: found by dogfooding
+// M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during Define (or poke at
+// files during Check) rather than stay in its planning/review role. Implement is the only step allowed to
+// touch files. `--safe-mode` is always passed too: found
 // by dogfooding M1.12, a real agent invoked WITHOUT it auto-discovers the host machine's own CLAUDE.md and
 // installed skills/plugins/hooks and can apply the invoking session's own operational rules (e.g. another
 // project's "always self-invoke this before editing" skill) to the WorkItem it is meant to just define/
@@ -77,14 +78,20 @@ type AgentReply = { is_error: boolean; result: string; structured_output?: unkno
  *  refuses the write. Implement is the only step allowed to touch files. */
 const NO_EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
-const callAgent = async (
-  ctx: Ctx, prompt: string, schema: unknown, resume: string | undefined, cwd?: string, disallowedTools?: string[],
-  permissionMode?: string,
-): Promise<AgentReply> => {
+type CallAgentArgs = {
+  ctx: Ctx; prompt: string; schema: unknown; resume: string | undefined; cwd?: string; disallowedTools?: string[];
+};
+
+/** Every real call runs unattended, so permission mode is always the loosest available
+ *  (`bypassPermissions`, not `acceptEdits`) — there is no person at a terminal to approve anything, and
+ *  --disallowedTools is what actually keeps Define/Check from touching files, not the permission mode. Found
+ *  by dogfooding M1.12: threading a per-call permission-mode override through every call site added
+ *  plumbing for a value that should just always be this. */
+const callAgent = async ({ ctx, prompt, schema, resume, cwd, disallowedTools }: CallAgentArgs): Promise<AgentReply> => {
   const args = [
     ctx.agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode",
+    "--permission-mode", "bypassPermissions",
     ...ctx.pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
-    ...(permissionMode ? ["--permission-mode", permissionMode] : []),
     ...(resume ? ["--resume", resume] : []),
     ...(disallowedTools && disallowedTools.length > 0 ? ["--disallowedTools", ...disallowedTools] : []),
   ];
@@ -137,7 +144,10 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
   const sessionId = resume ? state[stdin.delivery] : undefined;
-  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload, resume), defineSchema, sessionId, undefined, NO_EDIT_TOOLS);
+  const reply = await callAgent({
+    ctx, prompt: definePrompt(stdin.workItem, payload, resume), schema: defineSchema, resume: sessionId,
+    disallowedTools: NO_EDIT_TOOLS,
+  });
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
@@ -189,7 +199,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 
   let reply: AgentReply;
   try {
-    reply = await callAgent(ctx, prompt, implementSchema, sessionId, workspace, undefined, "acceptEdits");
+    reply = await callAgent({ ctx, prompt, schema: implementSchema, resume: sessionId, cwd: workspace });
   } catch (error) {
     if (headSha(workspace) !== before) throw new Crash(`agent call errored after a commit: ${String(error)}`);
     throw error;
@@ -250,7 +260,9 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const prompt = checkPrompt(stdin.workItem, payload);
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever.
-  const reply = await callAgent(ctx, prompt, checkSchema, undefined, stdin.workspace ?? undefined, NO_EDIT_TOOLS);
+  const reply = await callAgent({
+    ctx, prompt, schema: checkSchema, resume: undefined, cwd: stdin.workspace ?? undefined, disallowedTools: NO_EDIT_TOOLS,
+  });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
   let result: unknown;
