@@ -218,32 +218,20 @@ const findingSchema = {
   required: ["text"],
 } as const;
 
+// Flat, not a top-level oneOf: found by dogfooding M1.12, the real API rejects a tool input_schema with
+// oneOf/allOf/anyOf at its root ("400 ... does not support oneOf, allOf, or anyOf at the top level") — the
+// f3 fix's schema shape worked only against the fake test bin, never the real CLI. The runtime guard in
+// checkRun below (not the schema) is what actually enforces "about" on a "decide" verdict; this schema is
+// best-effort guidance for the agent, not a contract the API can validate structurally.
 const checkSchema = {
   type: "object",
-  oneOf: [
-    {
-      type: "object",
-      properties: { verdict: { type: "string", const: "pass" } },
-      required: ["verdict"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      properties: { verdict: { type: "string", const: "fix" }, findings: { type: "array", items: findingSchema } },
-      required: ["verdict", "findings"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      properties: {
-        verdict: { type: "string", const: "decide" },
-        about: { type: "string", enum: ["scope", "advisory"] },
-        findings: { type: "array", items: findingSchema },
-      },
-      required: ["verdict", "about", "findings"],
-      additionalProperties: false,
-    },
-  ],
+  properties: {
+    verdict: { type: "string", enum: ["pass", "fix", "decide"] },
+    about: { type: "string", enum: ["scope", "advisory"] },
+    findings: { type: "array", items: findingSchema },
+  },
+  required: ["verdict"],
+  additionalProperties: false,
 } as const;
 
 const checkPrompt = (workItem: WorkItem, payload: CheckPayload): string => {
