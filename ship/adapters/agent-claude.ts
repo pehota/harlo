@@ -7,12 +7,15 @@
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
-// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>] [--disallowedTools Edit Write NotebookEdit]`
-// (M1.8 spike shape), parses stdout as JSON unconditionally, and branches on `is_error` vs
-// `.structured_output`. Define and Check always get `--disallowedTools Edit Write NotebookEdit`: found by
-// dogfooding M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during Define
-// (or poke at files during Check) rather than stay in its planning/review role, then get stuck when headless
-// mode silently refuses the write — Implement is the only step allowed to touch files. `--safe-mode` is
+// --safe-mode [--plugin-dir <dir>]... [--resume <session-id>] [--disallowedTools Edit Write NotebookEdit]
+// [--permission-mode acceptEdits]` (M1.8 spike shape), parses stdout as JSON unconditionally, and branches on
+// `is_error` vs `.structured_output`. Define and Check always get `--disallowedTools Edit Write NotebookEdit`:
+// found by dogfooding M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during
+// Define (or poke at files during Check) rather than stay in its planning/review role, then get stuck when
+// headless mode silently refuses the write. Implement is the only step allowed to touch files, and — also
+// found by dogfooding M1.12 — it needs `--permission-mode acceptEdits` to actually use that access: headless
+// `-p` mode with no permission mode set silently DENIES every Edit/Write prompt, so without this flag
+// Implement always "finishes without committing" no matter how clear the criteria are. `--safe-mode` is
 // always passed too: found
 // by dogfooding M1.12, a real agent invoked WITHOUT it auto-discovers the host machine's own CLAUDE.md and
 // installed skills/plugins/hooks and can apply the invoking session's own operational rules (e.g. another
@@ -76,10 +79,12 @@ const NO_EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
 const callAgent = async (
   ctx: Ctx, prompt: string, schema: unknown, resume: string | undefined, cwd?: string, disallowedTools?: string[],
+  permissionMode?: string,
 ): Promise<AgentReply> => {
   const args = [
     ctx.agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode",
     ...ctx.pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
+    ...(permissionMode ? ["--permission-mode", permissionMode] : []),
     ...(resume ? ["--resume", resume] : []),
     ...(disallowedTools && disallowedTools.length > 0 ? ["--disallowedTools", ...disallowedTools] : []),
   ];
@@ -184,7 +189,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 
   let reply: AgentReply;
   try {
-    reply = await callAgent(ctx, prompt, implementSchema, sessionId, workspace);
+    reply = await callAgent(ctx, prompt, implementSchema, sessionId, workspace, undefined, "acceptEdits");
   } catch (error) {
     if (headSha(workspace) !== before) throw new Crash(`agent call errored after a commit: ${String(error)}`);
     throw error;
