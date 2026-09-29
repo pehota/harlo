@@ -80,24 +80,31 @@ ship/
       *.test.ts
     cli.ts                  # verbs, exit codes, one JSON line out
   adapters/                 # one executable per adapter; each takes <port> <op>
-    state-files.ts          # M0
-    principal-terminal.ts   # M0
-    fake.ts                 # M0, tests only: scripted by a fixture file
-    workspace-worktree.ts   # M1
-    tracker-md.ts           # M1
-    integrate-local.ts      # M1
-    ask-principal.ts        # M1 (serves deploy + verify)
-    agent-claude.ts         # M1 (serves define, implement, check; later verify)
-    principal-telegram.ts   # M2
-    tracker-github.ts       # M2
-    tracker-jira.ts         # M3
-    integrate-pr.ts         # M3
-    deploy-gha.ts           # M3
+    state/files.ts          # M0
+    principal/index.ts      # M0. Single adapter; terminal vs. Telegram are
+                             #   configurable transports inside it, not
+                             #   separate executables **[amend, synced]**
+    fake.ts                 # M0, tests only: scripted by a fixture file; cross-cutting, stays flat
+    workspace/worktree.ts   # M1
+    tracker/md.ts           # M1
+    tracker/github.ts       # M2
+    tracker/jira.ts         # M3
+    integrate/local.ts      # M1
+    integrate/pr.ts         # M3
+    deploy/gha.ts           # M3
+    ask-principal.ts        # M1 (serves deploy + verify), cross-cutting, stays flat
+    agent-claude.ts         # M1 (serves define, implement, check; later verify), cross-cutting, stays flat
     *.test.ts
+  # **[amend, synced]**: adapters are grouped one folder per port
+  # (`adapters/<port>/<variant>.ts`), uniformly, even where only one variant
+  # exists today — except a cross-cutting adapter serving more than one port
+  # (`ask-principal.ts`, `agent-claude.ts`, `fake.ts`), which stays flat since
+  # the per-port folder scheme doesn't apply to it. Principal is a further
+  # exception: it is always a single adapter, never split per transport.
   env/                      # reference environment scripts, not part of the core or Runner
     telegram-listener.ts    # M2
-    poll-changed.sh         # M1: cron-able WorkItem change poller
-    poll-stalled.sh         # M1: cron-able check for awaited commands never sent, orphaned by a dead Runner, or hung
+    poll/changed.ts         # M1: cron-able WorkItem change poller, in Bun/TS **[amend, synced]**
+    poll/stalled.ts         # M1: cron-able check for awaited commands never sent, orphaned by a dead Runner, or hung, in Bun/TS **[amend, synced]**
     watch-pr.ts             # M3
     watch-deploy.ts         # M3
   test/
@@ -311,8 +318,8 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 {
   "projectId": "harlo",
   "adapters": {                          // argv prefix; Runner appends <port> <op>
-    "tracker":  ["bun", "adapters/tracker-md.ts", "--dir", "~/notes/harlo"],
-    "workspace":["bun", "adapters/workspace-worktree.ts", "--main", "main"],
+    "tracker":  ["bun", "adapters/tracker/md.ts", "--dir", "~/notes/harlo"],
+    "workspace":["bun", "adapters/workspace/worktree.ts", "--main", "main"],
     "define":   ["bun", "adapters/agent-claude.ts"], "implement": ["..."], "check": ["..."],
     "integrate":["..."], "deploy": ["..."], "verify": ["..."]
   },
@@ -726,15 +733,15 @@ Rules for every step:
 
 Why first: M1 has no external accounts and can dogfood on harlo. Every adapter below except the md tracker is reused by the Work setup.
 
-- [ ] **M1.1 git-worktree Workspace.**
+- [x] **M1.1 git-worktree Workspace.**
   - Test: in a temp repo, `setup` creates worktree `<root>/<delivery>` on branch `ship/<delivery>` from the main line and returns `{path}`. `teardown` removes the worktree and the branch. Both are idempotent (a second call gives `ok`). `cancel` is a no-op.
-  - Impl: `adapters/workspace-worktree.ts --main <branch> --root <dir>`.
+  - Impl: `adapters/workspace/worktree.ts --main <branch> --root <dir>`.
   - Done when green.
-- [ ] **M1.2 md-file tracker: read, next, update.**
+- [x] **M1.2 md-file tracker: read, next, update.**
   - Test: `<dir>/<key>.md` with frontmatter `status:`. `read` gives key = file slug, title from the H1 or frontmatter `title`, and body = the text above the `<!-- ship:log -->` marker. `next` gives the first file (sorted by name) with `status: ready`, or null. `update` rewrites only the frontmatter `status`.
-  - Impl: `adapters/tracker-md.ts --dir`.
+  - Impl: `adapters/tracker/md.ts --dir`.
   - Done when green.
-- [ ] **M1.3 md-file tracker: comment.**
+- [x] **M1.3 md-file tracker: comment.**
   - Test: `comment` appends a line below `<!-- ship:log -->`, and `read` then returns an unchanged body. A later `ship changed` therefore hits W1 (no self-echo).
   - Done when green.
 - [x] **M1.4 WorkItem change and stall pollers.** Implemented in Bun/TS (`env/poll/changed.ts`, `env/poll/stalled.ts`), not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` named below, per the accepted architecture amendment.
@@ -758,18 +765,18 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
       - (b) the Runner killed during a synchronous adapter: `sent` present, process gone, no Result ("dead")
   - Impl: `env/poll/changed.ts`, `env/poll/stalled.ts`. The flag is one line on stdout per Delivery, for cron mail or an alert hook.
   - Done when green.
-- [ ] **M1.5 Local-merge Integrate: landing.**
+- [x] **M1.5 Local-merge Integrate: landing.**
   - Test: in temp repos, rebase `ship/<d>` onto the main line, `merge --ff-only` into the main line, then push if a remote is configured. Returns `ok{landed}`.
-  - Impl: `adapters/integrate-local.ts`.
+  - Impl: `adapters/integrate/local.ts`.
   - Done when green.
-- [ ] **M1.6 Local-merge Integrate: conflict.**
+- [x] **M1.6 Local-merge Integrate: conflict.**
   - Test: a conflicting change makes the adapter abort the rebase and return `question{about: "conflict", prompt, evidence}`. When re-issued with `answer: "resolved"`, it retries the rebase.
   - Done when green.
-- [ ] **M1.7 ask-principal (Deploy and Verify).**
+- [x] **M1.7 ask-principal (Deploy and Verify).**
   - Test: with no `answer`, the adapter returns `question{about: "manual", prompt, options}`: `[live, not_live]` for deploy, `[pass, fail]` for verify. When re-issued with an answer, it returns the matching `ok{verdict}`, and for a negative answer `findings: [{text: answer}]`.
   - Impl: `adapters/ask-principal.ts`.
   - Done when green.
-- [ ] **M1.8 Spike: coding-agent CLI (timebox 2h).**
+- [x] **M1.8 Spike: coding-agent CLI (timebox 2h).**
   - Test: a manual script confirms, for the headless CLI:
     - structured JSON output against a schema
     - resuming a session by id
@@ -777,19 +784,19 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
     - an exit code on auth failure
 
     Record the findings in `docs/adapters.md`.
-  - Done when every item above is marked verified or not in `docs/adapters.md` and in the headless coding-agent row of §8.3.
-- [ ] **M1.9 Agent adapter: Define.**
+  - Done when every item above is marked verified or not in `docs/adapters.md` and in the headless coding-agent row of §8.3. Findings recorded in `docs/adapters.md` under "Coding-agent CLI spike (M1.8, `claude` 2.1.283)".
+- [x] **M1.9 Agent adapter: Define.**
   - Test: a fake agent binary (injected via `--agent-bin`) returns structured output, and the adapter maps it to `ok{criteria, runbook}`, or to `question{about: "clarify"}` when the output carries a question field.
   - Impl: `adapters/agent-claude.ts define run`.
   - Done when green on the fake. A manual run on a real WorkItem produces criteria and a runbook.
-- [ ] **M1.10 Agent adapter: Implement.**
+- [x] **M1.10 Agent adapter: Implement.**
   - Test: with the fake agent, the adapter:
     - commits in the workspace and returns `ok{changeset: "ship/<d>@<sha>"}`
     - stores the session id in its own state file, keyed by Delivery
     - resumes that session when payload has `findings`, `feedback` or `answer`
     - never returns `failed` after any commit
   - Done when green on the fake plus one real run.
-- [ ] **M1.11 Agent adapter: Check.**
+- [x] **M1.11 Agent adapter: Check.**
   - Test: the adapter always starts a fresh session (P8; it asserts no resume flag) and maps output to the `pass`, `fix` and `decide` verdicts.
   - Done when green on the fake plus one real run.
 - [ ] **M1.12 Home dogfood.**
@@ -800,7 +807,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 
 - [ ] **M2.1 Telegram Principal: decide.**
   - Test: with a mocked Bot API over HTTP, `decide` sends a message with inline buttons, each carrying a short token. The adapter state file maps token → `{delivery, id, answer}`. It returns `accepted`.
-  - Impl: `adapters/principal-telegram.ts`.
+  - Impl: `adapters/principal/index.ts` — Telegram is a second transport inside the single principal adapter, not a new file **[amend, synced]**.
   - Done when green.
 - [ ] **M2.2 Telegram Principal: ask, notify, cancel.**
   - Test: `ask` without options is a force-reply message; `ask` with options uses buttons. `notify` is a plain message. `cancel` edits the message to "withdrawn".
@@ -816,14 +823,14 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
     - comment
     - next is a label query
     - label changes and comments leave title and body unchanged (W1)
-  - Impl: `adapters/tracker-github.ts`.
+  - Impl: `adapters/tracker/github.ts`.
   - Done when green.
 
 ### M3 — Work setup
 
 - [ ] **M3.1 Jira tracker: read and next.**
   - Test: with a mocked REST API, `read` maps summary and description to title and body (ADF to plain text), and `next` runs a configured JQL query.
-  - Impl: `adapters/tracker-jira.ts`.
+  - Impl: `adapters/tracker/jira.ts`.
   - Done when green.
 - [ ] **M3.2 Jira tracker: update and comment.**
   - Test: a status maps to a transition id from adapter config. A comment posts. A transition with no mapping gives `failed` (changed nothing).
@@ -834,7 +841,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.4 PR Integrate adapter.**
   - Test: with a fake `gh`, the adapter pushes `ship/<d>`, creates the PR, enables auto-merge and returns `accepted`. `cancel` closes the PR. It is idempotent on the command id (an existing PR is reused).
-  - Impl: `adapters/integrate-pr.ts`.
+  - Impl: `adapters/integrate/pr.ts`.
   - Done when green.
 - [ ] **M3.5 PR watcher.**
   - Test: with a fake `gh`:
@@ -845,7 +852,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.6 GitHub Actions Deploy adapter and watcher.**
   - Test: with a fake `gh`, the adapter finds or triggers the run for the landed SHA and returns `accepted`. The watcher sends `ok{live}` on success or `ok{not_live, findings}` on failure. An optional health-probe URL is supported.
-  - Impl: `adapters/deploy-gha.ts`, `env/watch-deploy.ts`.
+  - Impl: `adapters/deploy/gha.ts`, `env/watch-deploy.ts`.
   - Done when green.
 - [ ] **M3.7 e2e Verify agent.**
   - Test: with the fake agent, a fresh session (P8) gets the runbook plus the prod URL from the capability env and maps its output to `ok{pass|fail, findings}`. Prod credentials are present only in the verify profile.
@@ -894,7 +901,7 @@ The Runner starts no listeners. The environment must provide what follows.
 
 ## 8. Decisions, assumptions and follow-ups
 
-### 8.1 Decisions (all 15 accepted by the user on 2026-09-28)
+### 8.1 Decisions (15 accepted by the user on 2026-09-28; 16 during M1 implementation on 2026-09-29)
 
 1. **Architecture amendments A1–A5** **[amend, synced]**. **Decided:** accept all five; synced into `architecture.md`.
    - A1 `tracker.next`; A2 `state.list{key?}`; A3 the `ship changed <delivery>` verb; A4 `question{about, options?}`, where `about` is an adapter-defined category mapped in config to a Minimum Principal (unknown → `person`); A5 `about: scope|advisory` on Check's `decide` verdict.
@@ -927,6 +934,8 @@ The Runner starts no listeners. The environment must provide what follows.
     - Why: children already share the Runner's process group by default, a SIGKILL on the Runner alone does not kill them, and macOS has no reliable parent-death signal.
 15. **A changed WorkItem before Land goes back to Define** **[amend, synced]**. **Decided:** at Accept, Implement, Check or Decision (incl. asks, and Blocked at one of these), `workItem_changed` cancels the awaited command and re-runs Define with the new WorkItem, exactly as at Define (W3–W5); the next Accept gate carries no "workItem changed" note. Previously these went back to the Accept gate with that note. Synced into `architecture.md`.
     - Why: criteria and runbook are derived from the WorkItem. Going back to Accept showed stale criteria next to the new WorkItem, and an easy `accept` locked them in.
+16. **Adapter layout: one folder per port; pollers in Bun/TS, not bash** **[amend, synced]**. **Decided:** `adapters/<port>/<variant>.ts`, uniformly, even where only one variant exists today (`state/files.ts`, `workspace/worktree.ts`, `tracker/md.ts`, `integrate/local.ts`, `deploy/gha.ts`), except a cross-cutting adapter serving more than one port (`ask-principal.ts` for deploy+verify, `agent-claude.ts` for define/implement/check, `fake.ts`), which stays flat. Principal is always a single adapter (`adapters/principal/index.ts`); Telegram (M2) is a configurable transport inside it, never a separate `principal-telegram.ts`. The pollers (`env/poll/changed.ts`, `env/poll/stalled.ts`) are Bun/TS, not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` this plan originally specified — same behavior, reusing `schemaFor`/ajv types instead of re-deriving JSON shapes in shell. Synced into this section's module layout (§2) and every M1–M3 `Impl:` line that named an adapter path.
+    - Why: `tracker` and `integrate` each gain a second real variant within this plan's own milestones (M2/M3); a flat name would need renaming the moment that variant landed. One language across the whole repo (Bun/TS) beats splitting environment scripts into a second language for no behavioral reason.
 
 ### 8.2 Conflicts between the planning parts, and how each was resolved
 
