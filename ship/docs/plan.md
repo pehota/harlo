@@ -63,6 +63,9 @@ ship/
       transition.ts         # transition(): dispatch by position (Snapshot.at)
       gates.ts              # gate options, decide/ask command builders, evidence bundle
       steps.ts              # step → port/op/payload builders, tracker status fire
+      ports/                # port-subset types for cross-cutting adapters (one file per adapter category)
+        agent.ts             # StepPort, STEP_PORTS — adapters/agent/claude
+        ask.ts                # GatedPort — adapters/ask/principal
       start.test.ts         # table-driven
       transition.test.ts    # table-driven (§4)
       invariants.test.ts    # sweep of all rows: invariants I1–I6

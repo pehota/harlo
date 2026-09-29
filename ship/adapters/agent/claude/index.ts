@@ -43,9 +43,7 @@ import type { Finding, Stdin, WorkItem } from "../../../src/contracts/common";
 import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../src/contracts/ports";
 import { schemaFor } from "../../../src/contracts/ports";
 import { check } from "../../../src/contracts/validate";
-
-type StepPort = "define" | "implement" | "check";
-const STEP_PORTS = ["define", "implement", "check"] as const satisfies readonly StepPort[];
+import { STEP_PORTS, type StepPort } from "../../../src/core/ports/agent";
 
 type Ctx = { agentBin: string; pluginDirs: string[] };
 

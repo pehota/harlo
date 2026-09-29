@@ -10,8 +10,8 @@
 import type { DeployPayload, VerifyPayload } from "../../../src/contracts/ports";
 import { schemaFor } from "../../../src/contracts/ports";
 import { check } from "../../../src/contracts/validate";
+import type { GatedPort } from "../../../src/core/ports/ask";
 
-type GatedPort = "deploy" | "verify";
 type RunPayload = DeployPayload | VerifyPayload;
 type Body = { verdict: string; findings?: [{ text: string }] };
 
