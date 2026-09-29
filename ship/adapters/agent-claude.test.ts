@@ -149,6 +149,26 @@ describe("agent-claude adapter: define", () => {
     expect(second![second!.indexOf("--resume") + 1]).toBe("sess-def-2");
   });
 
+  test("a resumed call sends only the answer, not the whole WorkItem again", async () => {
+    // Found by dogfooding M1.12: resending the full WorkItem + instructions on top of "here's an answer"
+    // reads, to a real agent, as a brand-new ambiguous request and re-triggers a confirm-first question loop
+    // instead of proceeding. The resumed session already has the original task in its history.
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", session_id: "sess-def-3", structured_output: { question: "which style?" } },
+      { is_error: false, result: "r2", session_id: "sess-def-3", structured_output: { criteria: ["c"], runbook: ["r"] } },
+    ]);
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log });
+    await call({ port: "define", op: "run", payload: { answer: "formal" } satisfies DefinePayload, home, agentReplies, log });
+    const [first, second] = readLog(log);
+    const prompt = (argv: string[]): string => argv[argv.indexOf("-p") + 1]!;
+    expect(prompt(first!)).toContain(workItem.title);
+    expect(prompt(second!)).not.toContain(workItem.title);
+    expect(prompt(second!)).toContain("formal");
+  });
+
   test("always passes --safe-mode to the agent bin", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
@@ -235,6 +255,31 @@ describe("agent-claude adapter: implement", () => {
     expect(first).not.toContain("--resume");
     expect(second).toContain("--resume");
     expect(second![second!.indexOf("--resume") + 1]).toBe("sess-impl-3");
+  });
+
+  test("a resumed call sends only the findings/answer, not the whole WorkItem again", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", commit: true, session_id: "sess-impl-4" },
+      { is_error: false, result: "r2", commit: true, session_id: "sess-impl-4" },
+    ]);
+    await call({
+      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies, log,
+    });
+    await call({
+      port: "implement", op: "run",
+      payload: { criteria: ["c"], findings: [{ text: "fix the greeting" }] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies, log,
+    });
+    const [first, second] = readLog(log);
+    const prompt = (argv: string[]): string => argv[argv.indexOf("-p") + 1]!;
+    expect(prompt(first!)).toContain(workItem.title);
+    expect(prompt(second!)).not.toContain(workItem.title);
+    expect(prompt(second!)).toContain("fix the greeting");
   });
 
   test("returns failed when the agent errors before committing (safe: nothing changed)", async () => {

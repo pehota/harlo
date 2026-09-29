@@ -108,15 +108,23 @@ const defineSchema = {
   additionalProperties: false,
 } as const;
 
-const definePrompt = (workItem: WorkItem, payload: DefinePayload): string => {
-  const lines = [
+/** Fresh call: the full WorkItem framing. A resumed call sends ONLY the new delta (feedback/answer) — the
+ *  resumed session already has the original task in its history; resending the whole thing on top of "here's
+ *  an answer" reads as a brand-new ambiguous request and was found, by dogfooding M1.12, to make the agent
+ *  re-enter its confirm-first loop indefinitely instead of proceeding. */
+const definePrompt = (workItem: WorkItem, payload: DefinePayload, resume: boolean): string => {
+  if (resume) {
+    const lines: string[] = [];
+    if (payload.feedback !== undefined) lines.push(`Feedback from a prior review: ${payload.feedback}`);
+    if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
+    lines.push("Reply now with the criteria/runbook (or question) fields — no further questions.");
+    return lines.join("\n\n");
+  }
+  return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     workItem.body,
     "Define acceptance criteria and a runbook for verifying them.",
-  ];
-  if (payload.feedback !== undefined) lines.push(`Feedback from a prior review: ${payload.feedback}`);
-  if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
-  return lines.join("\n\n");
+  ].join("\n\n");
 };
 
 const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
@@ -124,7 +132,7 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
   const sessionId = resume ? state[stdin.delivery] : undefined;
-  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload), defineSchema, sessionId, undefined, NO_EDIT_TOOLS);
+  const reply = await callAgent(ctx, definePrompt(stdin.workItem, payload, resume), defineSchema, sessionId, undefined, NO_EDIT_TOOLS);
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
@@ -141,18 +149,24 @@ const implementSchema = {
   additionalProperties: false,
 } as const;
 
-const implementPrompt = (workItem: WorkItem, payload: ImplementPayload): string => {
-  const lines = [
+/** Fresh call: the full task framing. A resumed call sends ONLY the new delta (findings/feedback/answer) —
+ *  see definePrompt's comment for why resending the whole task on a resumed session backfires. */
+const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: boolean): string => {
+  if (resume) {
+    const lines: string[] = [];
+    if (payload.findings.length > 0) {
+      lines.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
+    }
+    if (payload.feedback !== undefined) lines.push(`Feedback: ${payload.feedback}`);
+    if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
+    lines.push("Continue implementing and commit your changes — no further questions.");
+    return lines.join("\n");
+  }
+  return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Implement it in this working directory and commit your changes.",
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
-  ];
-  if (payload.findings.length > 0) {
-    lines.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
-  }
-  if (payload.feedback !== undefined) lines.push(`Feedback: ${payload.feedback}`);
-  if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
-  return lines.join("\n");
+  ].join("\n");
 };
 
 const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
@@ -166,7 +180,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = payload.findings.length > 0 || payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("implement");
   const sessionId = resume ? state[stdin.delivery] : undefined;
-  const prompt = implementPrompt(stdin.workItem, payload);
+  const prompt = implementPrompt(stdin.workItem, payload, resume);
 
   let reply: AgentReply;
   try {
