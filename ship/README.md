@@ -84,7 +84,7 @@ a profile `env` value:
 ```jsonc
 // start, next, signal, stop, changed
 {"delivery":"hello-1","issued":["hello-1/land-1"],"awaiting":"hello-1/land-1"}
-// optional keys: "ignored":true, "rejected":true, "unapplied":[…] (exit 3), "errors":[{"id","info"}] (failed fires)
+// optional keys: "ignored":true, "rejected":true (+ "reason":"…"), "unapplied":[…] (exit 3), "errors":[{"id","info"}] (failed fires)
 // status
 {"deliveries":[{"delivery":"hello-1","at":"land","awaiting":"hello-1/land-1"}]}
 ```

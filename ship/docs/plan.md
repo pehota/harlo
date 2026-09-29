@@ -485,7 +485,7 @@ Service-port `question` results and verdicts outside a port's schema never reach
 | `ship changed <delivery>` **[amend, synced]** | `tracker.read{key}` (fails or another key's WorkItem: exit 4), then apply `workItem_changed`. |
 | `ship status [<delivery>]` **[amend, synced]** | Read-only: no core call, no save, no commands. No argument: `state.list{}`, load each Delivery, keep the non-terminal ones. With an argument: that Delivery only, even if terminal. A failed State read gives exit 4. |
 
-**Output:** one JSON line, `{delivery, issued: [ids], awaiting: id|null, ignored?, rejected?, unapplied?, errors?}`. `delivery` is the Delivery id whenever it is known, also on exit 3; only a `start` that never saved gives `null` (its key is in `unapplied`).
+**Output:** one JSON line, `{delivery, issued: [ids], awaiting: id|null, ignored?, rejected?, reason?, unapplied?, errors?}`. `delivery` is the Delivery id whenever it is known, also on exit 3; only a `start` that never saved gives `null` (its key is in `unapplied`). `reason` is a short human-readable string set alongside `rejected` **[amend, synced]**.
 
 **`status` output:** one JSON line, `{deliveries: [{delivery, at, awaiting}]}`, where `at` is `Snapshot.at` and `awaiting` is `awaiting.id` or `null`.
 

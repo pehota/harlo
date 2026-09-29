@@ -145,7 +145,10 @@ describe("ship next", () => {
     p.configure({ replies: { "tracker.next": { status: "ok", body: { key: "k" } } } });
     expect((await p.ship("next")).out).toMatchObject({ delivery: "k-1" });
     const ran = await p.ship("next");
-    expect(ran).toMatchObject({ exit: 0, out: { delivery: "k-1", issued: [], rejected: true } });
+    expect(ran).toMatchObject({
+      exit: 0,
+      out: { delivery: "k-1", issued: [], rejected: true, reason: "an open Delivery already exists for this key" },
+    });
   }, TIMEOUT);
 });
 

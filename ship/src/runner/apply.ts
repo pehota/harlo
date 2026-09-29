@@ -29,6 +29,7 @@ export type Output = {
   awaiting: CommandId | null;
   ignored?: true;
   rejected?: true;
+  reason?: string;
   unapplied?: (Signal | { kind: "start"; workItem: WorkItem })[];
   errors?: { id: CommandId; info: string }[];
 };
@@ -161,7 +162,7 @@ export const apply = async (deps: Deps, first: Pending): Promise<Report> => {
     issued,
     awaiting: last?.state.awaiting?.id ?? null,
     ...(head && IGNORED.has(head.entry.note) ? { ignored: true as const } : {}),
-    ...(head?.rejected ? { rejected: true as const } : {}),
+    ...(head?.rejected ? { rejected: true as const, reason: "an open Delivery already exists for this key" } : {}),
     ...(errors.length > 0 ? { errors } : {}),
   });
 

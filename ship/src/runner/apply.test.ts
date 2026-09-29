@@ -169,7 +169,10 @@ describe("apply loop", () => {
     const { state, spawn, deps } = harness();
     state.seed(snapshotAt("implement", null));
     const report = await apply(deps, startK);
-    expect(report).toEqual({ exit: 0, output: { delivery: D, issued: [], awaiting: null, rejected: true } });
+    expect(report).toEqual({
+      exit: 0,
+      output: { delivery: D, issued: [], awaiting: null, rejected: true, reason: "an open Delivery already exists for this key" },
+    });
     expect(state.top(D)?.entries).toMatchObject([{ note: "rejected_start", time: TIME }]);
     expect(spawn.calls).toHaveLength(0);
   });
