@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Coding-agent adapter (plan §6 M1.9–M1.11; spike M1.8, docs/adapters.md). Cross-cutting: serves `define`,
-// `implement` and `check` (plan §6 amendment), so it lives in its own module folder (adapters/agent-claude/)
+// `implement` and `check` (plan §6 amendment), so it lives in its own module folder (adapters/agent/claude/)
 // rather than a per-port folder — it isn't split into port-specific variants.
 //
 // argv: [--agent-bin <path>] [--plugin-dir <path>]... <port> <op>, port one of "define" | "implement" |
@@ -39,10 +39,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Finding, Stdin, WorkItem } from "../../src/contracts/common";
-import type { CheckPayload, DefinePayload, ImplementPayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
-import { check } from "../../src/contracts/validate";
+import type { Finding, Stdin, WorkItem } from "../../../src/contracts/common";
+import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
+import { check } from "../../../src/contracts/validate";
 
 type StepPort = "define" | "implement" | "check";
 const STEP_PORTS = ["define", "implement", "check"] as const satisfies readonly StepPort[];

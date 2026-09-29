@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// TEST-ONLY fake `claude` CLI, for adapters/agent-claude/index.test.ts (--agent-bin points here instead of the real
+// TEST-ONLY fake `claude` CLI, for adapters/agent/claude/index.test.ts (--agent-bin points here instead of the real
 // `claude`). Mimics the real CLI's argv/stdout shape confirmed by the M1.8 spike: called as
 // `<this> -p <prompt> --output-format json --json-schema <schema> [--resume <id>]`, it prints one JSON line
 // shaped like the real reply ({is_error, result, structured_output?, session_id?}) — even on a non-zero exit,

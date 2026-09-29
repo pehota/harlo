@@ -1,14 +1,14 @@
 // M1.9-M1.11: the Claude-agent adapter (define/implement/check), driven as an executable against a fake
-// `claude` CLI (adapters/agent-claude/fake.ts, injected via --agent-bin), plus real temp git repos for
+// `claude` CLI (adapters/agent/claude/fake.ts, injected via --agent-bin), plus real temp git repos for
 // implement's workspace so its `changeset` comes from a real commit, never an invented sha.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../../src/contracts/common";
-import type { CheckPayload, DefinePayload, ImplementPayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
+import type { Stdin, WorkItem } from "../../../src/contracts/common";
+import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
 
 const ADAPTER = join(import.meta.dir, "index.ts");
 const FAKE = join(import.meta.dir, "fake.ts");
@@ -75,7 +75,7 @@ type CallOpts = {
   pluginDirs?: string[];
 };
 
-/** Run `agent-claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
+/** Run `agent/claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
 const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown }> => {
   const delivery = opts.delivery ?? "PROJ-1-1";
   const stdin: Stdin = {

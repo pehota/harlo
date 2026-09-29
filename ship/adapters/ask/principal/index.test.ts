@@ -3,16 +3,16 @@
 import { describe, expect, test } from "bun:test";
 import Ajv from "ajv";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../../src/contracts/common";
-import type { DeployPayload, VerifyPayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
+import type { Stdin, WorkItem } from "../../../src/contracts/common";
+import type { DeployPayload, VerifyPayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
 
 const ADAPTER = join(import.meta.dir, "index.ts");
 const ajv = new Ajv();
 
 const workItem: WorkItem = { key: "k", title: "Greet by name", body: "Say hello." };
 
-/** Run `ask-principal/index.ts <port> <op>` with a Stdin envelope, as the Runner does. */
+/** Run `ask/principal/index.ts <port> <op>` with a Stdin envelope, as the Runner does. */
 const call = async (port: "deploy" | "verify", op: string, payload: unknown): Promise<{ exit: number; stdout: unknown }> => {
   const stdin: Stdin = { id: "k-1/run-1", delivery: "k-1", port, op, workItem, workspace: "/ws/k-1", payload, tools: [] };
   const proc = Bun.spawn(["bun", ADAPTER, port, op], {

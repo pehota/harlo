@@ -1,6 +1,6 @@
 # Bypassed permissions require a sandboxed workspace
 
-Real coding-agent calls (M1.9–M1.11, `adapters/agent-claude/index.ts`) run
+Real coding-agent calls (M1.9–M1.11, `adapters/agent/claude/index.ts`) run
 unattended with `--permission-mode bypassPermissions`: no person is at a
 terminal to approve anything, so a mode that would otherwise prompt is
 useless there, and the loosest mode is simply correct for automation. This
@@ -20,7 +20,7 @@ must confine the process with something OUTSIDE Claude Code — an OS-level
 sandbox, a container with a scoped filesystem/network policy, or
 equivalent — so a bypassed-permissions call cannot reach beyond its own
 workspace even if it tries. This is deployment configuration, not adapter
-code: `agent-claude/index.ts` does not, and should not, implement
+code: `agent/claude/index.ts` does not, and should not, implement
 sandboxing itself (P6: the environment, not the core or an adapter, owns
 operational safety outside the adapter's own narrow job). Documented as a
 requirement here; not yet built — found dogfooding M1.12 on a plain local

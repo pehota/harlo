@@ -92,14 +92,15 @@ ship/
     integrate/local.ts      # M1
     integrate/pr.ts         # M3
     deploy/gha.ts           # M3
-    ask-principal/index.ts  # M1 (serves deploy + verify), cross-cutting, own module folder, not per-port
-    agent-claude/index.ts   # M1 (serves define, implement, check; later verify), cross-cutting, own module folder, not per-port
+    ask/                    # cross-cutting category: adapters serving multiple ports via a manual gate
+      principal/index.ts    # M1 (serves deploy + verify), own module folder, not per-port
+    agent/                  # cross-cutting category: adapters serving multiple ports via a coding agent
+      claude/index.ts       # M1 (serves define, implement, check; later verify), own module folder, not per-port
     *.test.ts
   # **[amend, synced]**: adapters are grouped one folder per port
   # (`adapters/<port>/<variant>.ts`), uniformly, even where only one variant
   # exists today — except a cross-cutting adapter serving more than one port
-  # (`ask-principal/index.ts`, `agent-claude/index.ts`), which still gets its
-  # own module folder for organization, just not a per-port one, since it
+  # (`ask/principal/index.ts`, `agent/claude/index.ts`), which still gets its
   # isn't split into port-specific variants. `fake.ts` (tests only) stays
   # truly flat directly under `adapters/`. Principal is a further exception:
   # it is always a single adapter, never split per transport.
@@ -322,7 +323,7 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
   "adapters": {                          // argv prefix; Runner appends <port> <op>
     "tracker":  ["bun", "adapters/tracker/md.ts", "--dir", "~/notes/harlo"],
     "workspace":["bun", "adapters/workspace/worktree.ts", "--main", "main"],
-    "define":   ["bun", "adapters/agent-claude/index.ts"], "implement": ["..."], "check": ["..."],
+    "define":   ["bun", "adapters/agent/claude/index.ts"], "implement": ["..."], "check": ["..."],
     "integrate":["..."], "deploy": ["..."], "verify": ["..."]
   },
   "policy": {
@@ -776,7 +777,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [x] **M1.7 ask-principal (Deploy and Verify).**
   - Test: with no `answer`, the adapter returns `question{about: "manual", prompt, options}`: `[live, not_live]` for deploy, `[pass, fail]` for verify. When re-issued with an answer, it returns the matching `ok{verdict}`, and for a negative answer `findings: [{text: answer}]`.
-  - Impl: `adapters/ask-principal/index.ts`.
+  - Impl: `adapters/ask/principal/index.ts`.
   - Done when green.
 - [x] **M1.8 Spike: coding-agent CLI (timebox 2h).**
   - Test: a manual script confirms, for the headless CLI:
@@ -789,7 +790,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when every item above is marked verified or not in `docs/adapters.md` and in the headless coding-agent row of §8.3. Findings recorded in `docs/adapters.md` under "Coding-agent CLI spike (M1.8, `claude` 2.1.283)".
 - [x] **M1.9 Agent adapter: Define.**
   - Test: a fake agent binary (injected via `--agent-bin`) returns structured output, and the adapter maps it to `ok{criteria, runbook}`, or to `question{about: "clarify"}` when the output carries a question field.
-  - Impl: `adapters/agent-claude/index.ts define run`.
+  - Impl: `adapters/agent/claude/index.ts define run`.
   - Done when green on the fake. A manual run on a real WorkItem produces criteria and a runbook.
 - [x] **M1.10 Agent adapter: Implement.**
   - Test: with the fake agent, the adapter:
@@ -859,7 +860,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.7 e2e Verify agent.**
   - Test: with the fake agent, a fresh session (P8) gets the runbook plus the prod URL from the capability env and maps its output to `ok{pass|fail, findings}`. Prod credentials are present only in the verify profile.
-  - Impl: `adapters/agent-claude/index.ts verify run`.
+  - Impl: `adapters/agent/claude/index.ts verify run`.
   - Done when green on the fake plus one real run against staging or prod.
 - [ ] **M3.8 Work dogfood.**
   - Test: one real Jira WorkItem through PR, Actions and Verify, with the terminal Principal.
@@ -937,7 +938,7 @@ The Runner starts no listeners. The environment must provide what follows.
     - Why: children already share the Runner's process group by default, a SIGKILL on the Runner alone does not kill them, and macOS has no reliable parent-death signal.
 15. **A changed WorkItem before Land goes back to Define** **[amend, synced]**. **Decided:** at Accept, Implement, Check or Decision (incl. asks, and Blocked at one of these), `workItem_changed` cancels the awaited command and re-runs Define with the new WorkItem, exactly as at Define (W3–W5); the next Accept gate carries no "workItem changed" note. Previously these went back to the Accept gate with that note. Synced into `architecture.md`.
     - Why: criteria and runbook are derived from the WorkItem. Going back to Accept showed stale criteria next to the new WorkItem, and an easy `accept` locked them in.
-16. **Adapter layout: one folder per port; pollers in Bun/TS, not bash** **[amend, synced]**. **Decided:** `adapters/<port>/<variant>.ts`, uniformly, even where only one variant exists today (`state/files.ts`, `workspace/worktree.ts`, `tracker/md.ts`, `integrate/local.ts`, `deploy/gha.ts`), except a cross-cutting adapter serving more than one port (`ask-principal/index.ts` for deploy+verify, `agent-claude/index.ts` for define/implement/check), which still gets its own module folder for organization, just not a per-port one, since it isn't split into port-specific variants. `fake.ts` (tests only) stays truly flat directly under `adapters/`. Principal is always a single adapter (`adapters/principal/index.ts`); Telegram (M2) is a configurable transport inside it, never a separate `principal-telegram.ts`. The pollers (`env/poll/changed.ts`, `env/poll/stalled.ts`) are Bun/TS, not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` this plan originally specified — same behavior, reusing `schemaFor`/ajv types instead of re-deriving JSON shapes in shell. Synced into this section's module layout (§2) and every M1–M3 `Impl:` line that named an adapter path.
+16. **Adapter layout: one folder per port; pollers in Bun/TS, not bash** **[amend, synced]**. **Decided:** `adapters/<port>/<variant>.ts`, uniformly, even where only one variant exists today (`state/files.ts`, `workspace/worktree.ts`, `tracker/md.ts`, `integrate/local.ts`, `deploy/gha.ts`), except a cross-cutting adapter serving more than one port (`ask/principal/index.ts` for deploy+verify, `agent/claude/index.ts` for define/implement/check), which still gets its own module folder for organization, just not a per-port one, since it isn't split into port-specific variants. `fake.ts` (tests only) stays truly flat directly under `adapters/`. Principal is always a single adapter (`adapters/principal/index.ts`); Telegram (M2) is a configurable transport inside it, never a separate `principal-telegram.ts`. The pollers (`env/poll/changed.ts`, `env/poll/stalled.ts`) are Bun/TS, not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` this plan originally specified — same behavior, reusing `schemaFor`/ajv types instead of re-deriving JSON shapes in shell. Synced into this section's module layout (§2) and every M1–M3 `Impl:` line that named an adapter path.
     - Why: `tracker` and `integrate` each gain a second real variant within this plan's own milestones (M2/M3); a flat name would need renaming the moment that variant landed. One language across the whole repo (Bun/TS) beats splitting environment scripts into a second language for no behavioral reason.
 
 ### 8.2 Conflicts between the planning parts, and how each was resolved
