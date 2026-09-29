@@ -8,6 +8,10 @@
 // nothing here is Principal-specific beyond the gate layout it tolerates: blocks start at a line beginning `── `
 // (a file without such lines is one block). Option names are read from each candidate's JSON `body.answer`.
 //
+// AC5 amendment (requested during dogfooding): the printed JSON is edited in exactly two ways — `"comment"` added
+// where the gate allows one, and, for an option-less gate (one line whose answer is the `…` placeholder), the
+// whole reply written as `answer`. Nothing else is ever re-serialized.
+//
 // argv: --ship <path to bin/ship> --delivery <id> [--candidates <file>] [--reply <text> | <text…>]
 //   The reply is `--reply`, else the remaining words, else stdin. `--candidates` defaults to
 //   $SHIP_PRINCIPAL_OUT, else ~/.local/state/ship/dogfood/principal.log.
