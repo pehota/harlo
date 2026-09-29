@@ -386,7 +386,8 @@ and accepted at the same gate.
 
 Rationale for the hard-to-reverse choices lives in [`adr/`](adr/):
 executable adapters (0001), signal-driven core (0002), core-owned gates (0003),
-the environment owns delivery, time and rollback (0004), snapshot + journal (0005).
+the environment owns delivery, time and rollback (0004), snapshot + journal (0005),
+bypassed permissions require a sandboxed workspace (0006).
 
 | Decision | Choice |
 |---|---|

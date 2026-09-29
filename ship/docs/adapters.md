@@ -154,12 +154,16 @@ Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent-cl
   `--allowedTools`/`--permission-mode` had several of its own `Bash` calls
   denied by this machine's existing shell hook (it rewrites `find`/`ls` to
   `rtk find`/`rtk ls`, and those got denied under the default headless
-  permission set) — the agent adapted around it, but a real adapter should
-  pass an explicit permission mode (e.g. `--permission-mode` suited to running
-  unattended inside an isolated git worktree) rather than rely on whatever the
-  ambient host's hooks/permissions default to. **[unverified]** which mode is
-  right for production use — flagged for the adapter's own config, not
-  resolved by this spike.
+  permission set). **Resolved by M1.12 dogfooding:** every real call now
+  always passes `--permission-mode bypassPermissions` (see the "Skill/plugin
+  contamination" bullet below and `agent-claude/index.ts`'s header comment)
+  — there is no person at a terminal to approve anything, so the loosest
+  mode is simply correct. **[verified]** this unblocks Implement, which
+  otherwise silently "finishes without committing" on every real run.
+  `bypassPermissions` removing every safety prompt is a real exposure for a
+  non-dogfood deployment; see `docs/adr/0006-bypassed-permissions-need-a-sandbox.md`
+  for the requirement this creates (process-level sandboxing, not adapter
+  code).
 - **Cost/latency.** A single `-p` call (no `--bare`) pulled in ~48k tokens of
   cache-creation context (project CLAUDE.md, skills, hooks, etc. via normal
   auto-discovery) before doing any work, at real dollar cost. `--bare` (skip
