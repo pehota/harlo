@@ -809,6 +809,10 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Test: a manual end-to-end run on one real harlo WorkItem: md tracker, worktree, the agent adapter, local merge, ask-principal, terminal Principal.
   - Done when the WorkItem is Closed, the journal is complete, and every issue found is fixed or logged.
   - Ran 2026-09-29 against real `ship/README.md`'s stale adapter table (an isolated local clone as the main line, no remote — see `docs/adapters.md` for the real coding-agent findings this run surfaced: `--safe-mode`, `--disallowedTools` on Define/Check, resumed-call prompt content, `--permission-mode`, and `checkSchema`'s top-level `oneOf` being API-illegal). Delivery reached `closed: delivered`; the journal is complete. Every issue found was fixed same-session, each with its own commit and test coverage.
+- [x] **M1.13 Driver loop.**
+  - Test: `env/drive.test.ts` drives `env/drive.ts` as a real subprocess against `bin/ship` (scripted fake adapters, real file State), started via `--key` with a short `--interval`; while it loops, the test answers each gate with `ship signal` as a human would, and asserts the driver's own stdout shows several passes (not one shot) before it exits 0 on `closed`. A second case starts the Delivery itself and drives it via `--delivery`, asserting no extra `ship start` call and that termination is still detected. Both assert the journal holds only the test's own `result` signals — the driver never calls `ship signal`.
+  - Impl: `env/drive.ts` — resolves the target Delivery (`ship start <key>`, or `--delivery` directly), then loops: `poll/changed.ts`, `poll/stalled.ts` (echoing its flags), `ship status <delivery>` (one progress line), sleeping `--interval` until `at` is `closed`/`abandoned`, then exits 0.
+  - Done when green: it is the "cron or loop" harness plan.md §7 leaves to the environment.
 
 ### M2 — Home setup complete
 

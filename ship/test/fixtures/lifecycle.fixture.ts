@@ -117,7 +117,10 @@ export const lifecycle = (
   };
 
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
-  return { ship, bash, journal, snapshot, log, printed, rescript, cleanup };
+  // The State adapter's own spawn argv, exactly as the machine config's `state` entry: for env scripts
+  // (poll/stalled.ts, drive.ts) that take `--state <state-adapter argv…>` directly rather than reading config.
+  const stateArgv = ["bun", STATE, "--dir", stateDir];
+  return { ship, bash, journal, snapshot, log, printed, rescript, cleanup, stateArgv };
 };
 
 const RUNNER_KINDS = new Set(["sent", "accepted", "adapter_error"]);
