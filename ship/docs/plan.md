@@ -823,14 +823,14 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 
 ### M2 — Home setup complete
 
-- [ ] **M2.1 Telegram Principal: decide.**
+- [ ] **M2.1 Telegram Principal: decide.** — **Postponed** (moved to the end of the roadmap).
   - Test: with a mocked Bot API over HTTP, `decide` sends a message with inline buttons, each carrying a short token. The adapter state file maps token → `{delivery, id, answer}`. It returns `accepted`.
   - Impl: `src/adapters/principal/index.ts` — Telegram is a second transport inside the single principal adapter, not a new file **[amend, synced]**.
   - Done when green.
-- [ ] **M2.2 Telegram Principal: ask, notify, cancel.**
+- [ ] **M2.2 Telegram Principal: ask, notify, cancel.** — **Postponed** (moved to the end of the roadmap).
   - Test: `ask` without options is a force-reply message; `ask` with options uses buttons. `notify` is a plain message. `cancel` edits the message to "withdrawn".
   - Done when green.
-- [ ] **M2.3 Telegram listener.**
+- [ ] **M2.3 Telegram listener.** — **Postponed** (moved to the end of the roadmap).
   - Test: a mocked `getUpdates` gives a callback, and the listener runs `ship signal <d> <id> {ok, answer, by: person}`. A reply to a force-reply resolves through the reply's message id. An unknown or expired token gets a "withdrawn" reply.
   - Impl: `env/telegram-listener.ts`, long-poll, no inbound port.
   - Done when green, plus one real round trip on a phone.
