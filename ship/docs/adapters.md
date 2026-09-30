@@ -202,6 +202,38 @@ committed yet, or a crash if a commit already happened per the
 crash-vs-`failed` rule above) vs. `structured_output` present (→ map its
 fields to the op's `ok`/`question` body).
 
+## Dogfood driver run findings (M1.13, `env/drive.ts` + `env/text-to-signal-mapper.ts`)
+
+Found running `env/drive.ts` unattended against a real `claude` agent, in a background
+process launched from an interactive coding session (not a login shell):
+
+- **Keychain-backed OAuth auth needs `USER` in the adapter's env, not just
+  `PATH`/`HOME`.** `runner/spawn.ts`'s `adapterEnv` deliberately strips every env var
+  except `PATH`/`HOME` before spawning an adapter (§5.3). This is correct isolation, but
+  it silently breaks `agent/claude/index.ts`'s real `claude` calls for anyone
+  authenticated via the macOS login keychain rather than `ANTHROPIC_API_KEY`: `claude`
+  reports `"Not logged in · Please run /login"` even though the same command run
+  directly (any cwd, any process ancestry, backgrounded or not) succeeds. Bisected with
+  `env -i PATH=... HOME=... claude -p ...` — adding `USER` alone is sufficient; no other
+  var was needed. **Workaround, no code change:** set `capabilities.<port>.env.USER` in
+  machine config for `define`/`implement`/`check` (or whichever ports run the real
+  agent). No fix landed in `runner/spawn.ts` — flagged here rather than silently
+  broadening the stripped env, since that's a real security boundary (P5) and widening
+  it deserves its own decision, not a side effect of one dogfood session's auth method.
+- **The Decision gate's `keep_going` comment does not reliably reach Implement as an
+  actionable code change.** Across 3 fix rounds on the same Check finding (a
+  `PLACEHOLDER`-string hardcode that fights the mapper's own genericity goal), first a
+  prose description and then an exact, literal code diff were both given as the
+  `comment` on `keep_going` — neither produced the requested code change. The only
+  effect was two doc-comment-only commits explaining the existing (unchanged) behavior.
+  Check re-raised the identical finding, near-verbatim, each round. Whether this is a
+  wiring gap (the comment isn't reaching Implement's resumed context) or a deliberate,
+  unstated hesitation by Implement (a single-candidate block *could* legitimately be a
+  real one-option decision, not just an open question — collapsing that distinction
+  unconditionally is a real edge case, just never surfaced as the reason) is unresolved.
+  Accepted the finding as a known gap rather than a fourth round. Worth instrumenting
+  before relying on `keep_going` for anything but "proceed" in an unattended run.
+
 ## Idempotency on the command id
 
 - The `id` names one instance of one step or gate. The core never reuses it: a
