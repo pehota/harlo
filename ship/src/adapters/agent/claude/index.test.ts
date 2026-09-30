@@ -118,7 +118,11 @@ describe("agent-claude adapter: define", () => {
     const payload: DefinePayload = {};
     const { exitCode, stdout } = await call({ port: "define", op: "run", payload, home, agentReplies });
     expect(exitCode).toBe(0);
-    expect(stdout).toEqual({ status: "ok", body: { criteria: ["greets the given name"], runbook: ["run greet Ada"] } });
+    expect(stdout).toEqual({
+      status: "ok",
+      body: { criteria: ["greets the given name"], runbook: ["run greet Ada"] },
+      evidence: [{ label: "reasoning", text: "…" }],
+    });
   });
 
   test("run maps a question field to question{about:'clarify'}", async () => {
@@ -256,7 +260,11 @@ describe("agent-claude adapter: implement", () => {
     const payload: ImplementPayload = { criteria: ["c"], findings: [] };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
-    expect(stdout).toEqual({ status: "ok", body: { changeset: `ship/PROJ-1-1@${headSha(ws)}` } });
+    expect(stdout).toEqual({
+      status: "ok",
+      body: { changeset: `ship/PROJ-1-1@${headSha(ws)}` },
+      evidence: [{ label: "reasoning", text: "done" }],
+    });
   });
 
   test("a re-issue with findings resumes this delivery's own stored session", async () => {
@@ -357,7 +365,7 @@ describe("agent-claude adapter: check", () => {
     const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
     const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, agentReplies });
     expect(exitCode).toBe(0);
-    expect(stdout).toEqual({ status: "ok", body });
+    expect(stdout).toEqual({ status: "ok", body, evidence: [{ label: "reasoning", text: "r" }] });
   });
 
   test("a 'decide' reply missing 'about' does not print a schema-violating Result (crash-worthy, not a bad ok)", async () => {

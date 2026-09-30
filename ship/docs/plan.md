@@ -116,6 +116,7 @@ ship/
     telegram-listener.ts    # M2
     poll/changed.ts         # M1: cron-able WorkItem change poller, in Bun/TS **[amend, synced]**
     poll/stalled.ts         # M1: cron-able check for awaited commands never sent, orphaned by a dead Runner, or hung, in Bun/TS **[amend, synced]**
+    judge.ts                # judge tool: renders a Delivery's journal per step-call (input/output/reasoning), read-only **[amend, synced]**
     watch-pr.ts             # M3
     watch-deploy.ts         # M3
   test/
@@ -276,7 +277,8 @@ type Entry = {                                 // Runner adds `time` (core has n
     | { kind: "start"; workItem: WorkItem }
     // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
     | { kind: "sent"; id: CommandId; pid: number; host: string;  // once the adapter process has started, before its exit
-        started: string }                      // the process start time, read right after spawn (pid-reuse guard)
+        started: string;                       // the process start time, read right after spawn (pid-reuse guard)
+        payload?: unknown }                    // the command's actual payload, for env/judge.ts **[amend, synced]**
     | { kind: "accepted"; id: CommandId }      // the adapter printed `accepted`
     | { kind: "adapter_error"; id: CommandId };// crash or invalid stdout; `info` = stderr tail
   from: Position | null; to: Position; issued: CommandId[];

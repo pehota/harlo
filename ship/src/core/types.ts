@@ -62,7 +62,7 @@ export type Note =
 
 // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
 export type RunnerSignal =
-  | { kind: "sent"; id: CommandId; pid: number; host: string; started: string } // started: process start time (pid-reuse guard)
+  | { kind: "sent"; id: CommandId; pid: number; host: string; started: string; payload?: unknown } // started: process start time (pid-reuse guard); payload: the command's actual payload (for judge.ts, env/judge.ts)
   | { kind: "accepted"; id: CommandId } // the adapter printed `accepted`
   | { kind: "adapter_error"; id: CommandId }; // crash or invalid stdout; `info` = stderr tail
 

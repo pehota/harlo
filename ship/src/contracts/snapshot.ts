@@ -98,6 +98,7 @@ const signalSchema: JSONSchemaType<Entry["signal"]> = {
         pid: { type: "integer" },
         host: { type: "string" },
         started: { type: "string" },
+        payload: anySchema,
       },
       required: ["kind", "id", "pid", "host", "started"],
       additionalProperties: false,

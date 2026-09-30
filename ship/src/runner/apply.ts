@@ -126,7 +126,7 @@ const mapReply = async (deps: Deps, planned: Planned, command: Command, reply: R
 const execute = async (deps: Deps, planned: Planned, command: Command): Promise<Executed> => {
   const spawned = deps.spawn(planned.state, command);
   const sentThenExit = async ({ pid, started, done }: Extract<Spawned, { spawned: true }>) => {
-    const journaled = await journal(deps, planned.delivery, { kind: "sent", id: command.id, pid, host: deps.host, started });
+    const journaled = await journal(deps, planned.delivery, { kind: "sent", id: command.id, pid, host: deps.host, started, payload: command.payload });
     return { reply: await done, journaled };
   };
   // a spawn error ran nothing: no `sent`

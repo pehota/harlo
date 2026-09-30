@@ -101,6 +101,12 @@ const callAgent = async ({ ctx, prompt, schema, resume, cwd, disallowedTools }: 
   return JSON.parse(out) as AgentReply;
 };
 
+/** Define/Implement/Check success paths only: the agent's raw reply text, surfaced as evidence (P9: opaque,
+ *  never read by the core) so a human can later judge the real reasoning behind the structured body. Omitted
+ *  when empty, never populated on the failure path (which already surfaces `reply.result` via `info`). */
+const evidenceOf = (reply: AgentReply): { evidence?: [{ label: "reasoning"; text: string }] } =>
+  reply.result ? { evidence: [{ label: "reasoning", text: reply.result }] } : {};
+
 const headSha = (dir: string): string => {
   const proc = Bun.spawnSync(["git", "-C", dir, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
   if (proc.exitCode !== 0) throw new Error(`git rev-parse HEAD failed in ${dir}: ${proc.stderr.toString()}`);
@@ -152,7 +158,7 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
   if (out?.question) return { status: "question", about: "clarify", prompt: out.question };
   if (!out?.criteria || !out?.runbook) throw new Error(`agent reply missing criteria/runbook: ${reply.result}`);
-  return { status: "ok", body: { criteria: out.criteria, runbook: out.runbook } };
+  return { status: "ok", body: { criteria: out.criteria, runbook: out.runbook }, ...evidenceOf(reply) };
 };
 
 // ── implement ──
@@ -213,7 +219,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     return { status: "failed", info: reply.result }; // nothing committed: safe, changed nothing
   }
   if (!committed) return { status: "failed", info: "agent finished without committing any changes" };
-  return { status: "ok", body: { changeset: `ship/${stdin.delivery}@${after}` } };
+  return { status: "ok", body: { changeset: `ship/${stdin.delivery}@${after}` }, ...evidenceOf(reply) };
 };
 
 // ── check ──
@@ -279,6 +285,7 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   } else {
     throw new Error(`agent reply had an unexpected verdict: ${reply.result}`);
   }
+  result = { ...(result as Record<string, unknown>), ...evidenceOf(reply) };
   // Belt-and-braces: validate the mapped Result against the port's own stdout contract before printing it,
   // mirroring how adapters/state/files.ts validates its own stored payload on the way in.
   const invalid = check(schemaFor("check", "run")!.stdout, result);
