@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PLACEHOLDER } from "../adapters/principal/placeholder";
 
 export type Candidate = { line: string; delivery: string; id: string; json: string; answer: string };
 export type Block = { candidates: Candidate[]; commentAllowed: boolean };
@@ -26,8 +27,6 @@ export type Mapped =
   | { ok: false; reason: string; options: string[] };
 
 const BLOCK_HEADER = "── ";
-/** The Principal adapter's stand-in answer for a gate with no options. */
-const PLACEHOLDER = "…";
 const COMMENT_HINT = /add\s+"comment"/;
 
 /** Split one printed shell line into words: bare words and `'…'` runs (with `'\''` for a quote), as `shellQuote` prints. */

@@ -8,10 +8,10 @@
 import { appendFileSync } from "node:fs";
 import type { Decide, GateEvidence, Stdin } from "../../src/contracts/common";
 import type { AskPayload, CancelPayload, NotifyPayload } from "../../src/contracts/ports";
+import { PLACEHOLDER } from "./placeholder";
 
 const OK = { status: "ok", body: {} };
 const ACCEPTED = { status: "accepted" };
-const PLACEHOLDER = "…";
 
 /** One shell word: left bare when it is plain, else single-quoted with each `'` written as `'\''`. */
 const shellQuote = (word: string): string => (/^[A-Za-z0-9._\/-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
