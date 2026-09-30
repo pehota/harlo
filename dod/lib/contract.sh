@@ -187,7 +187,7 @@ contract__validate_waivers() {
 # not violate N6 — contract.sh calls state_write, it never jq's state.json
 # itself.
 contract_write() {
-  local path="$1"; shift
+  local contract_path="$1"; shift
   local task_key="" task="" task_source="" session_id="" works_when="" baseline_sha=""
   local dirty_files="[]" requirements="[]" waivers="[]" brief=""
 
@@ -218,9 +218,9 @@ contract_write() {
   # $(dirname path)/../.. (the repo root), which requires $(dirname path)
   # (the task's .dod/<key> dir) to already exist for that traversal to
   # resolve on a brand-new task.
-  mkdir -p "$(dirname "$path")" 2>/dev/null
+  mkdir -p "$(dirname "$contract_path")" 2>/dev/null
 
-  contract__validate_brief "$path" "$brief" || return 1
+  contract__validate_brief "$contract_path" "$brief" || return 1
 
   jq -n \
     --arg task_key "$task_key" \
@@ -245,14 +245,14 @@ contract_write() {
       waivers: $waivers,
       brief: $brief,
       requirements: $requirements
-    }' > "$path" 2>/dev/null || return 1
+    }' > "$contract_path" 2>/dev/null || return 1
 
   local state_lib
   state_lib="$(dirname "${BASH_SOURCE[0]}")/state.sh"
   if [ -f "$state_lib" ]; then
     # shellcheck disable=SC1090
     . "$state_lib"
-    state_write "$(dirname "$path")/state.json"
+    state_write "$(dirname "$contract_path")/state.json"
   fi
 }
 
@@ -262,7 +262,7 @@ contract_write() {
 # CONTRACT_WORKS_WHEN="" (and its requirements as-is) rather than being
 # rejected — same back-compat stance as the scenario/docs synthesis below.
 contract_read() {
-  local path="$1"
+  local contract_path="$1"
   CONTRACT_TASK_KEY=""
   CONTRACT_STATUS=""
   CONTRACT_TASK=""
@@ -274,12 +274,12 @@ contract_read() {
   CONTRACT_WAIVERS="[]"
   CONTRACT_BRIEF=""
 
-  [ -f "$path" ] || return 1
+  [ -f "$contract_path" ] || return 1
   dod__has_jq || return 1
-  jq -e '.' "$path" >/dev/null 2>&1 || return 1
+  jq -e '.' "$contract_path" >/dev/null 2>&1 || return 1
 
   local reqs
-  reqs=$(jq -c '.requirements // []' "$path" 2>/dev/null)
+  reqs=$(jq -c '.requirements // []' "$contract_path" 2>/dev/null)
 
   # Back-compat: a contract written before `scenario` became a required
   # requirement (this plugin version) has no such entry. Synthesize an
@@ -299,30 +299,30 @@ contract_read() {
 
   contract__validate_requirements "$reqs" || return 1
 
-  CONTRACT_TASK_KEY=$(jq -r '.task_key // ""' "$path" 2>/dev/null)
-  CONTRACT_STATUS=$(jq -r '.status // ""' "$path" 2>/dev/null)
-  CONTRACT_TASK=$(jq -r '.task // ""' "$path" 2>/dev/null)
-  CONTRACT_TASK_SOURCE=$(jq -r '.task_source // ""' "$path" 2>/dev/null)
-  CONTRACT_SESSION_ID=$(jq -r '.session_id // ""' "$path" 2>/dev/null)
-  CONTRACT_WORKS_WHEN=$(jq -r '.works_when // ""' "$path" 2>/dev/null)
-  CONTRACT_BASELINE_SHA=$(jq -r '.baseline.sha // ""' "$path" 2>/dev/null)
+  CONTRACT_TASK_KEY=$(jq -r '.task_key // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_STATUS=$(jq -r '.status // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_TASK=$(jq -r '.task // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_TASK_SOURCE=$(jq -r '.task_source // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_SESSION_ID=$(jq -r '.session_id // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_WORKS_WHEN=$(jq -r '.works_when // ""' "$contract_path" 2>/dev/null)
+  CONTRACT_BASELINE_SHA=$(jq -r '.baseline.sha // ""' "$contract_path" 2>/dev/null)
   CONTRACT_REQUIREMENTS="$reqs"
-  CONTRACT_WAIVERS=$(jq -c '.waivers // []' "$path" 2>/dev/null)
+  CONTRACT_WAIVERS=$(jq -c '.waivers // []' "$contract_path" 2>/dev/null)
   [ -n "$CONTRACT_WAIVERS" ] || CONTRACT_WAIVERS="[]"
 
   # Back-compat: a contract written before the brief existed (ADR 0004) has
   # no `brief` field. Synthesize an implicit applicable:false on read, same
   # rationale as scenario/docs above.
-  CONTRACT_BRIEF=$(jq -c '.brief // {"applicable":false,"reason":"contract predates the context brief"}' "$path" 2>/dev/null)
+  CONTRACT_BRIEF=$(jq -c '.brief // {"applicable":false,"reason":"contract predates the context brief"}' "$contract_path" 2>/dev/null)
   [ -n "$CONTRACT_BRIEF" ] || CONTRACT_BRIEF='{"applicable":false,"reason":"contract predates the context brief"}'
   return 0
 }
 
 # contract_set_status <path> <status> — the gate's only permitted write.
 contract_set_status() {
-  local path="$1" status="$2" tmp
-  [ -f "$path" ] || return 1
+  local contract_path="$1" status="$2" tmp
+  [ -f "$contract_path" ] || return 1
   dod__has_jq || return 1
-  tmp="${path}.tmp.$$"
-  jq --arg s "$status" '.status = $s' "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+  tmp="${contract_path}.tmp.$$"
+  jq --arg s "$status" '.status = $s' "$contract_path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$contract_path" 2>/dev/null
 }

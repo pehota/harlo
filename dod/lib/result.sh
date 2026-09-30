@@ -40,7 +40,7 @@ result__validate_requirements() {
 # result_write <path> --diff-hash H --baseline-sha SHA --round N
 #                      --requirements JSON_ARR
 result_write() {
-  local path="$1"; shift
+  local result_path="$1"; shift
   local diff_hash="" baseline_sha="" round="0" requirements="[]"
 
   while [ $# -gt 0 ]; do
@@ -58,7 +58,7 @@ result_write() {
 
   case "$round" in ''|*[!0-9]*) round=0 ;; esac
 
-  mkdir -p "$(dirname "$path")" 2>/dev/null
+  mkdir -p "$(dirname "$result_path")" 2>/dev/null
 
   jq -n \
     --arg diff_hash "$diff_hash" \
@@ -77,7 +77,7 @@ result_write() {
         waived: [$requirements[] | select(.verdict == "waived")] | length,
         na: [$requirements[] | select(.verdict == "n/a")] | length
       }
-    }' > "$path" 2>/dev/null
+    }' > "$result_path" 2>/dev/null
 }
 
 # result_read <path> — sets RESULT_* globals (RESULT_ADVISORY_IDS: JSON
@@ -87,7 +87,7 @@ result_write() {
 # state_record_decisions never sees the same id twice). Returns 1 on
 # missing/malformed/invalid, without setting stale globals.
 result_read() {
-  local path="$1"
+  local result_path="$1"
   RESULT_DIFF_HASH=""
   RESULT_BASELINE_SHA=""
   RESULT_ROUND=""
@@ -96,19 +96,19 @@ result_read() {
   RESULT_ADVISORY_IDS="[]"
   RESULT_CREEP_IDS="[]"
 
-  [ -f "$path" ] || return 1
+  [ -f "$result_path" ] || return 1
   dod__has_jq || return 1
-  jq -e '.' "$path" >/dev/null 2>&1 || return 1
+  jq -e '.' "$result_path" >/dev/null 2>&1 || return 1
 
   local reqs
-  reqs=$(jq -c '.requirements // []' "$path" 2>/dev/null)
+  reqs=$(jq -c '.requirements // []' "$result_path" 2>/dev/null)
   result__validate_requirements "$reqs" || return 1
 
-  RESULT_DIFF_HASH=$(jq -r '.diff_hash // ""' "$path" 2>/dev/null)
-  RESULT_BASELINE_SHA=$(jq -r '.baseline_sha // ""' "$path" 2>/dev/null)
-  RESULT_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
+  RESULT_DIFF_HASH=$(jq -r '.diff_hash // ""' "$result_path" 2>/dev/null)
+  RESULT_BASELINE_SHA=$(jq -r '.baseline_sha // ""' "$result_path" 2>/dev/null)
+  RESULT_ROUND=$(jq -r '.round // 0' "$result_path" 2>/dev/null)
   RESULT_REQUIREMENTS="$reqs"
-  RESULT_BLOCKING_FAIL=$(jq -r '.summary.blocking_fail // 0' "$path" 2>/dev/null)
+  RESULT_BLOCKING_FAIL=$(jq -r '.summary.blocking_fail // 0' "$result_path" 2>/dev/null)
   RESULT_ADVISORY_IDS=$(printf '%s' "$reqs" | jq -c '[.[] | select(.type == "judgement") | .findings[]? | select(.severity == "advisory") | .id] | unique' 2>/dev/null)
   [ -n "$RESULT_ADVISORY_IDS" ] || RESULT_ADVISORY_IDS="[]"
 

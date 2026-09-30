@@ -35,17 +35,17 @@ dod__has_jq() { command -v jq >/dev/null 2>&1; }
 # Falls back to running body unlocked if flock isn't on PATH — same
 # behaviour as before this existed, not a new failure mode.
 state__locked() {
-  local path="$1"; shift
-  mkdir -p "$(dirname "$path")" 2>/dev/null
+  local state_path="$1"; shift
+  mkdir -p "$(dirname "$state_path")" 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
-    ( flock -x 200; "$@"; ) 200>"${path}.lock" 2>/dev/null
+    ( flock -x 200; "$@"; ) 200>"${state_path}.lock" 2>/dev/null
   else
     "$@"
   fi
 }
 
 state__write_body() {
-  local path="$1"
+  local state_path="$1"
   dod__has_jq || return 1
   jq -n '{
     latched: false,
@@ -58,7 +58,7 @@ state__write_body() {
     cache: {},
     decisions: [],
     decided_diff_hash: null
-  }' > "$path" 2>/dev/null
+  }' > "$state_path" 2>/dev/null
 }
 # state_write <path> — (re)writes defaults. Used both to initialise and,
 # combined with the mutators below, to persist changes.
@@ -67,7 +67,7 @@ state_write() { state__locked "$1" state__write_body "$1"; }
 # state_read <path> — sets STATE_* globals. Returns 1 on missing/malformed/
 # non-object JSON, without setting stale globals. Read-only: no lock needed.
 state_read() {
-  local path="$1"
+  local state_path="$1"
   STATE_LATCHED=""
   STATE_ROUND=""
   STATE_ESCALATION=""
@@ -79,35 +79,35 @@ state_read() {
   STATE_DECISIONS="[]"
   STATE_DECIDED_DIFF_HASH=""
 
-  [ -f "$path" ] || return 1
+  [ -f "$state_path" ] || return 1
   dod__has_jq || return 1
-  jq -e 'type == "object"' "$path" >/dev/null 2>&1 || return 1
+  jq -e 'type == "object"' "$state_path" >/dev/null 2>&1 || return 1
 
-  STATE_LATCHED=$(jq -r '.latched // false' "$path" 2>/dev/null)
-  STATE_ROUND=$(jq -r '.round // 0' "$path" 2>/dev/null)
-  STATE_ESCALATION=$(jq -r '.escalation // "none"' "$path" 2>/dev/null)
-  STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$path" 2>/dev/null)
-  STATE_CREEP_DIFF_HASH=$(jq -r '.creep_diff_hash // ""' "$path" 2>/dev/null)
-  STATE_EDITS=$(jq -c '.edits // []' "$path" 2>/dev/null)
+  STATE_LATCHED=$(jq -r '.latched // false' "$state_path" 2>/dev/null)
+  STATE_ROUND=$(jq -r '.round // 0' "$state_path" 2>/dev/null)
+  STATE_ESCALATION=$(jq -r '.escalation // "none"' "$state_path" 2>/dev/null)
+  STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$state_path" 2>/dev/null)
+  STATE_CREEP_DIFF_HASH=$(jq -r '.creep_diff_hash // ""' "$state_path" 2>/dev/null)
+  STATE_EDITS=$(jq -c '.edits // []' "$state_path" 2>/dev/null)
   [ -n "$STATE_EDITS" ] || STATE_EDITS="[]"
-  STATE_STATE=$(jq -r '.state // "idle"' "$path" 2>/dev/null)
+  STATE_STATE=$(jq -r '.state // "idle"' "$state_path" 2>/dev/null)
   [ -n "$STATE_STATE" ] || STATE_STATE="idle"
-  STATE_CACHE=$(jq -c '.cache // {}' "$path" 2>/dev/null)
+  STATE_CACHE=$(jq -c '.cache // {}' "$state_path" 2>/dev/null)
   [ -n "$STATE_CACHE" ] || STATE_CACHE="{}"
-  STATE_DECISIONS=$(jq -c '.decisions // []' "$path" 2>/dev/null)
+  STATE_DECISIONS=$(jq -c '.decisions // []' "$state_path" 2>/dev/null)
   [ -n "$STATE_DECISIONS" ] || STATE_DECISIONS="[]"
-  STATE_DECIDED_DIFF_HASH=$(jq -r '.decided_diff_hash // ""' "$path" 2>/dev/null)
+  STATE_DECIDED_DIFF_HASH=$(jq -r '.decided_diff_hash // ""' "$state_path" 2>/dev/null)
   return 0
 }
 
 # state__mutate_body <path> <jq_filter> — init-if-missing + read-modify-write
 # via a jq filter. Only ever called through state__locked.
 state__mutate_body() {
-  local path="$1" filter="$2" tmp
-  [ -f "$path" ] || state__write_body "$path"
+  local state_path="$1" filter="$2" tmp
+  [ -f "$state_path" ] || state__write_body "$state_path"
   dod__has_jq || return 1
-  tmp="${path}.tmp.$$"
-  jq "$filter" "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+  tmp="${state_path}.tmp.$$"
+  jq "$filter" "$state_path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$state_path" 2>/dev/null
 }
 state__mutate() { state__locked "$1" state__mutate_body "$1" "$2"; }
 
@@ -135,19 +135,19 @@ state_bump_round() { state__mutate "$1" '.round = ((.round // 0) + 1)'; }
 # gate.sh's block message (see header). /dod:verify sets "verifying" before
 # doing anything else, and back to "idle" right after result_write succeeds.
 state_set_state() {
-  local path="$1" value="$2"
+  local state_path="$1" value="$2"
   case "$value" in idle|verifying) : ;; *) return 1 ;; esac
-  state__mutate "$path" ".state = $(jq -n --arg v "$value" '$v')"
+  state__mutate "$state_path" ".state = $(jq -n --arg v "$value" '$v')"
 }
 
 state_set_escalation() {
-  local path="$1" value="$2"
-  state__mutate "$path" ".escalation = $(jq -n --arg v "$value" '$v')"
+  local state_path="$1" value="$2"
+  state__mutate "$state_path" ".escalation = $(jq -n --arg v "$value" '$v')"
 }
 
 state_set_last_failed_diff_hash() {
-  local path="$1" hash="$2"
-  state__mutate "$path" ".last_failed_diff_hash = $(jq -n --arg h "$hash" '$h')"
+  local state_path="$1" hash="$2"
+  state__mutate "$state_path" ".last_failed_diff_hash = $(jq -n --arg h "$hash" '$h')"
 }
 
 # state_set_creep_diff_hash <path> <diff_hash> — ADR 0004's one-shot marker:
@@ -159,8 +159,8 @@ state_set_last_failed_diff_hash() {
 # (state_write), same as every other state field, so a fresh/amended
 # contract never inherits a stale marker from a prior pass.
 state_set_creep_diff_hash() {
-  local path="$1" hash="$2"
-  state__mutate "$path" ".creep_diff_hash = $(jq -n --arg h "$hash" '$h')"
+  local state_path="$1" hash="$2"
+  state__mutate "$state_path" ".creep_diff_hash = $(jq -n --arg h "$hash" '$h')"
 }
 
 # --- the user's fix/skip decision on the final review's advisories ---------
@@ -179,14 +179,14 @@ state_set_creep_diff_hash() {
 # none missing, extra or repeated; diff_hash is that result's. Rejects
 # anything else, writing nothing.
 state_record_decisions() {
-  local path="$1" decisions="$2" diff_hash="$3" ids="$4"
+  local state_path="$1" decisions="$2" diff_hash="$3" ids="$4"
   dod__has_jq || return 1
   jq -e -n --argjson d "$decisions" --argjson ids "$ids" '
     ($d | type == "array" and length > 0)
     and ($d | all(.[]; (.id | type == "string") and (.decision == "fix" or .decision == "skip")))
     and ($d | map(.id) | sort) == ($ids | sort)
   ' >/dev/null 2>&1 || return 1
-  state__mutate "$path" ".decisions = $(printf '%s' "$decisions" | jq -c .)
+  state__mutate "$state_path" ".decisions = $(printf '%s' "$decisions" | jq -c .)
     | .decided_diff_hash = $(jq -n --arg h "$diff_hash" '$h')"
 }
 
@@ -194,12 +194,12 @@ state_record_decisions() {
 # and the changeset is still the one it was decided on (not re-verified
 # since), 1 otherwise. Read-only: no lock needed.
 state_decision_needs_verify() {
-  local path="$1" diff_hash="$2"
-  [ -f "$path" ] || return 1
+  local state_path="$1" diff_hash="$2"
+  [ -f "$state_path" ] || return 1
   dod__has_jq || return 1
   jq -e --arg h "$diff_hash" '
     any((.decisions // [])[]; .decision == "fix") and .decided_diff_hash == $h
-  ' "$path" >/dev/null 2>&1
+  ' "$state_path" >/dev/null 2>&1
 }
 
 # state_log_edit <path> <prompt_id> <file_path> — appends one edit record
@@ -213,16 +213,16 @@ state_decision_needs_verify() {
 # repeatedly-edited file would grow state.json for no observable behaviour
 # change — just slower gate.sh reads on every Stop.
 state__log_edit_body() {
-  local path="$1" prompt_id="$2" file="$3" ts tmp
-  [ -f "$path" ] || state__write_body "$path"
+  local state_path="$1" prompt_id="$2" file="$3" ts tmp
+  [ -f "$state_path" ] || state__write_body "$state_path"
   dod__has_jq || return 1
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
-  tmp="${path}.tmp.$$"
+  tmp="${state_path}.tmp.$$"
   jq --arg p "$prompt_id" --arg f "$file" --arg t "$ts" \
     '.edits = (([{prompt_id: $p, path: $f, ts: $t}] + .edits)
                 | unique_by([.prompt_id, .path])
                 | .[0:200])' \
-    "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+    "$state_path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$state_path" 2>/dev/null
 }
 state_log_edit() { state__locked "$1" state__log_edit_body "$1" "$2" "$3"; }
 
@@ -230,11 +230,11 @@ state_log_edit() { state__locked "$1" state__log_edit_body "$1" "$2" "$3"; }
 # any record for prompt_id, 1 otherwise (including missing/malformed state).
 # Read-only: no lock needed.
 state_has_edit_for_prompt() {
-  local path="$1" prompt_id="$2"
-  [ -f "$path" ] || return 1
+  local state_path="$1" prompt_id="$2"
+  [ -f "$state_path" ] || return 1
   dod__has_jq || return 1
   jq -e --arg p "$prompt_id" '(.edits // []) | any(.[]; .prompt_id == $p)' \
-    "$path" >/dev/null 2>&1
+    "$state_path" >/dev/null 2>&1
 }
 
 # state_cache_key <diff_hash> <cmd> — the cache map key, "<diff_hash>:<cmd_hash>".
@@ -254,11 +254,11 @@ state_cache_key() {
 # miss. Read-only: no lock needed. Any change to the diff changes diff_hash,
 # so the whole cache is invalidated for free — no explicit eviction on edit.
 state_cache_get() {
-  local path="$1" diff_hash="$2" cmd="$3" key verdict
-  [ -f "$path" ] || return 1
+  local state_path="$1" diff_hash="$2" cmd="$3" key verdict
+  [ -f "$state_path" ] || return 1
   dod__has_jq || return 1
   key=$(state_cache_key "$diff_hash" "$cmd")
-  verdict=$(jq -r --arg k "$key" '(.cache // {})[$k] // empty' "$path" 2>/dev/null)
+  verdict=$(jq -r --arg k "$key" '(.cache // {})[$k] // empty' "$state_path" 2>/dev/null)
   [ -n "$verdict" ] || return 1
   printf '%s' "$verdict"
 }
@@ -269,17 +269,17 @@ state_cache_get() {
 # capped: only lookups are read back, never history, so unbounded growth
 # would just slow every gate.sh/verify read for no behaviour change.
 state__cache_set_body() {
-  local path="$1" key="$2" verdict="$3" tmp
-  [ -f "$path" ] || state__write_body "$path"
+  local state_path="$1" key="$2" verdict="$3" tmp
+  [ -f "$state_path" ] || state__write_body "$state_path"
   dod__has_jq || return 1
-  tmp="${path}.tmp.$$"
+  tmp="${state_path}.tmp.$$"
   jq --arg k "$key" --arg v "$verdict" \
     '.cache = (((.cache // {}) + {($k): $v})
                 | to_entries | .[-200:] | from_entries)' \
-    "$path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null
+    "$state_path" >"$tmp" 2>/dev/null && mv -f "$tmp" "$state_path" 2>/dev/null
 }
 state_cache_set() {
-  local path="$1" diff_hash="$2" cmd="$3" verdict="$4" key
+  local state_path="$1" diff_hash="$2" cmd="$3" verdict="$4" key
   key=$(state_cache_key "$diff_hash" "$cmd")
-  state__locked "$path" state__cache_set_body "$path" "$key" "$verdict"
+  state__locked "$state_path" state__cache_set_body "$state_path" "$key" "$verdict"
 }
