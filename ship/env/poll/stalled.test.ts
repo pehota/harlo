@@ -1,5 +1,5 @@
 // M1.4: the stall poller, driven as an executable. `ship status` is a fake stand-in (its own JSON is the
-// thing under test's control), State is the real file adapter seeded directly (as adapters/state/files.test.ts
+// thing under test's control), State is the real file adapter seeded directly (as src/adapters/state/files.test.ts
 // seeds it), so the liveness rules run against a real journal and real pids/process-start-times.
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,7 +11,7 @@ import { D, awaited, snapshotAt, workItem } from "../../src/core/fixtures/builde
 import type { Snapshot } from "../../src/core/types";
 
 const ROOT = join(import.meta.dir, "..", "..");
-const STATE = join(ROOT, "adapters", "state", "files.ts");
+const STATE = join(ROOT, "src", "adapters", "state", "files.ts");
 const STALLED = join(import.meta.dir, "stalled.ts");
 
 const A = awaited("check-1", "check", "run", {}, "check", "run"); // the one awaited command every row shares
@@ -32,7 +32,7 @@ const startEntry = (msAgo: number): TimedEntry => ({ delivery: D, signal: { kind
 const sentEntry = (pid: number, host: string, started: string): TimedEntry =>
   ({ delivery: D, signal: { kind: "sent", id: A.id, pid, host, started }, from: "check", to: "check", issued: [], time: iso(0) });
 
-/** `state save` on the real file adapter, exactly as adapters/state/files.test.ts seeds it. */
+/** `state save` on the real file adapter, exactly as src/adapters/state/files.test.ts seeds it. */
 const seed = async (stateDir: string, state: Snapshot, entries: TimedEntry[]): Promise<void> => {
   const stdin: RunnerStdin = {
     id: null, delivery: state.delivery, port: "state", op: "save", workItem: null, workspace: null,

@@ -8,7 +8,7 @@ import { D, snapshotAt } from "../core/fixtures/builders.fixture";
 import { RunnerCallError } from "./spawn";
 import { stateClient } from "./state";
 
-const ADAPTER = join(import.meta.dir, "..", "..", "adapters", "state", "files.ts");
+const ADAPTER = join(import.meta.dir, "..", "..", "src", "adapters", "state", "files.ts");
 
 const dirs: string[] = [];
 const tempDir = (): string => {

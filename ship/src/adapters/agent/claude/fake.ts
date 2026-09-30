@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// TEST-ONLY fake `claude` CLI, for adapters/agent/claude/index.test.ts (--agent-bin points here instead of the real
+// TEST-ONLY fake `claude` CLI, for src/adapters/agent/claude/index.test.ts (--agent-bin points here instead of the real
 // `claude`). Mimics the real CLI's argv/stdout shape confirmed by the M1.8 spike: called as
 // `<this> -p <prompt> --output-format json --json-schema <schema> [--resume <id>]`, it prints one JSON line
 // shaped like the real reply ({is_error, result, structured_output?, session_id?}) — even on a non-zero exit,
@@ -7,7 +7,7 @@
 // agent's own commit(s) inside the workspace.
 //
 // env FAKE_AGENT_REPLIES (required): a JSON file `{"replies": <reply> | <reply>[]}`. A list gives the nth
-// call the nth reply (adapters/fake.ts's own idea); a single reply answers every call.
+// call the nth reply (src/adapters/fake.ts's own idea); a single reply answers every call.
 // env FAKE_AGENT_LOG (optional): every call's argv is appended here as one JSON line, so a test can assert
 // what the adapter passed — e.g. whether `--resume` was sent, and with which session id.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

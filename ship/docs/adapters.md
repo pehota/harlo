@@ -93,7 +93,7 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 
-Real, timeboxed calls against the installed `claude` CLI, for `adapters/agent/claude/index.ts` (M1.9–M1.11):
+Real, timeboxed calls against the installed `claude` CLI, for `src/adapters/agent/claude/index.ts` (M1.9–M1.11):
 
 - **Structured output.** `-p/--print --output-format json --json-schema '<inline
   JSON Schema>'` works, but `--json-schema` takes the schema **inline**, not a

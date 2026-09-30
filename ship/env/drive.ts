@@ -5,7 +5,7 @@
 // loop is expected to invoke — this file IS that "cron or loop" harness plan.md §7 leaves to the environment:
 // it loops itself, sleeping `--interval` between passes, and calls both pollers each pass rather than being
 // called by something else. It never answers a Principal gate: the terminal Principal adapter
-// (`adapters/principal/index.ts`) prints the gate and a ready `ship signal …` command to `/dev/tty` and returns
+// (`src/adapters/principal/index.ts`) prints the gate and a ready `ship signal …` command to `/dev/tty` and returns
 // immediately, and a human pastes that command exactly as today; this driver only automates the mechanical
 // next/changed/poll loop around that gate, never `ship signal` itself.
 //

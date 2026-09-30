@@ -5,9 +5,9 @@ import Ajv from "ajv";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Decide, GateEvidence, Stdin } from "../../src/contracts/common";
-import type { AskPayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
+import type { Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
+import type { AskPayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
 
 const ADAPTER = join(import.meta.dir, "index.ts");
 const ajv = new Ajv();

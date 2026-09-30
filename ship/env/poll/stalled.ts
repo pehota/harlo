@@ -20,7 +20,7 @@
 //
 // argv: --ship <path to bin/ship> [--grace <ms>] [--max-runtime <ms>] --state <state-adapter argv…>
 //   `--state` takes the rest of argv: the adapter's own spawn argv, exactly as the machine config's `state`
-//   entry does (e.g. `bun adapters/state/files.ts --dir <dir>`), since `state <op>` is appended by this poller.
+//   entry does (e.g. `bun src/adapters/state/files.ts --dir <dir>`), since `state <op>` is appended by this poller.
 //   `--grace`/`--max-runtime` are one poller-wide budget (ms), not per port [amend: the plan tables `maxRuntime`
 //   per port; YAGNI keeps one number here — split it into a per-port map if a real profile needs one].
 import { hostname } from "node:os";

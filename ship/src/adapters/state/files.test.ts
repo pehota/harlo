@@ -4,11 +4,11 @@ import Ajv from "ajv";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../../src/contracts/common";
-import { schemaFor } from "../../src/contracts/ports";
-import type { TimedEntry } from "../../src/contracts/snapshot";
-import type { Snapshot } from "../../src/core/types";
-import { snapshotAt, workItem as baseWorkItem } from "../../src/core/fixtures/builders.fixture";
+import type { Stdin, WorkItem } from "../../../src/contracts/common";
+import { schemaFor } from "../../../src/contracts/ports";
+import type { TimedEntry } from "../../../src/contracts/snapshot";
+import type { Snapshot } from "../../../src/core/types";
+import { snapshotAt, workItem as baseWorkItem } from "../../../src/core/fixtures/builders.fixture";
 
 const ADAPTER = join(import.meta.dir, "files.ts");
 const ajv = new Ajv();

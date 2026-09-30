@@ -4,9 +4,9 @@ import Ajv from "ajv";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../../src/contracts/common";
-import { schemaFor } from "../../src/contracts/ports";
-import { workItem as baseWorkItem } from "../../src/core/fixtures/builders.fixture";
+import type { Stdin, WorkItem } from "../../../src/contracts/common";
+import { schemaFor } from "../../../src/contracts/ports";
+import { workItem as baseWorkItem } from "../../../src/core/fixtures/builders.fixture";
 
 const ADAPTER = join(import.meta.dir, "md.ts");
 const ajv = new Ajv();

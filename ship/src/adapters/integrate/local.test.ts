@@ -6,8 +6,8 @@ import Ajv from "ajv";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Stdin, WorkItem } from "../../src/contracts/common";
-import { schemaFor } from "../../src/contracts/ports";
+import type { Stdin, WorkItem } from "../../../src/contracts/common";
+import { schemaFor } from "../../../src/contracts/ports";
 
 const ADAPTER = join(import.meta.dir, "local.ts");
 const ajv = new Ajv();

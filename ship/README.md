@@ -64,9 +64,9 @@ a profile `env` value:
 
 | Adapter | Port | Args |
 |---|---|---|
-| `adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
-| `adapters/principal/index.ts` | principal | `[--out <file>]`, default `/dev/tty` |
-| `adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
+| `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
+| `src/adapters/principal/index.ts` | principal | `[--out <file>]`, default `/dev/tty` |
+| `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
 ## CLI
 
@@ -128,7 +128,7 @@ cat > script.json <<'EOF'
 } }
 EOF
 
-fake='["bun", "'"$ship_root"'/adapters/fake.ts", "--script", "'"$demo"'/script.json"]'
+fake='["bun", "'"$ship_root"'/src/adapters/fake.ts", "--script", "'"$demo"'/script.json"]'
 cat > ship.config.json <<EOF
 { "projectId": "demo",
   "adapters": { "tracker": $fake, "workspace": $fake, "define": $fake, "implement": $fake,
@@ -139,7 +139,7 @@ cat > ship.config.json <<EOF
 EOF
 cat > machine.json <<EOF
 { "principal": $fake,
-  "state": ["bun", "$ship_root/adapters/state/files.ts", "--dir", "$demo/state"] }
+  "state": ["bun", "$ship_root/src/adapters/state/files.ts", "--dir", "$demo/state"] }
 EOF
 export SHIP_MACHINE_CONFIG="$demo/machine.json"
 
@@ -153,5 +153,5 @@ ship status hello-1
 # → {"deliveries":[{"delivery":"hello-1","at":"closed","awaiting":null}]}
 ```
 
-For a real person at the terminal, set `"principal": ["bun", "<ship>/adapters/principal/index.ts"]`.
+For a real person at the terminal, set `"principal": ["bun", "<ship>/src/adapters/principal/index.ts"]`.
 It prints each gate with its evidence and a paste-ready `ship signal …` line per option.

@@ -6,11 +6,11 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Stdin } from "../../src/contracts/common";
-import { isDeliveryId } from "../../src/core/ids";
-import type { Empty, SetupBody, TeardownPayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
-import { check } from "../../src/contracts/validate";
+import type { Stdin } from "../../../src/contracts/common";
+import { isDeliveryId } from "../../../src/core/ids";
+import type { Empty, SetupBody, TeardownPayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
+import { check } from "../../../src/contracts/validate";
 
 type Ctx = { root: string; main: string; delivery: string; cwd: string };
 

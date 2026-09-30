@@ -64,8 +64,8 @@ ship/
       gates.ts              # gate options, decide/ask command builders, evidence bundle
       steps.ts              # step → port/op/payload builders, tracker status fire
       ports/                # port-subset types for cross-cutting adapters (one file per adapter category)
-        agent.ts             # StepPort, STEP_PORTS — adapters/agent/claude
-        ask.ts                # GatedPort — adapters/ask/principal
+        agent.ts             # StepPort, STEP_PORTS — src/adapters/agent/claude
+        ask.ts                # GatedPort — src/adapters/ask/principal
       start.test.ts         # table-driven
       transition.test.ts    # table-driven (§4)
       invariants.test.ts    # sweep of all rows: invariants I1–I6
@@ -82,31 +82,36 @@ ship/
       apply.ts              # the load → core → save → execute loop, CAS retry
       *.test.ts
     cli.ts                  # verbs, exit codes, one JSON line out
-  adapters/                 # one executable per adapter; each takes <port> <op>
-    state/files.ts          # M0
-    principal/index.ts      # M0. Single adapter; terminal vs. Telegram are
-                             #   configurable transports inside it, not
-                             #   separate executables **[amend, synced]**
-    fake.ts                 # M0, tests only: scripted by a fixture file; cross-cutting, stays flat
-    workspace/worktree.ts   # M1
-    tracker/md.ts           # M1
-    tracker/github.ts       # M2
-    tracker/jira.ts         # M3
-    integrate/local.ts      # M1
-    integrate/pr.ts         # M3
-    deploy/gha.ts           # M3
-    ask/                    # cross-cutting category: adapters serving multiple ports via a manual gate
-      principal/index.ts    # M1 (serves deploy + verify), own module folder, not per-port
-    agent/                  # cross-cutting category: adapters serving multiple ports via a coding agent
-      claude/index.ts       # M1 (serves define, implement, check; later verify), own module folder, not per-port
-    *.test.ts
+    adapters/               # one executable per adapter; each takes <port> <op>
+      state/files.ts          # M0
+      principal/index.ts      # M0. Single adapter; terminal vs. Telegram are
+                               #   configurable transports inside it, not
+                               #   separate executables **[amend, synced]**
+      fake.ts                 # M0, tests only: scripted by a fixture file; cross-cutting, stays flat
+      workspace/worktree.ts   # M1
+      tracker/md.ts           # M1
+      tracker/github.ts       # M2
+      tracker/jira.ts         # M3
+      integrate/local.ts      # M1
+      integrate/pr.ts         # M3
+      deploy/gha.ts           # M3
+      ask/                    # cross-cutting category: adapters serving multiple ports via a manual gate
+        principal/index.ts    # M1 (serves deploy + verify), own module folder, not per-port
+      agent/                  # cross-cutting category: adapters serving multiple ports via a coding agent
+        claude/index.ts       # M1 (serves define, implement, check; later verify), own module folder, not per-port
+      *.test.ts
   # **[amend, synced]**: adapters are grouped one folder per port
-  # (`adapters/<port>/<variant>.ts`), uniformly, even where only one variant
+  # (`src/adapters/<port>/<variant>.ts`), uniformly, even where only one variant
   # exists today — except a cross-cutting adapter serving more than one port
   # (`ask/principal/index.ts`, `agent/claude/index.ts`), which still gets its
   # isn't split into port-specific variants. `fake.ts` (tests only) stays
-  # truly flat directly under `adapters/`. Principal is a further exception:
+  # truly flat directly under `src/adapters/`. Principal is a further exception:
   # it is always a single adapter, never split per transport.
+  # **[amend, synced]**: `src/adapters/` moved under `src/` (from a top-level
+  # `adapters/` sibling) to prepare for npm-publish packaging (`files`/`exports`
+  # naturally covering `src/`) and single-tree cohesion. `src/core`'s P5/P7
+  # purity rule (no I/O, no tool names) is unaffected: it was, and remains,
+  # scoped to `src/core/**` only (`invariants.test.ts`), never to all of `src/`.
   env/                      # reference environment scripts, not part of the core or Runner
     telegram-listener.ts    # M2
     poll/changed.ts         # M1: cron-able WorkItem change poller, in Bun/TS **[amend, synced]**
@@ -125,7 +130,7 @@ ship/
   README.md                 # M0: install, config, CLI
 ```
 
-Tool names such as `claude` and `jira` appear only in `adapters/` and `env/`. `invariants.test.ts` also scans `src/core` and fails on any tool name (see M0.13).
+Tool names such as `claude` and `jira` appear only in `src/adapters/` and `env/`. `invariants.test.ts` also scans `src/core` and fails on any tool name (see M0.13).
 
 ---
 
@@ -324,9 +329,9 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 {
   "projectId": "harlo",
   "adapters": {                          // argv prefix; Runner appends <port> <op>
-    "tracker":  ["bun", "adapters/tracker/md.ts", "--dir", "~/notes/harlo"],
-    "workspace":["bun", "adapters/workspace/worktree.ts", "--main", "main"],
-    "define":   ["bun", "adapters/agent/claude/index.ts"], "implement": ["..."], "check": ["..."],
+    "tracker":  ["bun", "src/adapters/tracker/md.ts", "--dir", "~/notes/harlo"],
+    "workspace":["bun", "src/adapters/workspace/worktree.ts", "--main", "main"],
+    "define":   ["bun", "src/adapters/agent/claude/index.ts"], "implement": ["..."], "check": ["..."],
     "integrate":["..."], "deploy": ["..."], "verify": ["..."]
   },
   "policy": {
@@ -345,8 +350,8 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 }
 // machine: $SHIP_MACHINE_CONFIG or ~/.config/ship/<projectId>.json
 {
-  "principal": ["bun", "adapters/principal/index.ts"],
-  "state":     ["bun", "adapters/state/files.ts", "--dir", "~/.local/state/ship/harlo"],
+  "principal": ["bun", "src/adapters/principal/index.ts"],
+  "state":     ["bun", "src/adapters/state/files.ts", "--dir", "~/.local/state/ship/harlo"],
   "secrets":   { "GH": { "env": "GH_TOKEN" } },
   "capabilities": { "integrate": { "env": { "GH_TOKEN": "$secrets.GH" }, "tools": ["git", "gh"] } }
 }
@@ -638,7 +643,7 @@ Rules for every step:
   - Done when green.
 - [x] **M0.14 File State adapter.**
   - Test: table for save v1 → load, `EEXIST` conflict, highest-version load, list by key (`PROJ-1` vs `PROJ-12`), list all, journal order across versions, and a corrupt file failing load.
-  - Impl: `adapters/state/files.ts --dir`.
+  - Impl: `src/adapters/state/files.ts --dir`.
   - Done when green by piping JSON into the executable.
 - [x] **M0.15 Spawn.**
   - Test: fixture bash adapters returning ok, accepted, failed, invalid JSON, schema-invalid, exit 1 and ENOENT. Also:
@@ -676,11 +681,11 @@ Rules for every step:
   - Done when green.
 - [x] **M0.19 Fakes.**
   - Test: the fake adapter replays a fixture script (per port, the nth call returns the nth scripted stdout) and records its stdin.
-  - Impl: `adapters/fake.ts` serving tracker, workspace, every step port and principal, driven by `--script`.
+  - Impl: `src/adapters/fake.ts` serving tracker, workspace, every step port and principal, driven by `--script`.
   - Done when the fixture replay is green.
 - [x] **M0.20 Terminal Principal.**
   - Test: `decide` and `ask` print the gate, options, evidence and a paste-ready `ship signal <d> <id> '{"status":"ok","body":{"answer":"…","by":"person"}}'` line to `--out` (default `/dev/tty`), and return `accepted`. `notify` prints and returns `ok`. `cancel` prints "withdrawn".
-  - Impl: `adapters/principal/index.ts`.
+  - Impl: `src/adapters/principal/index.ts`.
   - Done when green.
 - [x] **M0.21 End-to-end on fakes.**
   - Test: `test/e2e/lifecycle.test.ts` drives `bin/ship` with a fake config through these scenarios:
@@ -741,11 +746,11 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 
 - [x] **M1.1 git-worktree Workspace.**
   - Test: in a temp repo, `setup` creates worktree `<root>/<delivery>` on branch `ship/<delivery>` from the main line and returns `{path}`. `teardown` removes the worktree and the branch. Both are idempotent (a second call gives `ok`). `cancel` is a no-op.
-  - Impl: `adapters/workspace/worktree.ts --main <branch> --root <dir>`.
+  - Impl: `src/adapters/workspace/worktree.ts --main <branch> --root <dir>`.
   - Done when green.
 - [x] **M1.2 md-file tracker: read, next, update.**
   - Test: `<dir>/<key>.md` with frontmatter `status:`. `read` gives key = file slug, title from the H1 or frontmatter `title`, and body = the text above the `<!-- ship:log -->` marker. `next` gives the first file (sorted by name) with `status: ready`, or null. `update` rewrites only the frontmatter `status`.
-  - Impl: `adapters/tracker/md.ts --dir`.
+  - Impl: `src/adapters/tracker/md.ts --dir`.
   - Done when green.
 - [x] **M1.3 md-file tracker: comment.**
   - Test: `comment` appends a line below `<!-- ship:log -->`, and `read` then returns an unchanged body. A later `ship changed` therefore hits W1 (no self-echo).
@@ -773,14 +778,14 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [x] **M1.5 Local-merge Integrate: landing.**
   - Test: in temp repos, rebase `ship/<d>` onto the main line, `merge --ff-only` into the main line, then push if a remote is configured. Returns `ok{landed}`.
-  - Impl: `adapters/integrate/local.ts`.
+  - Impl: `src/adapters/integrate/local.ts`.
   - Done when green.
 - [x] **M1.6 Local-merge Integrate: conflict.**
   - Test: a conflicting change makes the adapter abort the rebase and return `question{about: "conflict", prompt, evidence}`. When re-issued with `answer: "resolved"`, it retries the rebase.
   - Done when green.
 - [x] **M1.7 ask-principal (Deploy and Verify).**
   - Test: with no `answer`, the adapter returns `question{about: "manual", prompt, options}`: `[live, not_live]` for deploy, `[pass, fail]` for verify. When re-issued with an answer, it returns the matching `ok{verdict}`, and for a negative answer `findings: [{text: answer}]`.
-  - Impl: `adapters/ask/principal/index.ts`.
+  - Impl: `src/adapters/ask/principal/index.ts`.
   - Done when green.
 - [x] **M1.8 Spike: coding-agent CLI (timebox 2h).**
   - Test: a manual script confirms, for the headless CLI:
@@ -793,7 +798,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when every item above is marked verified or not in `docs/adapters.md` and in the headless coding-agent row of §8.3. Findings recorded in `docs/adapters.md` under "Coding-agent CLI spike (M1.8, `claude` 2.1.283)".
 - [x] **M1.9 Agent adapter: Define.**
   - Test: a fake agent binary (injected via `--agent-bin`) returns structured output, and the adapter maps it to `ok{criteria, runbook}`, or to `question{about: "clarify"}` when the output carries a question field.
-  - Impl: `adapters/agent/claude/index.ts define run`.
+  - Impl: `src/adapters/agent/claude/index.ts define run`.
   - Done when green on the fake. A manual run on a real WorkItem produces criteria and a runbook.
 - [x] **M1.10 Agent adapter: Implement.**
   - Test: with the fake agent, the adapter:
@@ -818,7 +823,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 
 - [ ] **M2.1 Telegram Principal: decide.**
   - Test: with a mocked Bot API over HTTP, `decide` sends a message with inline buttons, each carrying a short token. The adapter state file maps token → `{delivery, id, answer}`. It returns `accepted`.
-  - Impl: `adapters/principal/index.ts` — Telegram is a second transport inside the single principal adapter, not a new file **[amend, synced]**.
+  - Impl: `src/adapters/principal/index.ts` — Telegram is a second transport inside the single principal adapter, not a new file **[amend, synced]**.
   - Done when green.
 - [ ] **M2.2 Telegram Principal: ask, notify, cancel.**
   - Test: `ask` without options is a force-reply message; `ask` with options uses buttons. `notify` is a plain message. `cancel` edits the message to "withdrawn".
@@ -834,14 +839,14 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
     - comment
     - next is a label query
     - label changes and comments leave title and body unchanged (W1)
-  - Impl: `adapters/tracker/github.ts`.
+  - Impl: `src/adapters/tracker/github.ts`.
   - Done when green.
 
 ### M3 — Work setup
 
 - [ ] **M3.1 Jira tracker: read and next.**
   - Test: with a mocked REST API, `read` maps summary and description to title and body (ADF to plain text), and `next` runs a configured JQL query.
-  - Impl: `adapters/tracker/jira.ts`.
+  - Impl: `src/adapters/tracker/jira.ts`.
   - Done when green.
 - [ ] **M3.2 Jira tracker: update and comment.**
   - Test: a status maps to a transition id from adapter config. A comment posts. A transition with no mapping gives `failed` (changed nothing).
@@ -852,7 +857,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.4 PR Integrate adapter.**
   - Test: with a fake `gh`, the adapter pushes `ship/<d>`, creates the PR, enables auto-merge and returns `accepted`. `cancel` closes the PR. It is idempotent on the command id (an existing PR is reused).
-  - Impl: `adapters/integrate/pr.ts`.
+  - Impl: `src/adapters/integrate/pr.ts`.
   - Done when green.
 - [ ] **M3.5 PR watcher.**
   - Test: with a fake `gh`:
@@ -863,11 +868,11 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Done when green.
 - [ ] **M3.6 GitHub Actions Deploy adapter and watcher.**
   - Test: with a fake `gh`, the adapter finds or triggers the run for the landed SHA and returns `accepted`. The watcher sends `ok{live}` on success or `ok{not_live, findings}` on failure. An optional health-probe URL is supported.
-  - Impl: `adapters/deploy/gha.ts`, `env/watch-deploy.ts`.
+  - Impl: `src/adapters/deploy/gha.ts`, `env/watch-deploy.ts`.
   - Done when green.
 - [ ] **M3.7 e2e Verify agent.**
   - Test: with the fake agent, a fresh session (P8) gets the runbook plus the prod URL from the capability env and maps its output to `ok{pass|fail, findings}`. Prod credentials are present only in the verify profile.
-  - Impl: `adapters/agent/claude/index.ts verify run`.
+  - Impl: `src/adapters/agent/claude/index.ts verify run`.
   - Done when green on the fake plus one real run against staging or prod.
 - [ ] **M3.8 Work dogfood.**
   - Test: one real Jira WorkItem through PR, Actions and Verify, with the terminal Principal.
@@ -945,7 +950,7 @@ The Runner starts no listeners. The environment must provide what follows.
     - Why: children already share the Runner's process group by default, a SIGKILL on the Runner alone does not kill them, and macOS has no reliable parent-death signal.
 15. **A changed WorkItem before Land goes back to Define** **[amend, synced]**. **Decided:** at Accept, Implement, Check or Decision (incl. asks, and Blocked at one of these), `workItem_changed` cancels the awaited command and re-runs Define with the new WorkItem, exactly as at Define (W3–W5); the next Accept gate carries no "workItem changed" note. Previously these went back to the Accept gate with that note. Synced into `architecture.md`.
     - Why: criteria and runbook are derived from the WorkItem. Going back to Accept showed stale criteria next to the new WorkItem, and an easy `accept` locked them in.
-16. **Adapter layout: one folder per port; pollers in Bun/TS, not bash** **[amend, synced]**. **Decided:** `adapters/<port>/<variant>.ts`, uniformly, even where only one variant exists today (`state/files.ts`, `workspace/worktree.ts`, `tracker/md.ts`, `integrate/local.ts`, `deploy/gha.ts`), except a cross-cutting adapter serving more than one port (`ask/principal/index.ts` for deploy+verify, `agent/claude/index.ts` for define/implement/check), which still gets its own module folder for organization, just not a per-port one, since it isn't split into port-specific variants. `fake.ts` (tests only) stays truly flat directly under `adapters/`. Principal is always a single adapter (`adapters/principal/index.ts`); Telegram (M2) is a configurable transport inside it, never a separate `principal-telegram.ts`. The pollers (`env/poll/changed.ts`, `env/poll/stalled.ts`) are Bun/TS, not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` this plan originally specified — same behavior, reusing `schemaFor`/ajv types instead of re-deriving JSON shapes in shell. Synced into this section's module layout (§2) and every M1–M3 `Impl:` line that named an adapter path.
+16. **Adapter layout: one folder per port; pollers in Bun/TS, not bash** **[amend, synced]**. **Decided:** `src/adapters/<port>/<variant>.ts`, uniformly, even where only one variant exists today (`state/files.ts`, `workspace/worktree.ts`, `tracker/md.ts`, `integrate/local.ts`, `deploy/gha.ts`), except a cross-cutting adapter serving more than one port (`ask/principal/index.ts` for deploy+verify, `agent/claude/index.ts` for define/implement/check), which still gets its own module folder for organization, just not a per-port one, since it isn't split into port-specific variants. `fake.ts` (tests only) stays truly flat directly under `src/adapters/`. Principal is always a single adapter (`src/adapters/principal/index.ts`); Telegram (M2) is a configurable transport inside it, never a separate `principal-telegram.ts`. The pollers (`env/poll/changed.ts`, `env/poll/stalled.ts`) are Bun/TS, not the bash `env/poll-changed.sh`/`env/poll-stalled.sh` this plan originally specified — same behavior, reusing `schemaFor`/ajv types instead of re-deriving JSON shapes in shell. Synced into this section's module layout (§2) and every M1–M3 `Impl:` line that named an adapter path.
     - Why: `tracker` and `integrate` each gain a second real variant within this plan's own milestones (M2/M3); a flat name would need renaming the moment that variant landed. One language across the whole repo (Bun/TS) beats splitting environment scripts into a second language for no behavioral reason.
 
 ### 8.2 Conflicts between the planning parts, and how each was resolved

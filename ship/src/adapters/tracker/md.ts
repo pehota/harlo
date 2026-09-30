@@ -9,13 +9,13 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { WorkItem } from "../../src/contracts/common";
+import type { WorkItem } from "../../../src/contracts/common";
 import type {
   TrackerCommentPayload, TrackerNextBody, TrackerReadBody, TrackerReadPayload, TrackerUpdatePayload,
-} from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
-import { check } from "../../src/contracts/validate";
-import { KEY_RE } from "../../src/core/ids";
+} from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
+import { check } from "../../../src/contracts/validate";
+import { KEY_RE } from "../../../src/core/ids";
 
 const MARKER = "<!-- ship:log -->";
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;

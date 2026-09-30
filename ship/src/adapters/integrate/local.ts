@@ -18,11 +18,11 @@
 // branch that is already up to date with the main line does nothing and still reports `landed`.
 //
 // `cancel`: no-op (the generic contract) — nothing here runs in the background to cancel.
-import type { EvidenceItem, Result, Stdin } from "../../src/contracts/common";
-import type { CancelPayload, IntegrateBody, IntegratePayload } from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
-import { check } from "../../src/contracts/validate";
-import { isDeliveryId } from "../../src/core/ids";
+import type { EvidenceItem, Result, Stdin } from "../../../src/contracts/common";
+import type { CancelPayload, IntegrateBody, IntegratePayload } from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
+import { check } from "../../../src/contracts/validate";
+import { isDeliveryId } from "../../../src/core/ids";
 
 type GitRun = { code: number; stdout: string; stderr: string };
 

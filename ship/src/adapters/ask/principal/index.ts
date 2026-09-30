@@ -7,10 +7,10 @@
 //   run, no `answer`  → question{about: "manual", prompt, options}: [live, not_live] for deploy, [pass, fail] for verify
 //   run, `answer` set → the matching ok{verdict}; a negative answer (not_live/fail) also attaches findings:[{text: answer}]
 //   cancel            → nothing runs in the background, so there is never anything to cancel: ok{}
-import type { DeployPayload, VerifyPayload } from "../../../src/contracts/ports";
-import { schemaFor } from "../../../src/contracts/ports";
-import { check } from "../../../src/contracts/validate";
-import type { GatedPort } from "../../../src/core/ports/ask";
+import type { DeployPayload, VerifyPayload } from "../../../../src/contracts/ports";
+import { schemaFor } from "../../../../src/contracts/ports";
+import { check } from "../../../../src/contracts/validate";
+import type { GatedPort } from "../../../../src/core/ports/ask";
 
 type RunPayload = DeployPayload | VerifyPayload;
 type Body = { verdict: string; findings?: [{ text: string }] };

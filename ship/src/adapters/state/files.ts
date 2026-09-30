@@ -7,16 +7,16 @@ import type { JSONSchemaType } from "ajv";
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { DeliveryId } from "../../src/contracts/common";
+import type { DeliveryId } from "../../../src/contracts/common";
 import type {
   StateJournalBody, StateJournalPayload, StateListBody, StateListPayload, StateLoadBody, StateLoadPayload,
   StateSaveBody, StateSavePayload,
-} from "../../src/contracts/ports";
-import { schemaFor } from "../../src/contracts/ports";
-import { snapshotSchema, timedEntrySchema, type TimedEntry } from "../../src/contracts/snapshot";
-import { check } from "../../src/contracts/validate";
-import { KEY_RE } from "../../src/core/ids";
-import type { Snapshot } from "../../src/core/types";
+} from "../../../src/contracts/ports";
+import { schemaFor } from "../../../src/contracts/ports";
+import { snapshotSchema, timedEntrySchema, type TimedEntry } from "../../../src/contracts/snapshot";
+import { check } from "../../../src/contracts/validate";
+import { KEY_RE } from "../../../src/core/ids";
+import type { Snapshot } from "../../../src/core/types";
 
 type Stored = { state: Snapshot; entries: TimedEntry[] };
 const storedSchema: JSONSchemaType<Stored> = {

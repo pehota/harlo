@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { PLACEHOLDER } from "../adapters/principal/placeholder";
+import { PLACEHOLDER } from "../src/adapters/principal/placeholder";
 
 export type Candidate = { line: string; delivery: string; id: string; json: string; answer: string };
 export type Block = { candidates: Candidate[]; commentAllowed: boolean };

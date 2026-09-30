@@ -39,11 +39,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Finding, Stdin, WorkItem } from "../../../src/contracts/common";
-import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../src/contracts/ports";
-import { schemaFor } from "../../../src/contracts/ports";
-import { check } from "../../../src/contracts/validate";
-import { STEP_PORTS, type StepPort } from "../../../src/core/ports/agent";
+import type { Finding, Stdin, WorkItem } from "../../../../src/contracts/common";
+import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../../src/contracts/ports";
+import { schemaFor } from "../../../../src/contracts/ports";
+import { check } from "../../../../src/contracts/validate";
+import { STEP_PORTS, type StepPort } from "../../../../src/core/ports/agent";
 
 type Ctx = { agentBin: string; pluginDirs: string[] };
 
