@@ -7,6 +7,7 @@ around it loads and saves state and runs one executable adapter per port.
 - Design: [`docs/architecture.md`](docs/architecture.md)
 - Writing an adapter: [`docs/adapters.md`](docs/adapters.md)
 - Terms: [`CONTEXT.md`](CONTEXT.md)
+- Judging a step's real output (dev/debugging tool, not part of the shipped runtime): [`docs/judge.md`](docs/judge.md)
 
 ## Install
 
