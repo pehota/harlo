@@ -157,7 +157,7 @@ const projectNext = (config: Config, project: string): TrackerNextBody => {
 };
 
 /** Everything is resolved by read-only calls first, so a missing field, option or item fails before the one write. */
-const projectUpdate = (config: Config, project: string, key: string, status: string): { body: Record<string, never> } => {
+const projectUpdate = (config: Config, { project, key, status }: { project: string; key: string; status: string }): { body: Record<string, never> } => {
   if (status === "") throw new Error("an empty status cannot be set on a Project field");
   const n = issueNumber(config, key);
   const own = ["--owner", owner(config)];
@@ -204,7 +204,7 @@ const sameSet = (a: string[], b: string[]): boolean => a.length === b.length && 
  * and the result is `ok` with a `partial` evidence item.
  */
 const update = (config: Config, key: string, { status }: TrackerUpdatePayload): { body: Record<string, never>; evidence?: { label: string; text: string }[] } => {
-  if (config.project !== undefined) return projectUpdate(config, config.project, key, status);
+  if (config.project !== undefined) return projectUpdate(config, { project: config.project, key, status });
   const statusSet = [...new Set([...config.statusLabels, config.readyLabel])];
   if (status !== "" && !statusSet.includes(status)) {
     throw new Error(`status ${JSON.stringify(status)} is not a configured status label (${statusSet.join(", ")})`);
