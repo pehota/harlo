@@ -4,17 +4,17 @@ import { start } from "../start";
 import { transition } from "../transition";
 import type { StartOutput, TransitionOutput } from "../types";
 import { type StartRow, type TransitionRow, policy } from "./builders.fixture";
-import { blockedRows } from "./blocked.fixture";
+import { blockedRows, recoveryRows } from "./blocked.fixture";
 import { deliveryRows } from "./delivery.fixture";
 import { failureRows } from "./failure.fixture";
 import { fixRows } from "./fix.fixture";
 import { happyRows } from "./happy.fixture";
-import { ignoredRows } from "./ignored.fixture";
+import { ignoredRows, recoveryIgnoredRows } from "./ignored.fixture";
 import { questionRows } from "./questions.fixture";
 import { startRows } from "./start.fixture";
 
 export { ignoredRows, startRows };
-export const transitionRows: TransitionRow[] = [...happyRows, ...ignoredRows, ...fixRows, ...failureRows, ...questionRows, ...blockedRows, ...deliveryRows];
+export const transitionRows: TransitionRow[] = [...happyRows, ...ignoredRows, ...recoveryIgnoredRows, ...fixRows, ...failureRows, ...questionRows, ...blockedRows, ...recoveryRows, ...deliveryRows];
 
 export const applyStart = (row: StartRow): StartOutput => start(row.policy ?? policy, row.workItem, row.existing);
 export const applyTransition = (row: TransitionRow): TransitionOutput =>

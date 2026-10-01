@@ -17,6 +17,7 @@ const USAGE = `usage:
   ship start <key>
   ship next
   ship signal <delivery> <id> <result-json>
+  ship signal <delivery> --blocked retry|stop [--comment <text>]
   ship stop <delivery> <outcome> <reason>
   ship changed <delivery>
   ship status [<delivery>]`;
@@ -83,6 +84,18 @@ const signal = async (ctx: Ctx, delivery: string, id: string, json: string): Pro
   return applied(ctx, { kind: "signal", delivery, signal: { kind: "result", id, result: result as Result } });
 };
 
+/** `--blocked retry|stop [--comment ...]`: the recovery signal; the core ignores it unless the Delivery is blocked. */
+const recover = async (ctx: Ctx, delivery: string, args: string[]): Promise<Ran> => {
+  const [flag, action, ...rest] = args;
+  if (flag !== "--blocked" || (action !== "retry" && action !== "stop")) throw new UsageError("--blocked takes retry or stop");
+  if (rest.length !== 0 && !(rest.length === 2 && rest[0] === "--comment")) throw new UsageError("only --comment <text> may follow");
+  await loadArg(ctx, delivery);
+  const comment = rest[1];
+  return applied(ctx, {
+    kind: "signal", delivery, signal: { kind: "blocked_recovery", action, ...(comment === undefined ? {} : { comment }) },
+  });
+};
+
 const stop = async (ctx: Ctx, delivery: string, outcome: string, reason: string): Promise<Ran> => {
   if (!ctx.config.policy.outcomes.includes(outcome)) throw new UsageError(`outcome ${outcome} is not in policy.outcomes`);
   await loadArg(ctx, delivery);
@@ -109,7 +122,11 @@ const status = async (ctx: Ctx, delivery?: string): Promise<Ran> => {
 const VERBS: Record<string, [number, number, (ctx: Ctx, ...args: string[]) => Promise<Ran>]> = {
   start: [1, 1, (ctx, key) => startKey(ctx, key!)],
   next: [0, 0, next],
-  signal: [3, 3, (ctx, d, id, json) => signal(ctx, d!, id!, json!)],
+  signal: [3, 5, (ctx, d, ...rest) => {
+    if (rest[0] === "--blocked") return recover(ctx, d!, rest);
+    if (rest.length !== 2) throw new UsageError("signal: wrong number of arguments");
+    return signal(ctx, d!, rest[0]!, rest[1]!);
+  }],
   stop: [3, 3, (ctx, d, outcome, reason) => stop(ctx, d!, outcome!, reason!)],
   changed: [1, 1, (ctx, d) => changed(ctx, d!)],
   status: [0, 1, (ctx, d) => status(ctx, d)],

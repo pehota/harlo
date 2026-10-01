@@ -13,6 +13,7 @@ import {
 type ResultSignal = Extract<Signal, { kind: "result" }>;
 type StopSignal = Extract<Signal, { kind: "stop" }>;
 type ChangedSignal = Extract<Signal, { kind: "workItem_changed" }>;
+type RecoverySignal = Extract<Signal, { kind: "blocked_recovery" }>;
 type OnOk = (p: Policy, s: Snapshot, body: unknown) => Move;
 type Applied = Move & { note?: Note }; // a move plus the note its entry carries
 
@@ -145,7 +146,8 @@ const onAsk = (p: Policy, s: Snapshot, asked: Awaiting, value: string): Move => 
 
 /**
  * `failed` changed nothing, so re-issue it up to the node's cap (an ask uses its step's cap), then Blocked.
- * The Principal failing at Blocked leaves it awaiting nothing; only a Delivery signal moves it (B6).
+ * The Principal failing at Blocked leaves it awaiting nothing; only a Delivery signal moves it (B6):
+ * `blocked_recovery` (B8), which needs no awaited id.
  */
 const onFailed = (p: Policy, s: Snapshot, failed: Awaiting): Move => {
   if (failed.node === "blocked") return { state: s, commands: [] };
@@ -223,11 +225,23 @@ const onChanged = (p: Policy, s: Snapshot, sig: ChangedSignal): Applied => {
   }
 };
 
+/** The same retry/stop as the blocked decide's answer, but taken from a Delivery signal; the stale decide is cancelled. */
+const onRecovery = (p: Policy, s: Snapshot, sig: RecoverySignal): TransitionOutput => {
+  if (s.at !== "blocked") return ignore(s, sig, "ignored_not_blocked"); // B8: never a way past a gate or question
+  const node = present(s, "blockedAt");
+  const move = andThen(cancelAwaited(s), (idle) =>
+    sig.action === "retry"
+      ? reissue({ ...idle, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd"))
+      : abandon(p, idle, "abandoned", sig.comment ?? `stopped at blocked ${node}`));
+  return settle(s, sig, move);
+};
+
 export const transition = (p: Policy, s: Snapshot, sig: Signal): TransitionOutput => {
   if (isTerminal(s.at)) return ignore(s, sig, "ignored_terminal"); // R2
   switch (sig.kind) {
     case "result": return onResult(p, s, sig);
     case "stop": return settle(s, sig, onStop(p, s, sig));
     case "workItem_changed": return settle(s, sig, onChanged(p, s, sig));
+    case "blocked_recovery": return onRecovery(p, s, sig);
   }
 };

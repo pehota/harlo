@@ -27,3 +27,16 @@ export const ignoredRows: TransitionRow[] = [
     snapshotAt("closed", null, { outcome: "delivered" }),
     { kind: "workItem_changed", workItem: { ...workItem, title: "Greet everyone" } }, "ignored_terminal"),
 ];
+
+const recovery: Signal = { kind: "blocked_recovery", action: "retry" };
+const land1 = awaited("land-1", "principal", "decide", {}, "land", "decide");
+
+export const recoveryIgnoredRows: TransitionRow[] = [
+  ignored("B8", "recovery signal at a step is ignored", snapshotAt("define", define1), recovery, "ignored_not_blocked"),
+  ignored("B8", "recovery signal at a gate is ignored", snapshotAt("land", land1), recovery, "ignored_not_blocked"),
+  ignored("B8", "recovery signal at a question is ignored",
+    snapshotAt("verify", awaited("ask-1", "principal", "decide", {}, "verify", "ask"), { lastRun: awaited("verify-1", "verify", "run", {}, "verify", "run") }),
+    recovery, "ignored_not_blocked"),
+  ignored("B8", "recovery signal on a stopped Delivery is ignored (terminal)",
+    snapshotAt("abandoned", null, { outcome: "abandoned", reason: "x" }), recovery, "ignored_terminal"),
+];

@@ -108,7 +108,7 @@ kinds:
 | Kind | Examples | Matched by |
 |---|---|---|
 | **Result** | a step's result, a gate's answer, `retry` from Blocked | the awaited command id |
-| **Delivery signal** | `start`, `stop`, `workItem_changed` | the Delivery id only |
+| **Delivery signal** | `start`, `stop`, `workItem_changed`, `blocked_recovery` (CLI: `ship signal <delivery> --blocked retry\|stop [--comment ...]`) | the Delivery id only |
 
 | Signal result | Core reaction |
 |---|---|
@@ -152,7 +152,10 @@ Rules:
   id the core is not waiting for (duplicate, stale answer) is ignored.
   **Delivery signals** are applied unless the Delivery is Closed or Abandoned,
   or a `workItem_changed` leaves its title and body unchanged (both ignored,
-  journaled).
+  journaled). `blocked_recovery` is applied only at Blocked; at any other
+  position (step, gate, ask) it is ignored and journaled, so it cannot bypass a
+  gate or question. Once it takes effect the Delivery has left Blocked, so a
+  repeat is ignored too.
 - When a Delivery signal makes an outstanding command moot (`stop`; or
   `workItem_changed` before Land, which sends it back to Define and re-runs
   Define), the core issues
@@ -270,7 +273,9 @@ stateDiagram-v2
 |---|---|---|
 | Integrate | conflict (`question`) | answer "resolved" → re-issue Integrate; "rework" → Implement |
 | Blocked | on entry | issue Principal `decide{retry \| stop}`, giving `retry` an id |
-| Blocked | Principal adapter `failed` | stay Blocked, issue nothing; the environment alerts; only a Delivery signal moves it |
+| Blocked | Principal adapter `failed` | stay Blocked, issue nothing (the failed decide is not retried); the environment alerts; only a Delivery signal moves it |
+| Blocked | `blocked_recovery{retry}` (`ship signal <d> --blocked retry`) | cancel any awaited blocked decide, re-issue the saved `blockedCmd` at `blockedAt`, `retries` 0, blocked cleared (as the decide's `retry`) |
+| Blocked | `blocked_recovery{stop, comment?}` | abandon with the comment, default `stopped at blocked <node>` (as the decide's `stop`) |
 | Setup | `workItem_changed` | keep the new WorkItem, flow unchanged (Define has not run yet) |
 | Define, Accept gate, Implement, Check, Decision gate (incl. questions) | `workItem_changed` | cancel the awaited command, re-run Define with the new WorkItem; fix rounds and findings kept |
 | Blocked | `workItem_changed` | as at the step or gate it is blocked at |
