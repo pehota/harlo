@@ -1,4 +1,5 @@
 // §4.6 retry and Blocked rows. Fixture policy: retryCap.default C = 1.
+import type { Signal, Snapshot } from "../types";
 import {
   type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, decide, failed, fire, gateEvidence, id,
   runbook, snapshotAt, withRetryCap,
@@ -179,6 +180,66 @@ export const blockedRows: TransitionRow[] = [
       commands: [cmd(land(2))],
       state: { retries: 1, awaiting: land(2) },
       entry: { from: "land", to: "land", issued: [id("land-2")], by: "person", note: "invalid_answer" },
+    },
+  },
+];
+
+const recover = (action: "retry" | "stop", comment?: string): Signal => ({
+  kind: "blocked_recovery", action, ...(comment === undefined ? {} : { comment }),
+});
+
+/** Blocked after its own decide failed: awaiting nothing (B6). */
+const stranded = (): Snapshot => ({ ...blockedOn("deploy"), awaiting: null });
+
+export const recoveryRows: TransitionRow[] = [
+  {
+    id: "B8", name: "stranded blocked + recovery retry → re-issue the failed step, blocked cleared",
+    state: stranded(),
+    signal: recover("retry"),
+    expect: {
+      at: "deploy",
+      commands: [cmd(deploy(2))],
+      state: { retries: 0, blockedAt: null, blockedCmd: null, awaiting: deploy(2), lastRun: deploy(2) },
+      entry: { from: "blocked", to: "deploy", issued: [id("deploy-2")] },
+    },
+  },
+  {
+    id: "B8", name: "stranded blocked + recovery stop + comment → abandoned with the comment",
+    state: stranded(),
+    signal: recover("stop", "registry retired"),
+    expect: {
+      at: "abandoned",
+      commands: [
+        fire("comment-1", "tracker", "comment", { text: "abandoned: registry retired" }),
+        fire("notify-1", "principal", "notify", { text: "abandoned: abandoned: registry retired" }),
+      ],
+      state: { outcome: "abandoned", reason: "registry retired", awaiting: null, blockedAt: null, blockedCmd: null },
+      entry: { from: "blocked", to: "abandoned", issued: [id("comment-1"), id("notify-1")] },
+    },
+  },
+  {
+    id: "B8", name: "recovery stop without comment → default reason names the node",
+    state: stranded(),
+    signal: recover("stop"),
+    expect: {
+      at: "abandoned",
+      commands: [
+        fire("comment-1", "tracker", "comment", { text: "abandoned: stopped at blocked deploy" }),
+        fire("notify-1", "principal", "notify", { text: "abandoned: abandoned: stopped at blocked deploy" }),
+      ],
+      state: { outcome: "abandoned", reason: "stopped at blocked deploy" },
+      entry: { from: "blocked", to: "abandoned", issued: [id("comment-1"), id("notify-1")] },
+    },
+  },
+  {
+    id: "B8", name: "recovery retry while the blocked decide is still awaited → cancel it, then re-issue",
+    state: blockedOn("deploy"),
+    signal: recover("retry"),
+    expect: {
+      at: "deploy",
+      commands: [fire("cancel-1", "principal", "cancel", { target: id("blocked-1") }), cmd(deploy(2))],
+      state: { retries: 0, blockedAt: null, blockedCmd: null, awaiting: deploy(2) },
+      entry: { from: "blocked", to: "deploy", issued: [id("cancel-1"), id("deploy-2")] },
     },
   },
 ];

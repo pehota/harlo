@@ -54,11 +54,12 @@ export type Snapshot = {
 export type Signal =
   | { kind: "result"; id: CommandId; result: Result }
   | { kind: "stop"; outcome: Outcome; reason: string }
-  | { kind: "workItem_changed"; workItem: WorkItem };
+  | { kind: "workItem_changed"; workItem: WorkItem }
+  | { kind: "blocked_recovery"; action: "retry" | "stop"; comment?: string }; // needs no awaited id; only at blocked (B8)
 
 export type Note =
   | "ignored_stale" | "ignored_terminal" | "invalid_answer" | "rejected_start"
-  | "workitem_changed_late" | "workitem_unchanged";
+  | "workitem_changed_late" | "workitem_unchanged" | "ignored_not_blocked";
 
 // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
 export type RunnerSignal =

@@ -36,7 +36,7 @@ export type Output = {
 export type Report = { exit: 0 | 3 | 5; output: Output };
 
 const TRIES = 5;
-const IGNORED: ReadonlySet<Note | undefined> = new Set<Note | undefined>(["ignored_stale", "ignored_terminal", "workitem_unchanged"]);
+const IGNORED: ReadonlySet<Note | undefined> = new Set<Note | undefined>(["ignored_stale", "ignored_terminal", "workitem_unchanged", "ignored_not_blocked"]);
 
 /** One core application, ready to save as `version` of `delivery`. */
 type Planned = {

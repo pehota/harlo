@@ -21,7 +21,7 @@ const transitionCases: Applied[] = transitionRows.map((row) => ({
 const cases = [...startCases, ...transitionCases];
 
 const toCommand = ({ id, port, op, await: awaited, payload }: Command): Command => ({ id, port, op, await: awaited, payload });
-const IGNORED: ReadonlySet<Note> = new Set(["ignored_stale", "ignored_terminal", "workitem_unchanged"]);
+const IGNORED: ReadonlySet<Note> = new Set(["ignored_stale", "ignored_terminal", "workitem_unchanged", "ignored_not_blocked"]);
 
 describe("core invariants over every row (§3.3)", () => {
   test.each(cases)("I1 at most one awaited command, and state.awaiting is it: $label", (c) => {

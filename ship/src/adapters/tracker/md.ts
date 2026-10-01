@@ -6,6 +6,8 @@
 // optionally `title:`. The body is everything between the frontmatter and the `<!-- ship:log -->`
 // marker; `comment` only ever appends below that marker, so `body` is unchanged after a comment
 // (W1, no self-echo: a later `ship changed` must not see its own comment as a change).
+// Every mutation (update/comment) is committed to a git repo lazily created inside <dir> (best effort:
+// a git failure only warns on stderr, the op still succeeds and stdout stays one Result line).
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +29,48 @@ const expandHome = (dir: string): string =>
 const filePath = (root: string, key: string): string => {
   if (!KEY_RE.test(key)) throw new Error(`not a tracker key: ${JSON.stringify(key)}`);
   return join(root, `${key}.md`);
+};
+
+/** Runs git in the tracker dir; stdout/stderr are captured so nothing leaks into the adapter's stdout protocol. */
+const git = (root: string, args: string[]): string => {
+  const proc = Bun.spawnSync(["git", "-C", root, "-c", "commit.gpgsign=false", ...args], { stdout: "pipe", stderr: "pipe" });
+  if (proc.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${proc.stderr.toString().trim()}`);
+  return proc.stdout.toString();
+};
+
+/** Creates the repo in `root` itself (never a parent's) on first write and commits the files already there. */
+const ensureRepo = (root: string): void => {
+  if (existsSync(join(root, ".git"))) return;
+  git(root, ["init", "--quiet"]);
+  // A local identity only when none is configured, so the commit works with no global git config.
+  if (!Bun.spawnSync(["git", "-C", root, "config", "user.email"], { stdout: "pipe" }).stdout.toString().trim()) {
+    git(root, ["config", "user.name", "ship"]);
+    git(root, ["config", "user.email", "ship@localhost"]);
+  }
+  if (readdirSync(root).some((name) => name.endsWith(".md"))) {
+    git(root, ["add", "--", "*.md"]);
+    git(root, ["commit", "--quiet", "--no-verify", "-m", "tracker: initial import of existing WorkItems"]);
+  }
+};
+
+/** Commits `name` if it changed (no empty commit for a no-op write). Never throws: failure is a stderr warning. */
+const commitChange = (root: string, name: string, message: string): void => {
+  try {
+    git(root, ["add", "--", name]);
+    if (Bun.spawnSync(["git", "-C", root, "diff", "--cached", "--quiet", "--", name]).exitCode === 0) return;
+    git(root, ["commit", "--quiet", "--no-verify", "-m", message, "--", name]);
+  } catch (error) {
+    console.error(`warning: tracker git commit skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+/** Best-effort repo init before a mutation; a failure only warns (the commit step will then warn too). */
+const prepareRepo = (root: string): void => {
+  try {
+    ensureRepo(root);
+  } catch (error) {
+    console.error(`warning: tracker git init skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
 };
 
 const readFile = (path: string): string => {
@@ -86,7 +130,10 @@ const rewriteStatus = (raw: string, status: string): string => {
 
 const update = (root: string, key: string, { status }: TrackerUpdatePayload): Record<string, never> => {
   const path = filePath(root, key);
-  writeFileSync(path, rewriteStatus(readFile(path), status));
+  const updated = rewriteStatus(readFile(path), status);
+  prepareRepo(root);
+  writeFileSync(path, updated);
+  commitChange(root, `${key}.md`, `update ${key}: status ${status}`);
   return {};
 };
 
@@ -95,7 +142,9 @@ const comment = (root: string, key: string, { text }: TrackerCommentPayload): Re
   const path = filePath(root, key);
   const raw = readFile(path);
   const withMarker = raw.includes(MARKER) ? raw : `${raw.endsWith("\n") ? raw : `${raw}\n`}${MARKER}\n`;
+  prepareRepo(root);
   writeFileSync(path, `${withMarker.endsWith("\n") ? withMarker : `${withMarker}\n`}${text}\n`);
+  commitChange(root, `${key}.md`, `comment ${key}`);
   return {};
 };
 

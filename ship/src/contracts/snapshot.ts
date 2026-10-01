@@ -86,6 +86,16 @@ const signalSchema: JSONSchemaType<Entry["signal"]> = {
     },
     {
       type: "object",
+      properties: {
+        kind: { type: "string", const: "blocked_recovery" },
+        action: { type: "string", enum: ["retry", "stop"] },
+        comment: { type: "string", nullable: true },
+      },
+      required: ["kind", "action"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
       properties: { kind: { type: "string", const: "start" }, workItem: workItemSchema },
       required: ["kind", "workItem"],
       additionalProperties: false,
@@ -132,7 +142,7 @@ export const timedEntrySchema: JSONSchemaType<TimedEntry> = {
       nullable: true,
       enum: [
         "ignored_stale", "ignored_terminal", "invalid_answer", "rejected_start",
-        "workitem_changed_late", "workitem_unchanged",
+        "workitem_changed_late", "workitem_unchanged", "ignored_not_blocked",
       ],
     },
     info: { type: "string", nullable: true },

@@ -176,3 +176,104 @@ checked in, all good
     expect(await call(dir, { op: "cancel", payload: { target: "PROJ-1-1/land-1" } })).toEqual(ok({}));
   });
 });
+
+// Git history of the tracker dir (docs/dogfood.md): lazily initialised, one commit per mutation.
+describe("tracker/md adapter: git history", () => {
+  const git = (dir: string, ...args: string[]): string => {
+    const proc = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" });
+    return proc.stdout.toString().trim();
+  };
+  const log = (dir: string): string[] => git(dir, "log", "--format=%s").split("\n").filter(Boolean);
+
+  /** Like `call`, but with a chosen PATH and the raw stdout/stderr, to prove git trouble never reaches stdout. */
+  const callRaw = async (dir: string, c: Call, env: Record<string, string>) => {
+    const stdin: Stdin = {
+      id: "PROJ-1-1/tracker-1", delivery: "PROJ-1-1", port: "tracker", op: c.op,
+      workItem: c.workItem ?? workItemFor("PROJ-1"), workspace: null, payload: c.payload, tools: [],
+    };
+    const proc = Bun.spawn([process.execPath, ADAPTER, "--dir", dir, "tracker", c.op], {
+      stdin: new Blob([JSON.stringify(stdin)]), stdout: "pipe", stderr: "pipe", env,
+    });
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { stdout, stderr };
+  };
+
+  test("first write inits a repo in the tracker dir with a fallback identity and imports existing files", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    write(dir, "PROJ-2.md", TITLED);
+    const home = tempDir(); // no global git config
+    const { stdout } = await callRaw(dir, update("PROJ-1", "in_progress"), { PATH: process.env.PATH ?? "", HOME: home });
+    expect(JSON.parse(stdout)).toEqual({ status: "ok", body: {} });
+    expect(existsSync(join(dir, ".git"))).toBe(true);
+    expect(log(dir)).toEqual(["update PROJ-1: status in_progress", "tracker: initial import of existing WorkItems"]);
+    expect(git(dir, "show", "HEAD~1:PROJ-2.md")).toBe(TITLED.trim());
+    expect(git(dir, "show", "HEAD~1:PROJ-1.md")).toBe(READY.trim()); // original content captured before the mutation
+  });
+
+  test("init is idempotent and never touches a parent repo", async () => {
+    const parent = tempDir();
+    Bun.spawnSync(["git", "-C", parent, "init", "--quiet"]);
+    const dir = join(parent, "tracker");
+    Bun.spawnSync(["mkdir", dir]);
+    write(dir, "PROJ-1.md", READY);
+    await call(dir, update("PROJ-1", "a"));
+    await call(dir, update("PROJ-1", "b"));
+    expect(existsSync(join(dir, ".git"))).toBe(true);
+    expect(git(parent, "rev-list", "--all", "--count")).toBe("0");
+    expect(log(dir)).toEqual(["update PROJ-1: status b", "update PROJ-1: status a", "tracker: initial import of existing WorkItems"]);
+  });
+
+  test("each mutation is exactly one commit with only the changed file; reads commit nothing", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    await call(dir, update("PROJ-1", "in_progress"));
+    const before = log(dir).length;
+    await call(dir, read("PROJ-1"));
+    await call(dir, next());
+    expect(log(dir).length).toBe(before);
+    await call(dir, comment("PROJ-1", "hello"));
+    expect(log(dir).length).toBe(before + 1);
+    expect(log(dir)[0]).toBe("comment PROJ-1");
+    expect(git(dir, "show", "--name-only", "--format=", "HEAD")).toBe("PROJ-1.md");
+  });
+
+  test("a no-op write makes no empty commit and no error", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    await call(dir, update("PROJ-1", "ready")); // already ready
+    expect(await call(dir, update("PROJ-1", "ready"))).toEqual(ok({}));
+    expect(log(dir)).toEqual(["tracker: initial import of existing WorkItems"]);
+  });
+
+  test("a manually removed file is recoverable from the last commit", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    await call(dir, comment("PROJ-1", "note"));
+    const committed = readFileSync(join(dir, "PROJ-1.md"), "utf8");
+    rmSync(join(dir, "PROJ-1.md"));
+    git(dir, "checkout", "HEAD", "--", "PROJ-1.md");
+    expect(readFileSync(join(dir, "PROJ-1.md"), "utf8")).toBe(committed);
+  });
+
+  test("git missing: the op succeeds, a warning goes to stderr, stdout is one clean Result line", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    const empty = tempDir();
+    const { stdout, stderr } = await callRaw(dir, update("PROJ-1", "in_progress"), { PATH: empty, HOME: empty });
+    expect(JSON.parse(stdout)).toEqual({ status: "ok", body: {} });
+    expect(stdout.trim().split("\n")).toHaveLength(1);
+    expect(stderr).toContain("warning");
+    expect(readFileSync(join(dir, "PROJ-1.md"), "utf8")).toContain("status: in_progress");
+  });
+
+  test("a failing commit (rejecting hook is bypassed; broken repo is not) still succeeds with a warning", async () => {
+    const dir = tempDir();
+    write(dir, "PROJ-1.md", READY);
+    await call(dir, update("PROJ-1", "a"));
+    writeFileSync(join(dir, ".git", "HEAD"), "garbage");
+    const { stdout, stderr } = await callRaw(dir, comment("PROJ-1", "x"), { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" });
+    expect(JSON.parse(stdout)).toEqual({ status: "ok", body: {} });
+    expect(stderr).toContain("warning");
+  });
+});
