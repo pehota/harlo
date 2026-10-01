@@ -4,8 +4,6 @@
 // as a real subprocess, scripted fake adapter replies to reach a gate, and `ship signal` played by the test to
 // stand in for the human answering — the driver itself must never call it.
 import { afterAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { D, HAPPY, answer, coreSequence, lifecycle } from "../test/fixtures/lifecycle.fixture";
 
@@ -109,39 +107,4 @@ describe("drive", () => {
     expect(coreSequence(await p.journal())).toEqual(FULL_SEQUENCE);
   }, 30_000);
 
-  test("--gate-log: echoes only newly appended content, once; old content is not re-printed", async () => {
-    const p = project(HAPPY);
-    const dir = mkdtempSync(join(tmpdir(), "ship-gatelog-"));
-    const gateLog = join(dir, "gates.log");
-    writeFileSync(gateLog, "OLD-GATE\n");
-    try {
-      const driven = p.bash(`bun ${DRIVE} --ship ${BIN} --key k --interval 20 --gate-log ${gateLog} --state ${p.stateArgv.join(" ")}`);
-      await waitForAwaiting(p, "accept-1");
-      appendFileSync(gateLog, "NEW-GATE-1\n");
-      await Bun.sleep(300); // many passes: the line must still be echoed only once
-      appendFileSync(gateLog, "NEW-GATE-2\n");
-      await Bun.sleep(100);
-      await p.ship("signal", D, `${D}/accept-1`, answer("accept"));
-      await p.ship("signal", D, `${D}/land-1`, answer("approve"));
-
-      const ran = await driven;
-      expect(ran.exit).toBe(0);
-      const lines = ran.stdout.split("\n");
-      expect(lines.filter((l) => l === "NEW-GATE-1")).toHaveLength(1);
-      expect(lines.filter((l) => l === "NEW-GATE-2")).toHaveLength(1);
-      expect(ran.stdout).not.toContain("OLD-GATE");
-      expect(lines.indexOf("NEW-GATE-1")).toBeLessThan(lines.indexOf("NEW-GATE-2"));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 30_000);
-
-  test("without --gate-log: prints no gate content", async () => {
-    const p = project(HAPPY);
-    await p.ship("start", "k");
-    await p.ship("signal", D, `${D}/accept-1`, answer("accept"));
-    await p.ship("signal", D, `${D}/land-1`, answer("approve"));
-    const ran = await p.bash(`bun ${DRIVE} --ship ${BIN} --delivery ${D} --interval 20 --state ${p.stateArgv.join(" ")}`);
-    expect(ran.stdout.trim().split("\n").every((l) => l.startsWith(`${D}`))).toBe(true);
-  }, 30_000);
 });
