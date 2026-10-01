@@ -12,11 +12,15 @@ const ADAPTER = join(import.meta.dir, "github.ts");
 const ajv = new Ajv();
 
 type Issue = { title: string; body: string; labels: string[]; state?: "open" | "closed"; comments?: string[] };
-type FakeState = { repo: string; issues: Record<string, Issue>; fail?: string[]; failEditAfterAdd?: boolean; failCleanup?: boolean };
+type ProjectItem = { id: string; status?: string; content: { type: string; number?: number; repository?: string } };
+type Project = { id: string; fields: { id: string; name: string; options?: { id: string; name: string }[] }[]; items: ProjectItem[]; raw?: Record<string, unknown> };
+type FakeState = { repo: string; issues: Record<string, Issue>; fail?: string[]; failEditAfterAdd?: boolean; failCleanup?: boolean; project?: Project };
 type GhCall = { argv: string[]; stdin: string; env: string[] };
 
 // The fake `gh`: logs every call to calls.jsonl, serves and mutates issues in state.json.
 // `fail` lists "<cmd> <sub>" pairs that exit 1 untouched; `failEditAfterAdd` applies the adds, then exits 1;
+// `project` serves `gh project view/field-list/item-list/item-edit` (item-list honours --limit, default 30, in stored order;
+// `raw` replaces a command's output wholesale, e.g. {"item-list": "not json"}); item-edit sets the item's status.
 // `failCleanup` makes an edit without adds (the cleanup retry) exit 1 untouched.
 const FAKE_GH = `
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,6 +35,22 @@ const die = (msg) => { console.error(msg); process.exit(1); };
 const [cmd, sub, n] = argv;
 if ((state.fail ?? []).includes(cmd + " " + sub)) die("boom: " + cmd + " " + sub);
 if (cmd === "repo" && sub === "view") { console.log(JSON.stringify({ nameWithOwner: state.repo })); process.exit(0); }
+if (cmd === "project") {
+  const project = state.project ?? die("no project");
+  if (project.raw?.[sub] !== undefined) { console.log(project.raw[sub]); process.exit(0); }
+  if (sub === "view") console.log(JSON.stringify({ id: project.id, number: Number(n) }));
+  else if (sub === "field-list") console.log(JSON.stringify({ fields: project.fields }));
+  else if (sub === "item-list") console.log(JSON.stringify({ items: project.items.slice(0, Number(flag("--limit") ?? 30)), totalCount: project.items.length }));
+  else if (sub === "item-edit") {
+    if (flag("--project-id") !== project.id) die("wrong project id");
+    const item = project.items.find((i) => i.id === flag("--id")) ?? die("no item");
+    const field = project.fields.find((f) => f.id === flag("--field-id")) ?? die("no field");
+    const option = (field.options ?? []).find((o) => o.id === flag("--single-select-option-id")) ?? die("no option");
+    item.status = option.name;
+    save();
+  } else die("unknown project op " + sub);
+  process.exit(0);
+}
 if (cmd !== "issue") die("unknown command " + cmd);
 if (sub !== "list" && flag("--repo") !== state.repo) die("wrong repo " + flag("--repo"));
 const issue = state.issues[n];
@@ -298,5 +318,138 @@ describe("tracker/github adapter", () => {
     const fake = fakeGh(base());
     expect(await call(fake, { op: "cancel", payload: { target: "harlo-1-1/tracker-1" } })).toEqual(ok({}));
     expect(fake.calls()).toEqual([]);
+  });
+
+  test("default mode never calls gh project", async () => {
+    const fake = fakeGh(base());
+    await call(fake, next());
+    await call(fake, update("harlo-7", "done"));
+    expect(fake.calls().some(({ argv }) => argv[0] === "project")).toBe(false);
+  });
+});
+
+const PROJECT_FLAGS = ["--repo", "acme/harlo", "--project", "4"];
+const issueItem = (number: number, status: string | undefined, over: Partial<ProjectItem["content"]> = {}): ProjectItem => ({
+  id: `PVTI_${number}`, ...(status === undefined ? {} : { status }), content: { type: "Issue", number, repository: "acme/harlo", ...over },
+});
+const projectState = (items: ProjectItem[], over: Partial<Project> = {}): FakeState => ({
+  ...base(),
+  project: {
+    id: "PVT_4",
+    fields: [
+      { id: "F_title", name: "Title" },
+      { id: "F_status", name: "Status", options: [{ id: "O_todo", name: "Todo" }, { id: "O_ready", name: "ready" }, { id: "O_done", name: "Done" }] },
+      { id: "F_stage", name: "Stage", options: [{ id: "O_s1", name: "ready" }] },
+    ],
+    items,
+    ...over,
+  },
+});
+const projectCalls = (fake: Fake): string[][] => fake.calls().map(({ argv }) => argv).filter((argv) => argv[0] === "project");
+
+describe("tracker/github adapter, Project mode", () => {
+  const inProject = { flags: PROJECT_FLAGS };
+
+  test("next: lowest issue number among ready items, whatever order item-list returns", async () => {
+    const fake = fakeGh(projectState([issueItem(9, "ready"), issueItem(3, "ready"), issueItem(7, "ready"), issueItem(1, "Done")]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-3" }));
+    expect(projectCalls(fake)[0]).toEqual(expect.arrayContaining(["item-list", "4", "--owner", "acme", "--format", "json"]));
+    expect(fake.calls().some(({ argv }) => argv[0] === "issue")).toBe(false);
+  });
+
+  test("next: null when no item has the ready value", async () => {
+    const fake = fakeGh(projectState([issueItem(3, "Todo"), issueItem(4, undefined)]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: null }));
+  });
+
+  test("next: skips drafts, pull requests and other repos' issues even when ready", async () => {
+    const fake = fakeGh(projectState([
+      { id: "PVTI_d", status: "ready", content: { type: "DraftIssue" } },
+      issueItem(1, "ready", { type: "PullRequest" }),
+      issueItem(2, "ready", { repository: "acme/other" }),
+      issueItem(8, "ready"),
+    ]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-8" }));
+  });
+
+  test("next: --status-field and --ready-label pick the field and value", async () => {
+    const fake = fakeGh(projectState([issueItem(2, "ready"), { ...issueItem(5, undefined), stage: "Go" } as ProjectItem]));
+    const flags = [...PROJECT_FLAGS, "--status-field", "Stage", "--ready-label", "Go"];
+    expect(await call(fake, next(), { flags })).toEqual(ok({ key: "harlo-5" }));
+  });
+
+  test("next: lists more than gh's default 30 items", async () => {
+    const items = Array.from({ length: 60 }, (_, i) => issueItem(i + 1, i === 49 ? "ready" : "Todo"));
+    const fake = fakeGh(projectState(items));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-50" }));
+    expect(projectCalls(fake)[0]).toEqual(expect.arrayContaining(["--limit", "1000"]));
+  });
+
+  test("next: malformed gh JSON is a validation error, not a crash", async () => {
+    for (const raw of ['{"items": 3}', '{"items":[{"id":"x"}]}', "not json"]) {
+      const fake = fakeGh(projectState([], { raw: { "item-list": raw } }));
+      expect(await call(fake, next(), inProject)).toEqual(failed);
+    }
+  });
+
+  test("update: resolves ids at runtime and makes one item-edit, with no issue edit", async () => {
+    const fake = fakeGh(projectState([issueItem(7, "ready"), issueItem(3, "ready")]));
+    expect(await call(fake, update("harlo-7", "Done"), inProject)).toEqual(ok({}));
+    expect(fake.state().project?.items.map((i) => i.status)).toEqual(["Done", "ready"]);
+    expect(projectCalls(fake).map((argv) => argv[1])).toEqual(["view", "field-list", "item-list", "item-edit"]);
+    expect(projectCalls(fake).at(-1)).toEqual([
+      "project", "item-edit", "--project-id", "PVT_4", "--id", "PVTI_7", "--field-id", "F_status", "--single-select-option-id", "O_done",
+    ]);
+    expect(fake.calls().some(({ argv }) => argv[1] === "edit")).toBe(false);
+  });
+
+  test("update: honours --status-field", async () => {
+    const fake = fakeGh(projectState([issueItem(7, undefined)]));
+    expect(await call(fake, update("harlo-7", "ready"), { flags: [...PROJECT_FLAGS, "--status-field", "Stage"] })).toEqual(ok({}));
+    expect(projectCalls(fake).at(-1)).toEqual(expect.arrayContaining(["F_stage", "O_s1"]));
+  });
+
+  test.each([
+    ["unknown field", { flags: [...PROJECT_FLAGS, "--status-field", "Nope"] }, "harlo-7", "Done"],
+    ["unknown option", inProject, "harlo-7", "Shipped"],
+    ["empty status", inProject, "harlo-7", ""],
+    ["item not in the project", inProject, "harlo-99", "Done"],
+    ["item of another repo", inProject, "harlo-5", "Done"],
+    ["field without options", { flags: [...PROJECT_FLAGS, "--status-field", "Title"] }, "harlo-7", "Done"],
+  ])("update: %s fails cleanly with no write", async (_name, opts, key, status) => {
+    const fake = fakeGh(projectState([issueItem(7, "ready"), issueItem(5, "ready", { repository: "acme/other" })]));
+    expect(await call(fake, update(key, status), opts)).toEqual(failed);
+    expect(projectCalls(fake).some((argv) => argv[1] === "item-edit")).toBe(false);
+    expect(fake.state().project?.items.map((i) => i.status)).toEqual(["ready", "ready"]);
+  });
+
+  test("update: malformed project/field JSON fails before any write", async () => {
+    for (const raw of [{ view: "{}" }, { "field-list": '{"fields":[{"id":1}]}' }]) {
+      const fake = fakeGh(projectState([issueItem(7, "ready")], { raw }));
+      expect(await call(fake, update("harlo-7", "Done"), inProject)).toEqual(failed);
+      expect(projectCalls(fake).some((argv) => argv[1] === "item-edit")).toBe(false);
+    }
+  });
+
+  test("update: a failing item-edit is a crash, never failed", async () => {
+    const fake = fakeGh({ ...projectState([issueItem(7, "ready")]), fail: ["project item-edit"] });
+    expect((await call(fake, update("harlo-7", "Done"), inProject)).exitCode).not.toBe(0);
+  });
+
+  test("a bad --project number fails before gh", async () => {
+    const fake = fakeGh(projectState([]));
+    expect(await call(fake, next(), { flags: ["--repo", "acme/harlo", "--project", "x"] })).toEqual(failed);
+    expect(fake.calls()).toEqual([]);
+  });
+
+  test("read and comment issue identical gh calls with and without --project", async () => {
+    const plain = fakeGh(base());
+    const projected = fakeGh(projectState([issueItem(7, "ready")]));
+    const text = "hi \"there\"\n";
+    for (const [fake, opts] of [[plain, undefined], [projected, inProject]] as const) {
+      expect(await call(fake, read("harlo-7"), opts)).toEqual(ok({ workItem: { key: "harlo-7", title: ISSUE_7.title, body: ISSUE_7.body } }));
+      expect(await call(fake, comment("harlo-7", text), opts)).toEqual(ok({}));
+    }
+    expect(projected.calls().map(({ argv, stdin }) => ({ argv, stdin }))).toEqual(plain.calls().map(({ argv, stdin }) => ({ argv, stdin })));
   });
 });
