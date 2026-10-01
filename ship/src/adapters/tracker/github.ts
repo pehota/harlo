@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // GitHub issues Tracker adapter (plan §6 M2.4), driving the `gh` CLI; no direct API calls.
-// argv: [--repo <owner/name>] [--ready-label <name>] [--status-labels <a,b,...>] tracker <op>;
+// argv: [--repo <owner/name>] [--ready-label <name>] [--status-labels <a,b,...>]
+//       [--project <number>] [--status-field <name>] tracker <op>;
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 // Keys are `<name>-<n>` (`name` is the repo part of `owner/name`; KEY_RE forbids `/`), e.g. `harlo-12`.
 // Without --repo the repo is resolved once via `gh repo view` in the cwd.
@@ -8,7 +9,14 @@
 // so moving an issue to any other status also takes it out of `next`'s query. `update` leaves exactly
 // one status label (or none, for an empty status); labels outside the set are never touched. A status
 // outside the set is rejected as `failed` before any `gh` call.
-// W1 (no self-echo): `update` only edits labels and `comment` only adds a comment, so title and body
+// Project mode (--project <number>, owned by the repo's owner): the item source is that GitHub Project's
+// single-select field --status-field (default `Status`) instead of labels. `next` takes the Issue items of
+// --repo whose field equals the ready value (--ready-label, default `ready`) and returns the lowest number
+// (sorted here, item-list order is not relied on); drafts, PRs and other repos' items are skipped. Items are
+// listed with --limit 1000, so a Project with more than 1000 items is truncated. `update` resolves the
+// project, field and option ids at runtime and makes one `gh project item-edit`; --status-labels is unused
+// and an empty status is rejected (a single-select cannot be cleared here). `read` and `comment` are unchanged.
+// W1 (no self-echo): `update` only edits labels (or the Project's status field) and `comment` only adds a comment, so title and body
 // (all `read` returns) never change through this adapter.
 // Env: `gh` gets only PATH, HOME and GH_TOKEN (from the capability profile), nothing else inherited.
 import type { WorkItem } from "../../../src/contracts/common";
@@ -22,7 +30,7 @@ import { KEY_RE } from "../../../src/core/ids";
 /** `gh` exited non-zero after it may have changed something: exit non-zero (a crash), never `failed`. */
 class Crash extends Error {}
 
-type Config = { repo: string | undefined; readyLabel: string; statusLabels: string[] };
+type Config = { repo: string | undefined; readyLabel: string; statusLabels: string[]; project: string | undefined; statusField: string };
 type Gh = { exitCode: number; stdout: string; stderr: string };
 
 const ghEnv = (): Record<string, string> => {
@@ -73,8 +81,107 @@ const read = (config: Config, { key }: TrackerReadPayload): TrackerReadBody => {
   return { workItem: { key, title: issue.title, body: issue.body } satisfies WorkItem };
 };
 
+
+// ---- Project mode ----
+
+type ProjectItem = { id: string; content: { type: string; number?: number; repository?: string }; [field: string]: unknown };
+
+const ITEM_LIST_SCHEMA = {
+  type: "object", required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object", required: ["id", "content"],
+        properties: {
+          id: { type: "string" },
+          content: {
+            type: "object", required: ["type"],
+            properties: { type: { type: "string" }, number: { type: "integer" }, repository: { type: "string" } },
+          },
+        },
+      },
+    },
+  },
+};
+const PROJECT_VIEW_SCHEMA = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
+const FIELD_LIST_SCHEMA = {
+  type: "object", required: ["fields"],
+  properties: {
+    fields: {
+      type: "array",
+      items: {
+        type: "object", required: ["id", "name"],
+        properties: {
+          id: { type: "string" }, name: { type: "string" },
+          options: { type: "array", items: { type: "object", required: ["id", "name"], properties: { id: { type: "string" }, name: { type: "string" } } } },
+        },
+      },
+    },
+  },
+};
+
+/** A read-only gh call whose JSON must fit `schema`; malformed output is a validation error (`failed`). */
+const ghChecked = <T>(args: string[], schema: object): T => {
+  const data = ghRead(args);
+  const invalid = check(schema, data);
+  if (invalid) throw new Error(`invalid gh ${args.slice(0, 2).join(" ")} output: ${invalid}`);
+  return data as T;
+};
+
+const owner = (config: Config): string => repoOf(config).split("/")[0] as string;
+
+const projectItems = (config: Config, project: string): ProjectItem[] =>
+  ghChecked<{ items: ProjectItem[] }>(
+    ["project", "item-list", project, "--owner", owner(config), "--format", "json", "--limit", "1000"], ITEM_LIST_SCHEMA,
+  ).items;
+
+/** Only Issues of --repo count: drafts, pull requests and other repos' issues are never ours. */
+const repoIssues = (config: Config, items: ProjectItem[]): (ProjectItem & { number: number })[] =>
+  items.filter((item): item is ProjectItem & { number: number } =>
+    item.content.type === "Issue" && item.content.repository === repoOf(config) && item.content.number !== undefined);
+
+/** gh keys an item's field values by the field name with a lowercase first letter (`Status` → `status`). */
+const fieldValue = (item: ProjectItem, field: string): unknown =>
+  item[field] ?? item[field.charAt(0).toLowerCase() + field.slice(1)];
+
+const projectNext = (config: Config, project: string): TrackerNextBody => {
+  const numbers = repoIssues(config, projectItems(config, project))
+    .filter((item) => fieldValue(item, config.statusField) === config.readyLabel)
+    .map((item) => item.content.number as number);
+  const lowest = numbers.sort((a, b) => a - b)[0];
+  const body = { key: lowest === undefined ? null : `${keyPrefix(config)}${lowest}` };
+  const invalid = check(schemaFor("tracker", "next")?.stdout ?? {}, { status: "ok", body });
+  if (invalid) throw new Error(`invalid next body: ${invalid}`);
+  return body;
+};
+
+/** Everything is resolved by read-only calls first, so a missing field, option or item fails before the one write. */
+const projectUpdate = (config: Config, project: string, key: string, status: string): { body: Record<string, never> } => {
+  if (status === "") throw new Error("an empty status cannot be set on a Project field");
+  const n = issueNumber(config, key);
+  const own = ["--owner", owner(config)];
+  const projectId = ghChecked<{ id: string }>(["project", "view", project, ...own, "--format", "json"], PROJECT_VIEW_SCHEMA).id;
+  const fields = ghChecked<{ fields: { id: string; name: string; options?: { id: string; name: string }[] }[] }>(
+    ["project", "field-list", project, ...own, "--format", "json", "--limit", "100"], FIELD_LIST_SCHEMA,
+  ).fields;
+  const field = fields.find((f) => f.name === config.statusField);
+  if (!field) throw new Error(`no field ${JSON.stringify(config.statusField)} in project ${project}`);
+  const option = field.options?.find((o) => o.name === status);
+  if (!option) throw new Error(`field ${JSON.stringify(field.name)} has no option ${JSON.stringify(status)}`);
+  const item = repoIssues(config, projectItems(config, project)).find((i) => String(i.content.number) === n);
+  if (!item) throw new Error(`issue ${key} is not an item of project ${project}`);
+  const args = [
+    "project", "item-edit", "--project-id", projectId, "--id", item.id, "--field-id", field.id, "--single-select-option-id", option.id,
+  ];
+  const result = runGh(args);
+  if (result.exitCode !== 0) throw new Crash(ghError(args, result)); // the edit may have been applied
+  return { body: {} };
+};
+
 /** The open issue with the ready label and the lowest number (gh lists newest first, so sort here). */
 const next = (config: Config): TrackerNextBody => {
+  if (config.project !== undefined) return projectNext(config, config.project);
   const issues = ghRead([
     "issue", "list", "--repo", repoOf(config), "--label", config.readyLabel, "--state", "open",
     "--json", "number", "--limit", "1000",
@@ -97,6 +204,7 @@ const sameSet = (a: string[], b: string[]): boolean => a.length === b.length && 
  * and the result is `ok` with a `partial` evidence item.
  */
 const update = (config: Config, key: string, { status }: TrackerUpdatePayload): { body: Record<string, never>; evidence?: { label: string; text: string }[] } => {
+  if (config.project !== undefined) return projectUpdate(config, config.project, key, status);
   const statusSet = [...new Set([...config.statusLabels, config.readyLabel])];
   if (status !== "" && !statusSet.includes(status)) {
     throw new Error(`status ${JSON.stringify(status)} is not a configured status label (${statusSet.join(", ")})`);
@@ -157,9 +265,9 @@ const ops: Record<string, (config: Config, stdin: Stdin) => Reply> = {
   cancel: () => ({ body: {} }), // every gh call is synchronous, so there is never anything to cancel
 };
 
-const FLAGS = ["--repo", "--ready-label", "--status-labels"];
+const FLAGS = ["--repo", "--ready-label", "--status-labels", "--project", "--status-field"];
 
-/** argv after the script: `[--repo r] [--ready-label l] [--status-labels a,b] <port> <op>`. */
+/** argv after the script: `[--repo r] [--ready-label l] [--status-labels a,b] [--project n] [--status-field f] <port> <op>`. */
 const parseArgs = (args: string[]): { config: Config; port: string | undefined; op: string | undefined } => {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -173,8 +281,12 @@ const parseArgs = (args: string[]): { config: Config; port: string | undefined; 
   const statusLabels = (flags["--status-labels"] ?? "").split(",").map((label) => label.trim()).filter(Boolean);
   const readyLabel = flags["--ready-label"] ?? "ready";
   if (readyLabel === "" || readyLabel.includes(",")) throw new Error(`bad --ready-label: ${JSON.stringify(readyLabel)}`);
+  const project = flags["--project"];
+  if (project !== undefined && !/^[1-9][0-9]*$/.test(project)) throw new Error(`bad --project: ${JSON.stringify(project)}`);
+  const statusField = flags["--status-field"] ?? "Status";
+  if (statusField === "") throw new Error("bad --status-field: empty");
   const [port, op] = positional;
-  return { config: { repo: flags["--repo"], readyLabel, statusLabels }, port, op };
+  return { config: { repo: flags["--repo"], readyLabel, statusLabels, project, statusField }, port, op };
 };
 
 /** Every error is caught: `failed` only where nothing changed, a crash (exit 1) where something may have. */
