@@ -12,11 +12,12 @@ const ADAPTER = join(import.meta.dir, "github.ts");
 const ajv = new Ajv();
 
 type Issue = { title: string; body: string; labels: string[]; state?: "open" | "closed"; comments?: string[] };
-type FakeState = { repo: string; issues: Record<string, Issue>; fail?: string[]; failEditAfterAdd?: boolean };
+type FakeState = { repo: string; issues: Record<string, Issue>; fail?: string[]; failEditAfterAdd?: boolean; failCleanup?: boolean };
 type GhCall = { argv: string[]; stdin: string; env: string[] };
 
 // The fake `gh`: logs every call to calls.jsonl, serves and mutates issues in state.json.
-// `fail` lists "<cmd> <sub>" pairs that exit 1 untouched; `failEditAfterAdd` applies the adds, then exits 1.
+// `fail` lists "<cmd> <sub>" pairs that exit 1 untouched; `failEditAfterAdd` applies the adds, then exits 1;
+// `failCleanup` makes an edit without adds (the cleanup retry) exit 1 untouched.
 const FAKE_GH = `
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const [dir, ...argv] = process.argv.slice(2);
@@ -45,7 +46,8 @@ if (sub === "view") {
 } else if (sub === "edit") {
   if (!issue) die("no issue " + n);
   for (const label of flags("--add-label")) if (!issue.labels.includes(label)) issue.labels.push(label);
-  if (state.failEditAfterAdd) { save(); die("boom after add"); }
+  if (state.failCleanup && flags("--add-label").length === 0) die("boom cleanup");
+  if (state.failEditAfterAdd && flags("--add-label").length > 0) { save(); die("boom after add"); }
   issue.labels = issue.labels.filter((label) => !flags("--remove-label").includes(label));
   save();
 } else if (sub === "comment") {
@@ -219,8 +221,21 @@ describe("tracker/github adapter", () => {
     expect(fake.state().issues["7"]?.labels).toEqual(["ready", "bug"]);
   });
 
-  test("update: an edit that failed midway is reported ok with partial evidence, not failed", async () => {
+  test("update: an edit that failed after the add is cleaned up by a narrower retry, leaving one status label", async () => {
     const fake = fakeGh({ ...base(), failEditAfterAdd: true });
+    expect(await call(fake, update("harlo-7", "done"))).toEqual(ok({}));
+    expect(fake.state().issues["7"]?.labels).toEqual(["bug", "done"]);
+    expect(fake.calls().at(-1)?.argv).toEqual(["issue", "edit", "7", "--repo", "acme/harlo", "--remove-label", "ready"]);
+  });
+
+  test("update: after a successful cleanup the issue is out of next's ready query", async () => {
+    const fake = fakeGh({ ...base(), failEditAfterAdd: true });
+    await call(fake, update("harlo-7", "done"));
+    expect(fake.state().issues["7"]?.labels).not.toContain("ready");
+  });
+
+  test("update: an edit that failed midway and whose cleanup fails is ok with partial evidence, not failed", async () => {
+    const fake = fakeGh({ ...base(), failEditAfterAdd: true, failCleanup: true });
     const result = await call(fake, update("harlo-7", "done"));
     expect(result).toEqual({
       exitCode: 0,

@@ -91,8 +91,10 @@ const sameSet = (a: string[], b: string[]): boolean => a.length === b.length && 
 
 /**
  * One `gh issue edit` with every add and remove. If it fails, the labels are re-read: unchanged gives
- * `failed`, changed gives `ok` with a `partial` evidence item (never masked as `failed`), and a failed
- * re-read is a crash (the outcome is unknown).
+ * `failed`, and a failed re-read is a crash (the outcome is unknown). Changed means the add took effect,
+ * so it is never `failed`: a second, narrower edit removes the stale status labels still present, and if
+ * that succeeds the result is a plain `ok`. If the cleanup fails too, the labels are re-read once more
+ * and the result is `ok` with a `partial` evidence item.
  */
 const update = (config: Config, key: string, { status }: TrackerUpdatePayload): { body: Record<string, never>; evidence?: { label: string; text: string }[] } => {
   const statusSet = [...new Set([...config.statusLabels, config.readyLabel])];
@@ -117,6 +119,17 @@ const update = (config: Config, key: string, { status }: TrackerUpdatePayload): 
     throw new Crash(`${ghError(args, result)}; re-reading labels failed too: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (sameSet(before, after)) throw new Error(ghError(args, result));
+  const stale = after.filter((label) => statusSet.includes(label) && label !== status);
+  if (stale.length > 0) {
+    const cleanupArgs = ["issue", "edit", n, "--repo", repoOf(config), ...stale.flatMap((label) => ["--remove-label", label])];
+    const cleanup = runGh(cleanupArgs);
+    if (cleanup.exitCode === 0) return { body: {} };
+    try {
+      after = labelsOf(config, n);
+    } catch (error) {
+      throw new Crash(`${ghError(cleanupArgs, cleanup)}; re-reading labels failed too: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return { body: {}, evidence: [{ label: "partial", text: `${ghError(args, result)}; labels now: ${after.join(", ")}` }] };
 };
 
