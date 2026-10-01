@@ -834,7 +834,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Test: a mocked `getUpdates` gives a callback, and the listener runs `ship signal <d> <id> {ok, answer, by: person}`. A reply to a force-reply resolves through the reply's message id. An unknown or expired token gets a "withdrawn" reply.
   - Impl: `env/telegram-listener.ts`, long-poll, no inbound port.
   - Done when green, plus one real round trip on a phone.
-- [ ] **M2.4 GitHub issues tracker.**
+- [x] **M2.4 GitHub issues tracker.** — Delivered as WorkItem `github-tracker` under the label "M2.1" (the first live M2 item once the Telegram rows were postponed); the plan keeps the M2.4 number.
   - Test: with a fake `gh` on PATH:
     - read gives key `<repo>-<n>`, title and body
     - update sets or clears a status label
