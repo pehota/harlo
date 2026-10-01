@@ -3,7 +3,8 @@
 ## Code style
 
 - Maximum function argument count: 3. Beyond that, use a single object argument.
-- Every adapter gets its own module folder under `src/adapters/` — never a flat `src/adapters/<name>.ts` file. Three shapes: `src/adapters/<port>/<variant>.ts` for a port-specific adapter (e.g. `workspace/worktree.ts`, `tracker/md.ts`); `src/adapters/<name>/index.ts` for a single adapter with no variants (e.g. `src/adapters/principal/index.ts`); `src/adapters/<category>/<variant>/index.ts` for a cross-cutting adapter serving multiple ports, grouped by category (e.g. `src/adapters/agent/claude/index.ts`, `src/adapters/ask/principal/index.ts`).
+- Every adapter gets its own module folder under `src/adapters/` — never a flat `src/adapters/<name>.ts` file. Three shapes: `src/adapters/<port>/<variant>.ts` for a port-specific adapter (e.g. `workspace/worktree.ts`, `tracker/md.ts`); `src/adapters/<name>/<impl>.ts` for a single adapter with no variants, named for what it does (e.g. `src/adapters/principal/tty.ts`); `src/adapters/<category>/<variant>/<impl>.ts` for a cross-cutting adapter serving multiple ports, grouped by category (shape only — `src/adapters/agent/claude/` and `src/adapters/ask/principal/` still have an `index.ts` each, not yet renamed to comply).
+- Never name any module `index.ts` (not just adapters — applies repo-wide: `src/core/`, `src/contracts/`, `src/runner/`, everywhere) to export multiple things or a default value. Every file gets a real, specific name so imports stay qualified (`import { tty } from "./adapters/principal/tty"`, never a barrel or default export).
 
 ## Dev tools
 
