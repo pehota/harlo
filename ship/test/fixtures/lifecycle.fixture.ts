@@ -1,5 +1,5 @@
 // Test data for test/e2e/lifecycle.test.ts and terminal-principal.test.ts: a project whose every port is the
-// scripted fake adapter except State (the real file adapter) and, when asked, the Principal (the real terminal
+// scripted fake adapter except State (the real file adapter) and, when asked, the Principal (the real tty
 // adapter), plus readers that go through the adapters, never around them.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,12 +7,13 @@ import { join } from "node:path";
 import type { RunnerStdin } from "../../src/contracts/common";
 import type { TimedEntry } from "../../src/contracts/snapshot";
 import type { Snapshot } from "../../src/core/types";
+import { runPty, type Turn } from "./pty";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const BIN = join(ROOT, "bin", "ship");
 const FAKE = join(ROOT, "src", "adapters", "fake.ts");
 const STATE = join(ROOT, "src", "adapters", "state", "files.ts");
-const TERMINAL = join(ROOT, "src", "adapters", "principal", "index.ts");
+const TTY = join(ROOT, "src", "adapters", "principal", "tty.ts");
 
 export const D = "k-1"; // every scenario runs WorkItem `k`, so its first Delivery
 
@@ -55,11 +56,12 @@ export type Logged = RunnerStdin;
  * A temp project. `replies` is the fake's script ("<port>.<op>" → stdout or list of stdouts); the tracker
  * reads WorkItem `k` and teardown and Close's tracker.update succeed unless the scenario scripts otherwise.
  * Unscripted awaited calls (every Principal decide/ask) print `accepted`: the test answers with `ship signal`.
- * `principal: "terminal"` puts the real terminal Principal on that port instead, printing to `printed()`.
+ * `principal: "tty"` puts the real tty Principal on that port instead, blocking on /dev/tty: drive it with
+ * `shipPty()`, which answers gates inline via a real pty as they appear, in the same `ship` invocation.
  */
 export const lifecycle = (
   replies: Record<string, unknown>, policy: Record<string, unknown> = {},
-  { principal = "fake" }: { principal?: "fake" | "terminal" } = {},
+  { principal = "fake" }: { principal?: "fake" | "tty" } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "ship-e2e-"));
   const stateDir = join(dir, "state");
@@ -67,15 +69,13 @@ export const lifecycle = (
   const machinePath = join(dir, "machine.json");
   const fake = ["bun", FAKE, "--script", script];
 
-  const principalOut = join(dir, "principal.txt");
   const scriptReplies = { "tracker.read": workItem(), "tracker.update": ok(), "workspace.teardown": ok(), ...replies };
   writeFileSync(script, JSON.stringify({ replies: scriptReplies }));
-  writeFileSync(principalOut, "");
   const adapters = Object.fromEntries(
     ["tracker", "workspace", "define", "implement", "check", "integrate", "deploy", "verify"].map((port) => [port, fake]),
   );
   writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "e2e", adapters, policy: { ...POLICY, ...policy } }));
-  const principalArgv = principal === "terminal" ? ["bun", TERMINAL, "--out", principalOut] : fake;
+  const principalArgv = principal === "tty" ? ["bun", TTY] : fake;
   writeFileSync(machinePath, JSON.stringify({ principal: principalArgv, state: ["bun", STATE, "--dir", stateDir] }));
 
   const run = async (argv: string[], cwd: string, env: Record<string, string>, stdin?: string) => {
@@ -90,6 +90,17 @@ export const lifecycle = (
     const { stdout, stderr, exit } = await run(["bun", BIN, ...args], dir, shipEnv);
     const line = stdout.trim();
     return { exit, out: line ? (JSON.parse(line) as Record<string, unknown>) : null, stderr };
+  };
+
+  /**
+   * Run `bin/ship <args>` through a real pty (`principal: "tty"` only): as the Runner answers each gate
+   * synchronously, `apply()`'s own queue drives straight through to the next one, so `turns` here may span
+   * several gates in one call. Returns the same shape as `ship`, plus the raw pty transcript for assertions.
+   */
+  const shipPty = async (args: string[], turns: Turn[]): Promise<Ran & { ptyOutput: string }> => {
+    const ran = await runPty(["bun", BIN, ...args], "", { cwd: dir, env: shipEnv, turns });
+    const line = ran.stdout.trim();
+    return { exit: ran.exit, out: line ? (JSON.parse(line) as Record<string, unknown>) : null, stderr: "", ptyOutput: ran.ptyOutput };
   };
 
   /** One Runner-only call on the file State adapter, exactly as the Runner makes it. */
@@ -108,8 +119,6 @@ export const lifecycle = (
 
   /** Run a shell line verbatim with bash in the project, `ship` on PATH, as a person pasting it would. */
   const bash = (line: string) => run(["bash", "-c", line], dir, { ...shipEnv, PATH: `${join(ROOT, "bin")}:${env.PATH}` });
-  /** What the terminal Principal printed for the person so far. */
-  const printed = (): string => readFileSync(principalOut, "utf8");
   /** Re-script the fake mid-scenario: `replies` replace those ports' replies; call counts carry on. */
   const rescript = (replies: Record<string, unknown>) => {
     const current = JSON.parse(readFileSync(script, "utf8")) as { replies: Record<string, unknown> };
@@ -120,7 +129,7 @@ export const lifecycle = (
   // The State adapter's own spawn argv, exactly as the machine config's `state` entry: for env scripts
   // (poll/stalled.ts, drive.ts) that take `--state <state-adapter argv…>` directly rather than reading config.
   const stateArgv = ["bun", STATE, "--dir", stateDir];
-  return { ship, bash, journal, snapshot, log, printed, rescript, cleanup, stateArgv };
+  return { ship, shipPty, bash, journal, snapshot, log, rescript, cleanup, stateArgv };
 };
 
 const RUNNER_KINDS = new Set(["sent", "accepted", "adapter_error"]);

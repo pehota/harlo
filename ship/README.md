@@ -66,7 +66,7 @@ a profile `env` value:
 | Adapter | Port | Args |
 |---|---|---|
 | `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
-| `src/adapters/principal/index.ts` | principal | `[--out <file>]`, default `/dev/tty` |
+| `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
 ## CLI
@@ -154,5 +154,6 @@ ship status hello-1
 # → {"deliveries":[{"delivery":"hello-1","at":"closed","awaiting":null}]}
 ```
 
-For a real person at the terminal, set `"principal": ["bun", "<ship>/src/adapters/principal/index.ts"]`.
-It prints each gate with its evidence and a paste-ready `ship signal …` line per option.
+For a real person at the terminal, set `"principal": ["bun", "<ship>/src/adapters/principal/tty.ts"]`.
+It prints each gate with its evidence and a plain option list, then blocks on `/dev/tty` for the reply —
+answered right there, in the same `ship` invocation, no `ship signal` needed.
