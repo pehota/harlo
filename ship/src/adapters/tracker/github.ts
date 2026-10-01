@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // GitHub issues Tracker adapter (plan §6 M2.4), driving the `gh` CLI; no direct API calls.
 // argv: [--repo <owner/name>] [--ready-label <name>] [--status-labels <a,b,...>]
-//       [--project <number>] [--status-field <name>] tracker <op>;
+//       [--project <number>] [--project-owner <owner>] [--status-field <name>] tracker <op>;
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 // Keys are `<name>-<n>` (`name` is the repo part of `owner/name`; KEY_RE forbids `/`), e.g. `harlo-12`.
 // Without --repo the repo is resolved once via `gh repo view` in the cwd.
@@ -9,7 +9,7 @@
 // so moving an issue to any other status also takes it out of `next`'s query. `update` leaves exactly
 // one status label (or none, for an empty status); labels outside the set are never touched. A status
 // outside the set is rejected as `failed` before any `gh` call.
-// Project mode (--project <number>, owned by the repo's owner): the item source is that GitHub Project's
+// Project mode (--project <number>, owned by the repo's owner unless --project-owner overrides it): the item source is that GitHub Project's
 // single-select field --status-field (default `Status`) instead of labels. `next` takes the Issue items of
 // --repo whose field equals the ready value (--ready-label, default `ready`) and returns the lowest number
 // (sorted here, item-list order is not relied on); drafts, PRs and other repos' items are skipped. Items are
@@ -30,7 +30,10 @@ import { KEY_RE } from "../../../src/core/ids";
 /** `gh` exited non-zero after it may have changed something: exit non-zero (a crash), never `failed`. */
 class Crash extends Error {}
 
-type Config = { repo: string | undefined; readyLabel: string; statusLabels: string[]; project: string | undefined; statusField: string };
+type Config = {
+  repo: string | undefined; readyLabel: string; statusLabels: string[];
+  project: string | undefined; projectOwner: string | undefined; statusField: string;
+};
 type Gh = { exitCode: number; stdout: string; stderr: string };
 
 const ghEnv = (): Record<string, string> => {
@@ -129,7 +132,7 @@ const ghChecked = <T>(args: string[], schema: object): T => {
   return data as T;
 };
 
-const owner = (config: Config): string => repoOf(config).split("/")[0] as string;
+const owner = (config: Config): string => config.projectOwner ?? (repoOf(config).split("/")[0] as string);
 
 const projectItems = (config: Config, project: string): ProjectItem[] =>
   ghChecked<{ items: ProjectItem[] }>(
@@ -265,7 +268,7 @@ const ops: Record<string, (config: Config, stdin: Stdin) => Reply> = {
   cancel: () => ({ body: {} }), // every gh call is synchronous, so there is never anything to cancel
 };
 
-const FLAGS = ["--repo", "--ready-label", "--status-labels", "--project", "--status-field"];
+const FLAGS = ["--repo", "--ready-label", "--status-labels", "--project", "--project-owner", "--status-field"];
 
 /** argv after the script: `[--repo r] [--ready-label l] [--status-labels a,b] [--project n] [--status-field f] <port> <op>`. */
 const parseArgs = (args: string[]): { config: Config; port: string | undefined; op: string | undefined } => {
@@ -283,10 +286,11 @@ const parseArgs = (args: string[]): { config: Config; port: string | undefined; 
   if (readyLabel === "" || readyLabel.includes(",")) throw new Error(`bad --ready-label: ${JSON.stringify(readyLabel)}`);
   const project = flags["--project"];
   if (project !== undefined && !/^[1-9][0-9]*$/.test(project)) throw new Error(`bad --project: ${JSON.stringify(project)}`);
+  const projectOwner = flags["--project-owner"];
   const statusField = flags["--status-field"] ?? "Status";
   if (statusField === "") throw new Error("bad --status-field: empty");
   const [port, op] = positional;
-  return { config: { repo: flags["--repo"], readyLabel, statusLabels, project, statusField }, port, op };
+  return { config: { repo: flags["--repo"], readyLabel, statusLabels, project, projectOwner, statusField }, port, op };
 };
 
 /** Every error is caught: `failed` only where nothing changed, a crash (exit 1) where something may have. */

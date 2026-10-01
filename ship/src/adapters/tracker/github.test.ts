@@ -372,6 +372,13 @@ describe("tracker/github adapter, Project mode", () => {
     expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-8" }));
   });
 
+  test("next: --project-owner overrides the repo-derived owner", async () => {
+    const fake = fakeGh(projectState([issueItem(3, "ready")]));
+    const flags = [...PROJECT_FLAGS, "--project-owner", "other-owner"];
+    expect(await call(fake, next(), { flags })).toEqual(ok({ key: "harlo-3" }));
+    expect(projectCalls(fake)[0]).toEqual(expect.arrayContaining(["--owner", "other-owner"]));
+  });
+
   test("next: --status-field and --ready-label pick the field and value", async () => {
     const fake = fakeGh(projectState([issueItem(2, "ready"), { ...issueItem(5, undefined), stage: "Go" } as ProjectItem]));
     const flags = [...PROJECT_FLAGS, "--status-field", "Stage", "--ready-label", "Go"];
