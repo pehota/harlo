@@ -109,6 +109,8 @@ describe("usage evidence item (harlo-56)", () => {
         [`${status}: negative usage figure`, { ...base, evidence: [item({ ...usage, costUsd: -0.1 })] }, false],
         [`${status}: unknown usage key`, { ...base, evidence: [item({ ...usage, input_tokens: 10 })] }, false],
         [`${status}: usage that isn't an object`, { ...base, evidence: [item(5)] }, false],
+        [`${status}: null usage figure`, { ...base, evidence: [item({ ...usage, inputTokens: null })] }, false],
+        [`${status}: null usage`, { ...base, evidence: [item(null)] }, false],
       ];
     }),
   ];

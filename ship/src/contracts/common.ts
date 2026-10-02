@@ -102,9 +102,11 @@ export const findingSchema: JSONSchemaType<Finding> = {
 };
 export const findingsSchema: JSONSchemaType<Finding[]> = { type: "array", items: findingSchema };
 
-const figure = { type: "number", minimum: 0, nullable: true } as const;
+// A figure the CLI left out is absent, never null: JSONSchemaType insists an optional property be `nullable`, so
+// these schemas leave it off and are cast once here (ajv then rejects null like any other non-number).
+const figure = { type: "number", minimum: 0 } as const;
 
-export const usageSchema: JSONSchemaType<Usage> = {
+export const usageSchema = {
   type: "object",
   properties: {
     inputTokens: figure, outputTokens: figure, cacheReadTokens: figure, cacheCreationTokens: figure,
@@ -112,7 +114,7 @@ export const usageSchema: JSONSchemaType<Usage> = {
   },
   required: [],
   additionalProperties: false,
-};
+} as unknown as JSONSchemaType<Usage> & { nullable: true };
 
 export const evidenceItemSchema: JSONSchemaType<EvidenceItem> = {
   type: "object",
@@ -120,7 +122,7 @@ export const evidenceItemSchema: JSONSchemaType<EvidenceItem> = {
     label: { type: "string" },
     text: { type: "string", nullable: true },
     url: { type: "string", nullable: true },
-    usage: { ...usageSchema, nullable: true },
+    usage: usageSchema, // not nullable: an item without usage omits the key
   },
   required: ["label"],
   additionalProperties: false,
