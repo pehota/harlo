@@ -116,6 +116,14 @@ else
   ok "track: a write under <root>/.dod is never logged as an edit"
 fi
 
+# --- dod-claim.sh normalises a subdir repo arg itself -------------------------
+# A caller passing <root>/ship would arm the latch in ship/.dod/, which the
+# gate (reading <root>/.dod) never sees.
+state_disarm_latch "$ROOT/.dod/main/state.json"
+bash "$DIR0/../scripts/dod-claim.sh" "$SUB" "main" >/dev/null 2>&1
+state_read "$ROOT/.dod/main/state.json"
+eq "dod-claim.sh: subdir arg arms the latch under <root>/.dod" "true" "$STATE_LATCHED"
+
 if [ ! -e "$SUB/.dod" ]; then
   ok "nothing written under <subdir>/.dod"
 else

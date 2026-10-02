@@ -3,8 +3,8 @@
 # dod/scripts/dod-claim.sh — arms the claim latch for a task.
 #
 # Usage: dod-claim.sh <repo_dir> <task_key>
-# repo_dir is the git top-level (callers pass dod_repo_root "$PWD"), the
-# same root the gate keys .dod/ on. Records $CLAUDE_CODE_SESSION_ID (set in
+# repo_dir may be any dir inside the repo: it is normalised to the git
+# top-level (dod_repo_root), the same root the gate keys .dod/ on. Records $CLAUDE_CODE_SESSION_ID (set in
 # the Bash tool env) as the claiming session, so the gate scopes the latch
 # to it; unset -> no session recorded, the latch claims in any session.
 # Sole writer of state.latched=true outside the gate itself. Skills call this
@@ -12,8 +12,9 @@
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$SCRIPT_ROOT/lib/state.sh"
+. "$SCRIPT_ROOT/lib/gitref.sh"
 
-REPO_DIR="${1:?usage: dod-claim.sh <repo_dir> <task_key>}"
+REPO_DIR=$(dod_repo_root "${1:?usage: dod-claim.sh <repo_dir> <task_key>}")
 TASK_KEY="${2:?usage: dod-claim.sh <repo_dir> <task_key>}"
 
 STATE_FILE="$REPO_DIR/.dod/$TASK_KEY/state.json"
