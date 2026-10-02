@@ -55,7 +55,7 @@ after its progress lines.
 | Exit | Meaning |
 |---|---|
 | 0 | drained: `ship next` returned `delivery: null` |
-| 1 | a `ship next` / `ship status` call failed (stderr has its output), or bad usage |
+| 1 | a `ship next` / `ship status` call failed (stderr has its output), the re-pick guard's own `ship stop` failed, or bad usage |
 | 2 | the lockfile already exists: another queue holds it |
 | 3 | re-pick guard fired (see below) |
 
@@ -92,6 +92,8 @@ Delivery for a key it already handled, it stops that new Delivery:
 ship stop <key>-<n> abandoned "<key> still ready after its Delivery ended: check policy.tracker.steps/outcomes"
 ```
 
-prints the same reason on stderr and exits 3. Fix the config (e.g. give
+prints the same reason on stderr and exits 3. If that `ship stop` itself fails
+(e.g. `abandoned` is not in `policy.outcomes`), stderr says the Delivery stays
+open and the queue exits 1. Fix the config (e.g. give
 `tracker.steps.define` an in-progress status), then fix the item's status by
 hand.

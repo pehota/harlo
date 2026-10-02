@@ -148,6 +148,23 @@ describe("queue", () => {
     expect(readFileSync(lock, "utf8")).toBe("another run's token");
   }, 60_000);
 
+  test("re-pick guard whose own `ship stop` fails: exit 1, the second Delivery stays open", async () => {
+    // `abandoned` is not a stop outcome here, so the guard's stop is rejected; delivered sets `ready` again.
+    const p = project({ k: "ready" }, { outcomes: ["rolled_back"], tracker: { outcomes: {
+      delivered: { status: "ready" }, accepted_with_failure: { status: "done" },
+      rolled_back: { status: "reopened", comment: true },
+    } } });
+    const human = gatekeeper(p, (d) => (d === "k-1" ? "answer" : "skip"));
+    const ran = await queue(p);
+    await human.halt();
+
+    expect(ran.exit).toBe(1);
+    expect(doneLines(ran.stdout)).toEqual(["k-1: done at=closed"]);
+    expect(ran.stderr).toContain("k-2 stays open");
+    expect(await atOf(p, "k-2")).not.toBe("abandoned");
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+  }, 60_000);
+
   test.each([
     { signal: "SIGTERM", exit: 143 }, { signal: "SIGINT", exit: 130 }, { signal: "SIGHUP", exit: 129 },
   ] as const)("$signal while parked at a gate: exit $exit, the lock released", async ({ signal, exit }) => {

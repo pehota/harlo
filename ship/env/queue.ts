@@ -12,7 +12,8 @@
 //
 // Re-pick guard: a WorkItem whose status never leaves `ready` (no `policy.tracker.steps` entry moves it, and
 // its outcome mapping sets no status) would be picked again forever. A key picked a second time in one run gets
-// its new Delivery stopped as `abandoned` with that reason, and the queue exits 3.
+// its new Delivery stopped as `abandoned` with that reason, and the queue exits 3 (1 if that stop fails: the
+// Delivery then stays open).
 //
 // One queue per State: an exclusive lockfile (atomic create) guards the run. It is removed on drain, on error
 // and on SIGINT/SIGTERM/SIGHUP — never on SIGKILL, which leaves it stale — and only while it still holds this
@@ -112,10 +113,11 @@ const drain = async (options: Options): Promise<number> => {
     const key = keyOf(delivery);
     if (handled.has(key)) {
       const reason = `${key} still ready after its Delivery ended: check policy.tracker.steps/outcomes`;
-      const stopped = await runShip(ship, ["stop", delivery, "abandoned", reason]);
-      if (stopped.exitCode !== 0) console.error(`ship stop ${delivery}: exit ${stopped.exitCode}\n${stopped.stderr}`);
       console.error(`${delivery}: ${reason}`);
-      return 3;
+      const stopped = await runShip(ship, ["stop", delivery, "abandoned", reason]);
+      if (stopped.exitCode === 0) return 3;
+      console.error(`ship stop ${delivery}: exit ${stopped.exitCode}; ${delivery} stays open\n${stopped.stderr}`);
+      return 1;
     }
     await driveToEnd(delivery);
   }
