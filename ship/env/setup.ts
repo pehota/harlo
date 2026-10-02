@@ -81,7 +81,18 @@ const detect = () => {
   const branches = git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out.split("\n").filter(Boolean);
   const origin = git(root, ["remote", "get-url", "origin"]);
   const github = origin.code === 0 ? /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(origin.out)?.[1] : undefined;
-  return { root, current: branch.out, branches, github };
+  return { root, current: branch.out, branches, github, checkedOut: checkedOut(root) };
+};
+
+/** Branch → path of the worktree it is checked out in, for every worktree of the repo. */
+const checkedOut = (root: string): Map<string, string> => {
+  const map = new Map<string, string>();
+  for (const block of git(root, ["worktree", "list", "--porcelain"]).out.split("\n\n")) {
+    const path = /^worktree (.+)$/m.exec(block)?.[1];
+    const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1];
+    if (path && branch) map.set(branch, path);
+  }
+  return map;
 };
 
 // --- prompts ------------------------------------------------------------------------------------------------
@@ -234,6 +245,21 @@ const writeJson = (path: string, value: unknown): void => {
 type Plan = {
   repo: Repo; project: ProjectConfig; machine: MachineConfig; files: { project: string; machine: string };
   main: { branch: string; create: boolean } | undefined; worktrees: string | undefined; dirs: string[];
+  mainLine: { path: string; add: boolean } | undefined;
+};
+
+/**
+ * Where Integrate lands: integrate/local merges into the branch checked out at its --root, so --root must have
+ * the main line checked out — the git root when that is the current branch, else the worktree it is already
+ * checked out in, else a dedicated `<git root>/.ship/main-line` worktree (added by `apply`).
+ */
+const mainLineAt = (repo: Repo, branch: string): { path: string; add: boolean } => {
+  if (branch === repo.current) return { path: repo.root, add: false };
+  const existing = repo.checkedOut.get(branch);
+  if (existing) return { path: existing, add: false };
+  const path = join(repo.root, ".ship", "main-line");
+  if (existsSync(path)) throw new SetupError(`${path} exists but is not a worktree of ${branch}: remove it or pick another main line`);
+  return { path, add: true };
 };
 
 /** Every answer, flag or default, turned into both configs; nothing on disk changes here. */
@@ -251,6 +277,7 @@ const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean }
     : undefined;
   const steps = { define: pickAdapter(ask, "define"), implement: pickAdapter(ask, "implement"), check: pickAdapter(ask, "check") };
   const integrate = pickAdapter(ask, "integrate");
+  const mainLine = main && integrate.name === "local" ? mainLineAt(repo, main.branch) : undefined;
   const gates = { deploy: pickAdapter(ask, "deploy"), verify: pickAdapter(ask, "verify") };
   const principal = pickAdapter(ask, "principal");
   const state = pickAdapter(ask, "state");
@@ -264,7 +291,7 @@ const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean }
       tracker: tracker.argv,
       workspace: main && worktrees ? [...workspace.argv, "--main", main.branch, "--root", worktrees] : workspace.argv,
       define: steps.define.argv, implement: steps.implement.argv, check: steps.check.argv,
-      integrate: integrate.name === "local" ? [...integrate.argv, "--root", repo.root] : integrate.argv,
+      integrate: integrate.name === "local" ? [...integrate.argv, "--root", mainLine?.path ?? repo.root] : integrate.argv,
       deploy: gates.deploy.argv, verify: gates.verify.argv,
     },
     policy: policyFor(tracker.statuses),
@@ -278,7 +305,7 @@ const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean }
   const invalid = check(projectConfigSchema, project) ?? check(machineConfigSchema, machine);
   if (invalid) throw new SetupError(`invalid config: ${invalid}`);
   const dirs = [...tracker.dirs, ...(stateDir ? [stateDir] : [])];
-  return { repo, project, machine, files: { project: ctx.projectFile, machine: machineFile }, main, worktrees, dirs };
+  return { repo, project, machine, files: { project: ctx.projectFile, machine: machineFile }, main, worktrees, dirs, mainLine };
 };
 
 /** The only step that changes anything: branch, directories, the exclude line, both files. */
@@ -286,6 +313,10 @@ const apply = (p: Plan): void => {
   if (p.main?.create) {
     const created = git(p.repo.root, ["branch", p.main.branch]);
     if (created.code !== 0) throw new SetupError(`git branch ${p.main.branch}: ${created.err}`);
+  }
+  if (p.mainLine?.add && p.main) {
+    const added = git(p.repo.root, ["worktree", "add", "-q", p.mainLine.path, p.main.branch]);
+    if (added.code !== 0) throw new SetupError(`git worktree add ${p.mainLine.path} ${p.main.branch}: ${added.err}`);
   }
   for (const dir of p.dirs) mkdirSync(dir, { recursive: true });
   excludeShipDir(p.repo.root);
@@ -309,14 +340,14 @@ const visibleInRepo = (root: string, dir: string): boolean => {
 
 const report = (p: Plan, loaded: string): string[] => {
   const queue = ["bun", join(SHIP, "env", "queue.ts"), "--ship", join(SHIP, "bin", "ship"), "--interval", "30000", "--state", ...p.machine.state];
-  const { root, current } = p.repo;
+  const { root } = p.repo;
   return [
     `wrote ${p.files.project}`,
     `wrote ${p.files.machine}`,
     `\`ship status\` loads both: ${loaded}`,
     ...(p.main?.create ? [`created branch ${p.main.branch} from HEAD`] : []),
-    ...(p.main && p.main.branch !== current
-      ? [`note: integrate/local lands onto the branch checked out in ${root} (now ${current}): check out ${p.main.branch} there first`]
+    ...(p.mainLine && p.mainLine.path !== root
+      ? [`Integrate lands on ${p.main?.branch} in its worktree ${p.mainLine.path}${p.mainLine.add ? " (added)" : ""}`]
       : []),
     ...(p.worktrees && visibleInRepo(root, p.worktrees)
       ? [`warning: ${p.worktrees} is inside the repo and not hidden: bun test and other tools will pick up the Deliveries' files`]

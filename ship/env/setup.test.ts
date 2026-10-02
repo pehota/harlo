@@ -155,6 +155,51 @@ describe("env/setup.ts", () => {
     expect(workspace[workspace.indexOf("--main") + 1]).toBe("dev");
   });
 
+  /** The written integrate `--root`, and the branch checked out there. */
+  const integrateRoot = (f: Fixture): { root: string; head: string } => {
+    const integrate: string[] = project(f).adapters.integrate;
+    const root = integrate[integrate.indexOf("--root") + 1] ?? "";
+    return { root, head: git(root, "symbolic-ref", "--short", "HEAD") };
+  };
+
+  test("--main new:<name>: Integrate lands in a main-line worktree on that branch", () => {
+    const f = repo();
+    expect(setup(f, "--yes", "--main", "new:x").exit).toBe(0);
+    expect(integrateRoot(f)).toEqual({ root: join(f.root, ".ship", "main-line"), head: "x" });
+    expect(git(f.root, "symbolic-ref", "--short", "HEAD")).toBe("main");
+  });
+
+  test("--main <existing non-current>: Integrate lands in a main-line worktree on that branch", () => {
+    const f = repo();
+    git(f.root, "branch", "dev");
+    expect(setup(f, "--yes", "--main", "dev").exit).toBe(0);
+    expect(integrateRoot(f)).toEqual({ root: join(f.root, ".ship", "main-line"), head: "dev" });
+  });
+
+  test("--main current: Integrate --root stays the git root", () => {
+    const f = repo();
+    expect(setup(f, "--yes", "--main", "current").exit).toBe(0);
+    expect(integrateRoot(f)).toEqual({ root: f.root, head: "main" });
+  });
+
+  test("a rerun with --force reuses the existing main-line worktree", () => {
+    const f = repo();
+    git(f.root, "branch", "dev");
+    expect(setup(f, "--yes", "--main", "dev").exit).toBe(0);
+    const rerun = setup(f, "--yes", "--force", "--main", "dev");
+    expect({ exit: rerun.exit, stderr: rerun.stderr }).toEqual({ exit: 0, stderr: "" });
+    expect(integrateRoot(f)).toEqual({ root: join(f.root, ".ship", "main-line"), head: "dev" });
+  });
+
+  test("a main line already checked out in another worktree is reused there", () => {
+    const f = repo();
+    const elsewhere = join(tempDir("ship-setup-wt-"), "dev");
+    git(f.root, "worktree", "add", "-q", "-b", "dev", elsewhere);
+    expect(setup(f, "--yes", "--main", "dev").exit).toBe(0);
+    expect(integrateRoot(f)).toEqual({ root: elsewhere, head: "dev" });
+    expect(existsSync(join(f.root, ".ship", "main-line"))).toBe(false);
+  });
+
   test("--worktrees overrides the workspace root", () => {
     const f = repo();
     const dir = join(f.home, "wt");
