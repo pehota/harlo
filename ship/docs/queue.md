@@ -72,6 +72,11 @@ If the lockfile exists, the queue exits 2 with
 nothing. A queue killed with SIGKILL leaves a stale lock; check the pid in it,
 then delete the file by hand. The queue never guesses.
 
+To stop a running queue, signal its **process group** (e.g. Ctrl-C at its
+terminal, or `kill -TERM -<pgid>`), not just its pid. A signal sent only to the
+queue's pid releases the lock at once while a running `ship` child can still be
+finishing its apply — a new queue could then start alongside it.
+
 ## Orphans first
 
 Before the first `ship next`, the queue runs `ship status` (no argument) and
@@ -92,7 +97,9 @@ Delivery for a key it already handled, it stops that new Delivery:
 ship stop <key>-<n> abandoned "<key> still ready after its Delivery ended: check policy.tracker.steps/outcomes"
 ```
 
-prints the same reason on stderr and exits 3. If that `ship stop` itself fails
+prints the same reason on stderr and exits 3. The guard fires only after the
+second `ship next` has already started a Delivery, so the policy must move
+items out of `ready` early (e.g. `tracker.steps.define`). If that `ship stop` itself fails
 (e.g. `abandoned` is not in `policy.outcomes`), stderr says the Delivery stays
 open and the queue exits 1. Fix the config (e.g. give
 `tracker.steps.define` an in-progress status), then fix the item's status by
