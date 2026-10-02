@@ -363,7 +363,7 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 - The two layers have disjoint keys. Each schema rejects the other layer's keys.
 - An undeclared `$secrets.X` is a config error.
 - `policy.tracker.outcomes` must give a `status` for `delivered` and `accepted_with_failure`, because Close awaits it.
-- Every entry in `policy.outcomes` must have a `policy.tracker.outcomes` mapping.
+- Every entry in `policy.outcomes` must have a `policy.tracker.outcomes` mapping, with `comment: true`: a stop's reason must at least be kept as a tracker comment for inspection.
 
 ---
 

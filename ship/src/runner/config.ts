@@ -61,7 +61,7 @@ const buildPolicy = (written: PolicyConfig): Policy => {
   };
 };
 
-/** Close awaits a status for the two derived outcomes; every stop outcome needs a mapping. */
+/** Close awaits a status for the two derived outcomes; every stop outcome needs a mapping that comments. */
 const checkPolicy = (policy: Policy): void => {
   const mapped = policy.tracker.outcomes;
   for (const derived of ["delivered", "accepted_with_failure"]) {
@@ -71,6 +71,11 @@ const checkPolicy = (policy: Policy): void => {
   }
   const unmapped = policy.outcomes.filter((outcome) => !Object.hasOwn(mapped, outcome));
   if (unmapped.length > 0) throw new ConfigError(`policy.outcomes without a policy.tracker.outcomes mapping: ${unmapped.join(", ")}`);
+  // A stop must leave its reason somewhere a person can inspect it: the tracker comment.
+  const uncommented = policy.outcomes.find((outcome) => mapped[outcome]?.comment !== true);
+  if (uncommented !== undefined) {
+    throw new ConfigError(`policy.tracker.outcomes.${uncommented}.comment must be true: a stop's reason is kept as a tracker comment`);
+  }
 };
 
 const SECRET_REF = /^\$secrets\.(.+)$/;

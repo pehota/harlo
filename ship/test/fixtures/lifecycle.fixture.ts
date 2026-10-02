@@ -43,7 +43,7 @@ const POLICY = {
   tracker: {
     outcomes: {
       delivered: { status: "done" }, accepted_with_failure: { status: "done-with-failure" },
-      rolled_back: { status: "reopened" }, abandoned: { comment: true },
+      rolled_back: { status: "reopened", comment: true }, abandoned: { comment: true },
     },
   },
 };

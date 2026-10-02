@@ -36,7 +36,8 @@ Two layers with disjoint keys. Each layer's schema rejects the other's keys.
 - **Machine ports:** `principal`, `state`.
 - **`policy`:** only `policy.tracker.outcomes` is required. It must give a
   `status` for `delivered` and `accepted_with_failure` (Close awaits it), and
-  map every stop outcome in `policy.outcomes`.
+  map every stop outcome in `policy.outcomes` with `"comment": true` (a stop's
+  reason is kept as a tracker comment).
 
 | `policy` key | Default |
 |---|---|
@@ -137,7 +138,7 @@ cat > ship.config.json <<EOF
                 "check": $fake, "integrate": $fake, "deploy": $fake, "verify": $fake },
   "policy": { "tracker": { "outcomes": {
     "delivered": { "status": "done" }, "accepted_with_failure": { "status": "done" },
-    "rolled_back": { "status": "reopened" }, "abandoned": { "comment": true } } } } }
+    "rolled_back": { "status": "reopened", "comment": true }, "abandoned": { "comment": true } } } } }
 EOF
 cat > machine.json <<EOF
 { "principal": $fake,

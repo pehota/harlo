@@ -133,6 +133,8 @@ describe("invalid: a ConfigError (the CLI's exit 2)", () => {
     { name: "missing accepted_with_failure.status", project: with_(project, (p) => { delete p.policy.tracker.outcomes.accepted_with_failure; }), machine, message: "accepted_with_failure" },
     { name: "an outcome without a tracker mapping", project: with_(project, (p) => { p.policy.outcomes = ["rolled_back", "abandoned", "paused"]; }), machine, message: "paused" },
     { name: "a default outcome without a tracker mapping", project: with_(project, (p) => { delete p.policy.tracker.outcomes.abandoned; }), machine, message: "abandoned" },
+    { name: "a stop outcome without comment: true", project: with_(project, (p) => { p.policy.tracker.outcomes.rolled_back = { status: "reopened" }; }), machine, message: "policy.tracker.outcomes.rolled_back.comment" },
+    { name: "a stop outcome with comment: false", project: with_(project, (p) => { p.policy.tracker.outcomes.abandoned = { comment: false }; }), machine, message: "policy.tracker.outcomes.abandoned.comment" },
     { name: "project file is not JSON", project: () => "{nope", machine, message: "ship.config.json" },
   ];
   test.each(rows)("$name", ({ project: p, machine: m, env, message }) => {
