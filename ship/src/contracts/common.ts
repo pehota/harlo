@@ -47,7 +47,12 @@ export type GateEvidence = {
   evidence: EvidenceItem[];
   note?: string;
 };
-export type Decide = { on: DecidePoint; options: string[]; min: PrincipalKind; evidence: GateEvidence };
+/** Where a gate answer's comment goes: Principal feedback to step `to`, the Delivery's reason, or nowhere. */
+export type CommentRoute = { goes: "feedback" | "reason" | "dropped"; to?: "implement" | "define" };
+/** `comments` has one route per option, so a Principal can say up front which answers carry a comment. */
+export type Decide = {
+  on: DecidePoint; options: string[]; comments: Record<string, CommentRoute>; min: PrincipalKind; evidence: GateEvidence;
+};
 
 // ── Schemas (ajv, one per type above; JSONSchemaType<T> keeps them in step with the types) ──
 
@@ -114,15 +119,29 @@ export const gateEvidenceSchema: JSONSchemaType<GateEvidence> = {
   additionalProperties: false,
 };
 
+export const commentRouteSchema: JSONSchemaType<CommentRoute> = {
+  type: "object",
+  properties: {
+    goes: { type: "string", enum: ["feedback", "reason", "dropped"] },
+    to: { type: "string", enum: ["implement", "define"], nullable: true },
+  },
+  required: ["goes"],
+  additionalProperties: false,
+  if: { properties: { goes: { const: "feedback" } } },
+  then: { required: ["to"] },
+  else: { not: { required: ["to"] } },
+};
+
 export const decideSchema: JSONSchemaType<Decide> = {
   type: "object",
   properties: {
     on: { type: "string", enum: ["accept", "decision", "land", "failure", "blocked"] },
     options: stringsSchema,
+    comments: { type: "object", additionalProperties: commentRouteSchema, required: [] },
     min: principalKindSchema,
     evidence: gateEvidenceSchema,
   },
-  required: ["on", "options", "min", "evidence"],
+  required: ["on", "options", "comments", "min", "evidence"],
   additionalProperties: false,
 };
 

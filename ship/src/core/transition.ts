@@ -1,9 +1,9 @@
 // transition(): apply one signal to a Delivery (plan §4). Dispatch is by position (Snapshot.at).
-import type { Finding, Question, Result } from "../contracts/common";
+import type { DecidePoint, Finding, Question, Result } from "../contracts/common";
 import type {
   AskBody, CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
-import { enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
+import { commentRoute, enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
 import { type Move, abandon, andThen, cancelAwaited, enterClose, enterStep, present, reissue, withFire } from "./steps";
 import {
   isTerminal, type Awaiting, type Entry, type Node, type Note, type Policy, type Position, type Signal, type Snapshot,
@@ -58,7 +58,7 @@ const onOk: { [P in Position]?: OnOk } = {
   accept: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      accept: () => enterStep(p, s, "implement"),
+      accept: () => enterStep(p, s, "implement", feedback(b)),
       adjust: () => enterStep(p, s, "define", feedback(b)),
     });
   },
@@ -100,7 +100,7 @@ const onOk: { [P in Position]?: OnOk } = {
     const b = body as DecideBody;
     return branch(s, b.answer, {
       fix_forward: () => enterStep(p, s, "implement", feedback(b)),
-      accept: () => enterClose(p, s, "accepted_with_failure"),
+      accept: () => enterClose(p, { ...s, reason: b.comment ?? null }, "accepted_with_failure"),
     });
   },
   close: (p, s) => enterStep(p, s, "teardown"),
@@ -167,6 +167,15 @@ const onPosition = (p: Policy, s: Snapshot, body: unknown): Move => {
   return handler(p, s, body);
 };
 
+/** A gate answer whose comment COMMENT_ROUTES drops: applied as if it had none, and journaled as ignored. */
+const onDecided = (p: Policy, s: Snapshot, awaiting: Awaiting, b: DecideBody): Applied => {
+  if (b.comment === undefined || commentRoute(awaiting.node as DecidePoint, b.answer)?.goes !== "dropped") {
+    return onPosition(p, s, b);
+  }
+  const { comment: _ignored, ...bare } = b;
+  return { ...onPosition(p, s, bare), note: "ignored_comment" };
+};
+
 /** A Principal's answer (decide or ask ok); one outside the allowed options is re-asked (Q6, B5, B7). */
 const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Applied => {
   const value = (body as AskBody).answer;
@@ -174,7 +183,7 @@ const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Ap
     return { ...reissue(s, awaiting), note: "invalid_answer" };
   }
   if (awaiting.kind === "ask") return onAsk(p, s, awaiting, value);
-  return onPosition(p, s, body);
+  return onDecided(p, s, awaiting, body as DecideBody);
 };
 
 /** The awaited command's Result, applied to the state that no longer awaits it. */

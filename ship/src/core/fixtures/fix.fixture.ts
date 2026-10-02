@@ -109,6 +109,17 @@ export const fixRows: TransitionRow[] = [
     },
   },
   {
+    id: "F5", name: "decision accept + comment → land gate as without one, the comment journaled as ignored",
+    state: snapshotAt("decision", decision1, { fixRounds: 2, findings }),
+    signal: answer(decision1, "accept", "person", "fine as is"),
+    expect: {
+      at: "land",
+      commands: [cmd(land1)],
+      state: { fixRounds: 2, awaiting: land1, reason: null },
+      entry: { from: "decision", to: "land", issued: [id("land-1")], by: "person", note: "ignored_comment" },
+    },
+  },
+  {
     id: "F6", name: "decision stop + comment → abandoned with the comment as reason, workspace kept",
     state: snapshotAt("decision", decision1, { findings }),
     signal: answer(decision1, "stop", "person", "not worth it"),

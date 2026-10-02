@@ -82,6 +82,19 @@ export const happyRows: TransitionRow[] = [
     },
   },
   {
+    id: "H3c", name: "accept + comment → implement with the comment as feedback, verbatim",
+    state: snapshotAt("accept", accept1),
+    signal: answer(accept1, "accept", "person", "keep the greeting under 20 chars\n- no emoji"),
+    expect: {
+      at: "implement",
+      commands: [cmd(awaited("implement-1", "implement", "run",
+        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run"))],
+      state: { lastRun: awaited("implement-1", "implement", "run",
+        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run") },
+      entry: { from: "accept", to: "implement", issued: [implement1.id], by: "person" },
+    },
+  },
+  {
     id: "H4", name: "adjust + comment → define with feedback",
     state: snapshotAt("accept", accept1, { seq: { setup: 1, define: 1, accept: 1 } }),
     signal: answer(accept1, "adjust", "person", "also greet in German"),

@@ -95,8 +95,9 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 
 Payload: `{criteria, findings, feedback?, answer?}`. `feedback` is the Principal's
 comment, verbatim, from any gate answer that sends the Delivery back to Implement
-with one: Land `rework`, Decision `keep_going`, Failure `fix_forward`. No comment,
-no `feedback` key.
+with one: Accept `accept`, Land `rework`, Decision `keep_going`, Failure
+`fix_forward`. No comment, no `feedback` key. Which answers carry a comment, and
+where it goes, is the `comments` map of each `principal.decide` payload (see below).
 
 `ok` body: `{changeset, feedback?}`.
 
@@ -116,6 +117,23 @@ no `feedback` key.
   rejects a bad outcome or an empty `reason` as a backstop. An `applied` with no
   new commit is `failed`. A `declined` may leave HEAD unchanged; then the changeset
   is the current HEAD.
+
+## `principal.decide` and comments
+
+Payload: `{on, options, comments, min, evidence}`. `comments` has one entry per
+option, saying where a comment on that answer goes:
+
+- `{goes: "feedback", to}`: to step `to` (`implement` or `define`) as `payload.feedback`.
+- `{goes: "reason"}`: to the Delivery's `reason`, so it shows in the outcome's
+  tracker comment and notify text.
+- `{goes: "dropped"}`: nowhere. Do not send a `comment` with this answer. If one
+  arrives anyway, the core applies the answer as if there were none and journals
+  the entry with note `ignored_comment`.
+
+The core fills `comments` from `COMMENT_ROUTES` (`src/core/gates.ts`). A Principal
+should show the person, per option, whether a comment is kept. `principal/tty.ts`
+marks each option line (`rework  [+ comment → Implement]`). It drops free text after
+a `dropped` option and says so.
 
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 

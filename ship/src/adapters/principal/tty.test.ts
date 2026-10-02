@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import Ajv from "ajv";
 import { join } from "node:path";
-import type { Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
+import type { CommentRoute, Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
 import type { AskPayload } from "../../../src/contracts/ports";
 import { schemaFor } from "../../../src/contracts/ports";
 import { runPty, type Turn } from "../../../test/fixtures/pty";
@@ -30,11 +30,17 @@ const call = async (op: string, id: string, payload: unknown, turns: Turn[] = []
   return { stdout, printed: ran.ptyOutput };
 };
 
+/** Land's comment routes, as the core sends them. */
+const LAND: Record<string, CommentRoute> = {
+  approve: { goes: "dropped" }, rework: { goes: "feedback", to: "implement" }, rescope: { goes: "feedback", to: "define" },
+};
+const land = (options: string[]): Decide => ({ on: "land", options, comments: LAND, min: "person", evidence });
+
 const ok = (answer: string, comment?: string) => ({ status: "ok", body: { answer, by: "person", ...(comment === undefined ? {} : { comment }) } });
 
 describe("principal/tty", () => {
   test("decide: exact option name matches, prints the gate and evidence, returns ok synchronously", async () => {
-    const payload: Decide = { on: "land", options: ["approve", "rework", "rescope"], min: "person", evidence };
+    const payload = land(["approve", "rework", "rescope"]);
     const { stdout, printed } = await call("decide", "k-1/land-1", payload, [{ wait: "Answer with one of:", send: "rescope\n" }]);
     expect(stdout).toEqual(ok("rescope"));
     for (const text of ["land", "approve", "rework", "rescope", "Greet by name", "https://tracker.example/k", "greets Ada",
@@ -44,13 +50,13 @@ describe("principal/tty", () => {
   });
 
   test("decide: an alias picks the option of matching polarity", async () => {
-    const payload: Decide = { on: "land", options: ["approve", "rework"], min: "person", evidence };
+    const payload = land(["approve", "rework"]);
     const { stdout } = await call("decide", "k-1/land-1", payload, [{ wait: "Answer with one of:", send: "lgtm\n" }]);
     expect(stdout).toEqual(ok("approve"));
   });
 
   test("decide: an unclear reply re-prompts instead of failing", async () => {
-    const payload: Decide = { on: "land", options: ["approve", "rework"], min: "person", evidence };
+    const payload = land(["approve", "rework"]);
     const { stdout, printed } = await call("decide", "k-1/land-1", payload, [
       { wait: "Answer with one of:", send: "maybe later\n" },
       { wait: "unclear reply", send: "approve\n" },
@@ -59,12 +65,35 @@ describe("principal/tty", () => {
     expect(printed).toContain("unclear reply");
   });
 
-  test("decide: trailing text after the option becomes a comment", async () => {
-    const payload: Decide = { on: "land", options: ["approve", "rework"], min: "person", evidence };
-    const { stdout } = await call("decide", "k-1/land-1", payload, [
+  test("decide: each option line says whether it takes a comment; no generic comment hint", async () => {
+    const { printed } = await call("decide", "k-1/land-1", land(["approve", "rework", "rescope"]), [
+      { wait: "Answer with one of:", send: "approve\n" },
+    ]);
+    expect(printed).toContain("rework   [+ comment → Implement]");
+    expect(printed).toContain("rescope  [+ comment → Define]");
+    expect(printed).toMatch(/^ {2}approve\r?$/m);
+    expect(printed).not.toContain("optional: add free text");
+  });
+
+  test("decide: a gate whose options all drop comments shows no comment marker", async () => {
+    const payload: Decide = { on: "land", options: ["approve"], comments: { approve: { goes: "dropped" } }, min: "person", evidence };
+    const { printed } = await call("decide", "k-1/land-1", payload, [{ wait: "Answer with one of:", send: "approve\n" }]);
+    expect(printed).not.toContain("comment →");
+  });
+
+  test("decide: trailing text after an option that carries a comment becomes the comment", async () => {
+    const { stdout } = await call("decide", "k-1/land-1", land(["approve", "rework"]), [
+      { wait: "Answer with one of:", send: "rework, handle an empty name\n" },
+    ]);
+    expect(stdout).toEqual(ok("rework", "handle an empty name"));
+  });
+
+  test("decide: trailing text after an option that drops comments is not sent, and the person is told", async () => {
+    const { stdout, printed } = await call("decide", "k-1/land-1", land(["approve", "rework"]), [
       { wait: "Answer with one of:", send: "approve, ship it once CI is green\n" },
     ]);
-    expect(stdout).toEqual(ok("approve", "ship it once CI is green"));
+    expect(stdout).toEqual(ok("approve"));
+    expect(printed).toContain("comment ignored");
   });
 
   test("ask: a comment is refused, not silently attached, since AskBody carries none", async () => {

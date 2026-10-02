@@ -188,6 +188,17 @@ describe("lifecycle on fakes", () => {
     expect(body).toEqual({ changeset: "c1", feedback: declined });
   }, TIMEOUT);
 
+  // harlo-51: the Define gate's accept takes the same directive path to Implement.
+  test.concurrent("Accept accept + comment → Implement with feedback; the outcome is journaled", async () => {
+    const p = project({ ...HAPPY, "implement.run": [ok({ changeset: "c1", feedback: applied })] });
+    await start(p, "accept-1");
+    await signal(p, "accept-1", answer("accept", directive), "land-1");
+    expect(payloadOf(p.log(), "implement-1")).toEqual({ criteria, findings: [], feedback: directive });
+    const { sent, body } = await journaledRound(p, "implement-1");
+    expect(sent?.feedback).toBe(directive);
+    expect(body).toEqual({ changeset: "c1", feedback: applied });
+  }, TIMEOUT);
+
   test.concurrent("a step's question goes to the Principal; the answer re-runs the step with it", async () => {
     const p = project({ ...HAPPY, "define.run": [question("Greet in which language?", "clarify"), defined] });
     await start(p, "ask-1");

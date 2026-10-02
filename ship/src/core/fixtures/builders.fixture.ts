@@ -1,6 +1,9 @@
 // Shared row fixtures for the core tables (plan §4). Every table under fixtures/ is built from these, so
 // invariants.test.ts can sweep all rows with the same default Policy.
-import type { CommandId, DeliveryId, EvidenceItem, GateEvidence, Port, PrincipalKind, WorkItem } from "../../contracts/common";
+import type {
+  CommandId, DecidePoint, DeliveryId, EvidenceItem, GateEvidence, Port, PrincipalKind, WorkItem,
+} from "../../contracts/common";
+import { COMMENT_ROUTES } from "../gates";
 import { parseCommandId } from "../ids";
 import type { Awaiting, Command, Entry, Node, Policy, Position, Signal, Snapshot } from "../types";
 
@@ -98,10 +101,13 @@ export const gateEvidence = (over: Partial<GateEvidence> = {}): GateEvidence => 
   workItem, criteria, runbook, changeset, findings: [], evidence: [], ...over,
 });
 
+/** An awaited `principal.decide`; its `comments` are the core's one comment-route table (harlo-51). */
 export const decide = (
-  gate: Node | "blocked", n: number, options: string[], min: PrincipalKind, evidence: GateEvidence = gateEvidence(),
-): Awaiting =>
-  awaited(`${gate}-${n}`, "principal", "decide", { on: gate, options, min, evidence }, gate, "decide", options);
+  gate: DecidePoint, n: number, options: string[], min: PrincipalKind, evidence: GateEvidence = gateEvidence(),
+): Awaiting => {
+  const comments = { ...COMMENT_ROUTES[gate] };
+  return awaited(`${gate}-${n}`, "principal", "decide", { on: gate, options, comments, min, evidence }, gate, "decide", options);
+};
 
 /** An awaited `principal.ask` raised by `node`'s question (payload options only when the ask has them). */
 export const ask = (

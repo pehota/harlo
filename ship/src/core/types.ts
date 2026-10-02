@@ -59,7 +59,7 @@ export type Signal =
 
 export type Note =
   | "ignored_stale" | "ignored_terminal" | "invalid_answer" | "rejected_start"
-  | "workitem_changed_late" | "workitem_unchanged" | "ignored_not_blocked";
+  | "workitem_changed_late" | "workitem_unchanged" | "ignored_not_blocked" | "ignored_comment";
 
 // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
 export type RunnerSignal =

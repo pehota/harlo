@@ -102,10 +102,21 @@ describe("check ok union", () => {
 });
 
 describe("Decide", () => {
-  const decide = { on: "land", options: ["approve", "rework", "rescope"], min: "person", evidence: gateEvidence };
+  const comments = {
+    approve: { goes: "dropped" }, rework: { goes: "feedback", to: "implement" }, rescope: { goes: "feedback", to: "define" },
+  };
+  const decide = { on: "land", options: ["approve", "rework", "rescope"], comments, min: "person", evidence: gateEvidence };
   test.each([
     ["valid", decide, true],
-    ["blocked is a decide point", { ...decide, on: "blocked", options: ["retry", "stop"] }, true],
+    ["blocked is a decide point", {
+      ...decide, on: "blocked", options: ["retry", "stop"], comments: { retry: { goes: "dropped" }, stop: { goes: "reason" } },
+    }, true],
+    ["missing comments", { ...decide, comments: undefined }, false],
+    ["unknown comment route", { ...decide, comments: { ...comments, approve: { goes: "lost" } } }, false],
+    ["feedback route without its step", { ...decide, comments: { ...comments, rework: { goes: "feedback" } } }, false],
+    ["feedback to a step that takes none", { ...decide, comments: { ...comments, rework: { goes: "feedback", to: "check" } } }, false],
+    ["reason route naming a step", { ...decide, comments: { ...comments, approve: { goes: "reason", to: "define" } } }, false],
+    ["route with an unknown key", { ...decide, comments: { ...comments, approve: { goes: "dropped", why: "x" } } }, false],
     ["evidence with note", { ...decide, evidence: { ...gateEvidence, note: "workItem changed" } }, true],
     ["unknown point", { ...decide, on: "merge" }, false],
     ["unknown principal kind", { ...decide, min: "robot" }, false],
