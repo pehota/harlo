@@ -852,7 +852,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
 ### M3 — Work setup
 
 - [ ] **M3.1 Jira tracker: read and next.**
-  - Test: with a mocked REST API, `read` maps summary and description to title and body (ADF to plain text), and `next` runs a configured JQL query.
+  - Test: with a mocked REST API, `read` maps summary and description to title and body (ADF to plain text), and `next` runs a configured JQL query (which must include `ORDER BY`) via `GET /rest/api/3/search/jql` with `maxResults=1`.
   - Impl: `src/adapters/tracker/jira.ts`.
   - Done when green.
 - [ ] **M3.2 Jira tracker: update and comment.**
