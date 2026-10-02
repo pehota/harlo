@@ -134,7 +134,7 @@ flowchart TB
       VERIFY["<b>/dod:verify</b><br/>run checks · orchestrate judgements"]
     end
     REVIEWER["<b>dod-reviewer</b><br/>fresh-context subagent<br/>runs git diff itself"]
-    subgraph STATE[".dod/&lt;branch&gt;/ — git-ignored"]
+    subgraph STATE["&lt;git top-level&gt;/.dod/&lt;branch&gt;/ — git-ignored"]
       CONTRACT[("contract.json")]
       RESULT[("result.json")]
       SSTATE[("state.json")]
@@ -260,7 +260,8 @@ above), not overlooked.
 > (baseline-not-ancestor / expiry) is shipped: it only fires when history is
 > rewritten under the baseline (rebase, force-push, `commit --amend`) —
 > **not** for a killed/crashed session with untouched history
-> (`docs/design-v2.plan.md`), which is a different, still-unaddressed gap.
+> (`docs/design-v2.plan.md`): that contract stays open (no TTL / liveness
+> rule), but its latch no longer gates other sessions (L5 is session-scoped).
 > L4 also distinguishes a *confirmed* non-ancestor from a failed git call:
 > `git merge-base --is-ancestor` exits 1 only when it definitively answers
 > "no" — any other non-zero exit (typically 128: unresolvable SHA, a shallow
@@ -284,11 +285,11 @@ flowchart TB
   L3 -->|yes| L4{"baseline SHA<br/>ancestor of HEAD?"}
   L4 -->|confirmed no, exit 1| R4["status := expired · teardown worktree<br/>EXIT 0 — stale"]
   L4 -->|git call failed, exit != 0/1| R4E["append errors.log<br/>EXIT 1 (noisy release)<br/>contract untouched"]
-  L4 -->|yes| L5{"latched OR<br/>edits this prompt_id?"}
+  L4 -->|yes| L5{"latched by this session OR<br/>edits this prompt_id?"}
   L5 -->|neither| R5["EXIT 0 — question turn"]
   L5 -->|yes| L6{"escalation == armed?<br/>(Phase 2)"}
   L6 -->|yes| R6["status := escalated<br/>EXIT 0 — step 2 of escalation"]
-  L6 -->|no| H["diff_hash := hash of (path,blob)<br/>pairs vs baseline, union untracked,<br/>excl. .dod/"]
+  L6 -->|no| H["diff_hash := hash of (path,blob)<br/>pairs vs baseline, union untracked,<br/>excl. any */.dod/*"]
   H --> L7{"result exists AND<br/>result.diff_hash == diff_hash?<br/>(L1's stop_hook_active brake<br/>applies here via gate__block)"}
   L7 -->|no| B7["stdout JSON block + EXIT 0<br/>block-no-result.txt"]
   L7 -->|yes| L8{"blocking failures?"}
@@ -371,7 +372,7 @@ requirements.
   ├─ diff hasher ───────── the same lib/gitref.sh function gate.sh uses
   ├─ check runner ──────── cache lookup (diff_hash, cmd) → run → capture evidence
   ├─ baseline resolver ─── ONLY on a failed check:
-  │                        create .dod/<branch>/baseline worktree (once per task)
+  │                        create <root>/.dod/<branch>/baseline worktree (once per task)
   │                        re-run that one command there → baseline_verdict
   ├─ judgement orchestr. ─ spawn dod-reviewer with fixed prompt + schema, incl.
   │                        `brief`, `changed_standards` (dod_changed_standards)
@@ -420,7 +421,8 @@ dod/
     └── dod-context-collector.md   (ADR 0004)
 ```
 
-`.dod/<task_key>/brief.md` (ADR 0004) is the context brief `dod-context-collector`
+`.dod/<task_key>/brief.md` (ADR 0004; every `.dod/` path is anchored at the
+git top-level, from hooks and skills alike) is the context brief `dod-context-collector`
 writes — task-specific harness state next to `contract.json`/`result.json`/
 `state.json`, not tracked in the repo.
 
@@ -448,7 +450,8 @@ stderr one line + exit 1                           → release (harness error, n
 is shipped but not as a standalone check — see the A2 note below. Branch 4
 covers only a rewritten-history baseline (rebase, force-push, amend) — a
 killed/crashed session with untouched history (`docs/design-v2.plan.md`)
-is a different, still-unaddressed gap; `status` does not expire for that case.
+stays `open` (no TTL / liveness rule; `status` does not expire), but its latch
+no longer gates other sessions.
 
 | # | Branch | exit | stdout/stderr → agent | state writes | shipped? |
 |---|---|---|---|---|---|
@@ -615,7 +618,9 @@ ids as `RESULT_ADVISORY_IDS`. `round` is the prior result's `round + 1` for the 
 
 ### 6.5 `state.json`
 
-Owned by `lib/state.sh`. All fields below are shipped: `latched`, `round`,
+Owned by `lib/state.sh`. All fields below are shipped: `latched`, `latched_session_id`
+(session that armed the latch; L5 ignores a latch from a different session,
+either id empty -> latch still claims), `round`,
 `escalation`, `last_failed_diff_hash`, `creep_diff_hash` (ADR 0004, below),
 `edits` (`track.sh`), `state`
 (`/dod:verify`'s in-progress marker), `cache`
@@ -636,6 +641,7 @@ give for free.
 ```jsonc
 {
   "latched": false,
+  "latched_session_id": null,
   "round": 0,
   "escalation": "none",                    // none | armed
   "last_failed_diff_hash": null,
@@ -974,7 +980,7 @@ blocking-only review, then closes. The decision is asked once per contract.
 | D5 | Bounded hard block, then escalation | unbounded loop; advisory-only |
 | D6 | Changeset-scoped verification | full-repo battery every time |
 | D7 | Baseline = HEAD SHA at open, minus pre-existing dirty files; edited-file log as cross-check | SHA only; edited-file log only |
-| D8 | Claim = latch armed **or** edits-this-prompt without a latch | latch only; gate every stop |
+| D8 | Claim = latch armed **by this session** or edits-this-prompt without a latch | latch only; gate every stop |
 | D9 | Missing-DoD leak → non-blocking nudge | silence; auto-open |
 | D10 | Requirements are typed `check` or `judgement`; untyped is malformed | prose requirements; checks only |
 | D11 | Gate reads a result keyed to the diff hash; never re-runs the battery itself | gate re-runs all checks |

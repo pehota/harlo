@@ -50,3 +50,5 @@ create.
   scope creep may be reverted and reviewing it would be wasted work. Impact
   comes second so it is never the lens cut on a large diff. All other lenses
   run in full and report together, since one fix round is cheaper than several.
+
+*Note (2026-10-02): `.dod/` is anchored at the git top-level, so the brief lives at `<repo root>/.dod/$TASK_KEY/brief.md` whichever subdir the session runs in.*
