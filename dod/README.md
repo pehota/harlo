@@ -40,6 +40,15 @@ Baseline requirements every contract folds in: [`base-dod.md`](base-dod.md).
   Until decided, `prompt.sh` reminds the agent of the pending advisory ids
   on every later prompt.
 
+## Where state lives
+
+All of dod's bookkeeping (contract, result, state, brief, baseline
+worktree, `errors.log`) lives in ONE `.dod/` at the **git top-level**, keyed
+by branch: `<repo root>/.dod/<task_key>/`. Hooks resolve it from
+`CLAUDE_PROJECT_DIR`, skills from the Bash tool's `$PWD` — both normalised
+to the top-level, so a session launched in, or `cd`'d into, a subdir still
+reads and writes the same `.dod/`.
+
 ## Manual escape hatch
 
 The Stop gate blocks once per turn-end cycle while a task is claimed
@@ -51,7 +60,7 @@ If you need to abandon a claimed task without clearing the session (e.g. to
 keep unrelated conversation context), delete the latch by hand:
 
 ```bash
-rm -f .dod/<task_key>/state.json
+rm -f "$(git rev-parse --show-toplevel)/.dod/<task_key>/state.json"
 ```
 
 `<task_key>` is the current git branch name (sanitised — see

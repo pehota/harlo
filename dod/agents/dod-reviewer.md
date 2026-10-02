@@ -45,7 +45,9 @@ facts support.
 
 ## Procedure
 
-1. **Get the file list yourself.** The full changeset is
+1. **Get the file list yourself**, from the repo's top-level (`cd "$(git
+   rev-parse --show-toplevel)"` first — from a subdir `ls-files` lists only
+   that subdir, and paths stop being top-level-relative). The full changeset is
    `git diff --name-only <baseline_sha> HEAD` — plus untracked files
    (`git ls-files --others --exclude-standard`), since baseline-only diffing
    misses new files still unstaged. `.dod/` is harness state (the brief

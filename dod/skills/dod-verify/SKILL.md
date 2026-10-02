@@ -40,24 +40,28 @@ independent review.
    . "${CLAUDE_PLUGIN_ROOT}/lib/gitref.sh"
    . "${CLAUDE_PLUGIN_ROOT}/lib/state.sh"
 
-   TASK_KEY=$(dod_task_key "$PWD")
-   contract_read ".dod/$TASK_KEY/contract.json"
-   state_read ".dod/$TASK_KEY/state.json"
+   REPO=$(dod_repo_root "$PWD")
+   TASK_KEY=$(dod_task_key "$REPO")
+   contract_read "$REPO/.dod/$TASK_KEY/contract.json"
+   state_read "$REPO/.dod/$TASK_KEY/state.json"
    ```
+   `REPO` is the git top-level, never `$PWD` itself — the Bash tool's cwd
+   may be a subdir, and the gate keys `.dod/` on the top-level too. Every
+   `.dod/` path and repo argument below is `$REPO`.
    If no contract is open, tell the user to run `/dod:define` first — do
    not mark verification in progress for a contract that doesn't exist.
 
 2. **Mark verification in progress**, once step 1 confirmed a contract is
    actually open:
    ```bash
-   state_set_state ".dod/$TASK_KEY/state.json" "verifying"
+   state_set_state "$REPO/.dod/$TASK_KEY/state.json" "verifying"
    ```
    This, before the check battery or the reviewer runs, is what lets the
    gate tell you "wait, it's already running" instead of "run /dod:verify"
    if your turn ends (e.g. the background reviewer is still in flight)
    before the result gets written below.
 
-3. **Hash the diff.** `dod_diff_hash "$PWD" "$CONTRACT_BASELINE_SHA"` — the
+3. **Hash the diff.** `dod_diff_hash "$REPO" "$CONTRACT_BASELINE_SHA"` — the
    same function `gate.sh` uses, against the same baseline (never `HEAD`: a
    commit moves HEAD and would silently invalidate every prior result even
    when the working tree is unchanged). This value becomes the result's
@@ -97,14 +101,14 @@ independent review.
    requirement (there is no exit code to cache). Otherwise, look up the
    cache:
    ```bash
-   CACHED=$(state_cache_get ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD")
+   CACHED=$(state_cache_get "$REPO/.dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD")
    ```
    On a hit, reuse `$CACHED` as `verdict` and skip re-running the command —
    the key is `(diff_hash, cmd)`, so any change to the diff already changes
    `DIFF_HASH` and misses the cache automatically; nothing to invalidate by
    hand. On a miss, run the command, capture its exit code, set `verdict` to
    `"pass"` if `exit == expect_exit` else `"fail"`, then
-   `state_cache_set ".dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD" "$verdict"`.
+   `state_cache_set "$REPO/.dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD" "$verdict"`.
    Keep the command's output on a miss — needed for `/dod:verify`'s own
    summary.
 
@@ -112,7 +116,7 @@ independent review.
    resolve whether the failure is pre-existing or something this changeset
    introduced:
    ```bash
-   WT=$(dod_baseline_worktree "$PWD" "$TASK_KEY" "$CONTRACT_BASELINE_SHA")
+   WT=$(dod_baseline_worktree "$REPO" "$TASK_KEY" "$CONTRACT_BASELINE_SHA")
    ```
    If `WT` resolves, re-run **that one failing command** inside it (`cd "$WT"
    && <cmd>`, or the tool-appropriate equivalent — never the main working
@@ -124,7 +128,7 @@ independent review.
    (`WT` empty), omit `baseline_verdict` entirely rather than guessing — do
    not report "pre-existing" without having actually run the command at
    baseline. The worktree is a `git worktree` sharing this repo's `.git` and
-   its own separate checkout at `.dod/$TASK_KEY/baseline-worktree` — created
+   its own separate checkout at `$REPO/.dod/$TASK_KEY/baseline-worktree` — created
    once per task and reused across every failing check in every round;
    `gate.sh` tears it down when the task passes (branch 10).
 
@@ -136,9 +140,10 @@ independent review.
 
    **Every round, first compute the reviewer's context inputs:**
    ```bash
-   CHANGED_STANDARDS=$(dod_changed_standards "$PWD" "$CONTRACT_BASELINE_SHA")
+   CHANGED_STANDARDS=$(dod_changed_standards "$REPO" "$CONTRACT_BASELINE_SHA")
    ```
-   - `brief` — from `$CONTRACT_BRIEF`: its `path` if `applicable:true`, else
+   - `brief` — from `$CONTRACT_BRIEF`: its `path` if `applicable:true` (a
+     relative one, from an older contract, resolved against `$REPO`), else
      `n/a: <its reason>`.
    - `changed_standards` — `$CHANGED_STANDARDS` (a JSON array, recomputed
      every round, never carried over).
@@ -204,7 +209,7 @@ independent review.
    `result_write` — do not construct or edit `result.json` any other way (N6):
 
    ```bash
-   RFILE=".dod/$TASK_KEY/result.json"
+   RFILE="$REPO/.dod/$TASK_KEY/result.json"
    ROUND=$(result_next_round "$RFILE" "$CONTRACT_BASELINE_SHA")
    REQUIREMENTS=$(jq -nc --arg depth "$REVIEW_DEPTH" \
        --argjson findings "$REVIEW_FINDINGS" \
@@ -219,7 +224,7 @@ independent review.
      --baseline-sha "$CONTRACT_BASELINE_SHA" \
      --round "$ROUND" \
      --requirements "$REQUIREMENTS"
-   state_set_state ".dod/$TASK_KEY/state.json" "idle"
+   state_set_state "$REPO/.dod/$TASK_KEY/state.json" "idle"
    ```
    `$REVIEW_FINDINGS` is the reviewer's `findings` array from step 5,
    unchanged — every finding keeps its `lens` and, for scope findings, its
@@ -237,7 +242,7 @@ independent review.
 7. **Arm the claim latch** — the gate only engages once the agent has
    declared the task done:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"
    ```
 
 8. **Print the pass table.** One row per requirement — **every** requirement,
@@ -316,11 +321,11 @@ advisory id of that result, through `lib/state.sh` only (N6). It rejects a
 reply that leaves an advisory undecided — ask again for the missing ones:
 
 ```bash
-result_read ".dod/$TASK_KEY/result.json"
-state_record_decisions ".dod/$TASK_KEY/state.json" \
+result_read "$REPO/.dod/$TASK_KEY/result.json"
+state_record_decisions "$REPO/.dod/$TASK_KEY/state.json" \
   '[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]' \
   "$RESULT_DIFF_HASH" "$RESULT_ADVISORY_IDS"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$PWD" "$TASK_KEY"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"
 ```
 
 - **All skip** → stop; the gate closes the contract.

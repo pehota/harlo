@@ -78,3 +78,23 @@ dod__test_make_repo() {
 
   printf '%s' "$dir"
 }
+
+# ---------------------------------------------------------------------------
+# Skill-command fixtures.
+# ---------------------------------------------------------------------------
+# dod__test_skill_line <skill_md> <line> — asserts <line> appears verbatim in
+# the skill's markdown (so a test that evals it runs what the skill actually
+# tells the agent to run, and fails the moment the skill drifts), and sets
+# SKILL_LINE to it for the caller to eval (empty on a miss). Call it
+# directly, never in $(...) — ok/bad must count in the caller's shell.
+dod__test_skill_line() {
+  local skill="$1" line="$2" name
+  name=$(basename "$(dirname "$skill")")
+  SKILL_LINE=""
+  if grep -qF -- "$line" "$skill" 2>/dev/null; then
+    ok "skill $name runs: $line"
+    SKILL_LINE="$line"
+  else
+    bad "skill $name runs: $line" "not in $skill"
+  fi
+}

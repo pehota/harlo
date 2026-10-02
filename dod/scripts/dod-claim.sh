@@ -3,6 +3,8 @@
 # dod/scripts/dod-claim.sh — arms the claim latch for a task.
 #
 # Usage: dod-claim.sh <repo_dir> <task_key>
+# repo_dir is the git top-level (callers pass dod_repo_root "$PWD"), the
+# same root the gate keys .dod/ on.
 # Sole writer of state.latched=true outside the gate itself. Skills call this
 # when the agent declares the task done.
 

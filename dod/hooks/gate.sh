@@ -44,6 +44,12 @@ for lib in io.sh gitref.sh contract.sh result.sh state.sh; do
   fi
 done
 
+# Key .dod/ on the git top-level, whichever subdir the session was launched
+# from — the skills resolve the same root (dod_repo_root "$PWD"), so both
+# sides read and write ONE <root>/.dod. Guarded: if gitref.sh failed to load,
+# PROJECT_DIR stays as given and the fail-open path below handles it.
+command -v dod_repo_root >/dev/null 2>&1 && PROJECT_DIR=$(dod_repo_root "$PROJECT_DIR")
+
 ERRLOG="$PROJECT_DIR/.dod/errors.log"
 
 # --- branch 0: harness error (missing lib / no jq / no git) -----------------

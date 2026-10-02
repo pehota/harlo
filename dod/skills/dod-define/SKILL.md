@@ -41,7 +41,7 @@ safety net for when you fail, not the plan.
    invocation for this environment), in the background, with:
    ```
    task       : <the agreed task text>
-   brief_path : .dod/<TASK_KEY>/brief.md     (TASK_KEY=$(dod_task_key "$PWD"))
+   brief_path : <REPO>/.dod/<TASK_KEY>/brief.md   (absolute; REPO and TASK_KEY as in step 8)
    ```
    It writes the context brief — the project standards and domain invariants
    relevant to this task — and returns one line of JSON:
@@ -189,8 +189,9 @@ safety net for when you fail, not the plan.
    . "${CLAUDE_PLUGIN_ROOT}/lib/contract.sh"
    . "${CLAUDE_PLUGIN_ROOT}/lib/gitref.sh"
 
-   TASK_KEY=$(dod_task_key "$PWD")
-   contract_write ".dod/$TASK_KEY/contract.json" \
+   REPO=$(dod_repo_root "$PWD")
+   TASK_KEY=$(dod_task_key "$REPO")
+   contract_write "$REPO/.dod/$TASK_KEY/contract.json" \
      --task-key "$TASK_KEY" \
      --task "<task text>" \
      --task-source "argument|conversation" \
@@ -207,6 +208,9 @@ safety net for when you fail, not the plan.
      ]' \
      --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
    ```
+   `REPO` is the git top-level, never `$PWD` itself — the Bash tool's cwd
+   may be a subdir, and the hooks key `.dod/` on the top-level too; every
+   `.dod/` path is anchored at `$REPO`.
    If e2e is inapplicable (step 4), its entry takes this shape instead —
    `cmd` and `expect_exit` **both `null`**, `applicable:false`, and a
    non-empty `reason`; never mix an `applicable:true`/`false` field with the
@@ -235,8 +239,8 @@ safety net for when you fail, not the plan.
 
    `--works-when` and a non-empty `proves` on every requirement (an N/A one
    included) are required — `contract_write` rejects the contract otherwise.
-   So is `--brief`: `{"applicable":true,"path":".dod/<key>/brief.md"}` (the
-   file must exist and be non-empty) or `{"applicable":false,"reason":"..."}`.
+   So is `--brief`: `{"applicable":true,"path":"<REPO>/.dod/<key>/brief.md"}`
+   (the file must exist and be non-empty) or `{"applicable":false,"reason":"..."}`.
 
    Omit `--waivers` (or pass `'[]'`) when step 5 found none — do not
    fabricate an empty-reason waiver just to fill the flag.

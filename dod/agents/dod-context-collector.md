@@ -19,7 +19,7 @@ edit to an existing file, no commit.
 
 ```
 task       : <the agreed task text>
-brief_path : <path to write, e.g. .dod/<key>/brief.md>
+brief_path : <absolute path to write, e.g. <repo root>/.dod/<key>/brief.md>
 ```
 
 If either input is missing, write nothing and return

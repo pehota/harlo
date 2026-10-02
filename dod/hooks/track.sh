@@ -35,7 +35,7 @@
 # Fires only on tools that edit files (Edit, Write, NotebookEdit) — a Read or
 # Bash call is not "an edit" for D8 purposes and must not arm anything.
 #
-# A write under .dod/ (absolute under $PROJECT_DIR, or relative) is dod's own
+# A write under .dod/ (absolute, or relative) is dod's own
 # bookkeeping (contract.json, result.json, state.json, ...), never task
 # work — excluded from both responsibilities above (no edit logged, no
 # nudge), same rationale as gitref.sh's dod_diff_hash excluding .dod/ from
@@ -56,6 +56,12 @@ for lib in io.sh gitref.sh state.sh; do
     DOD_ERR="missing lib: $lib"
   fi
 done
+
+# Key .dod/ on the git top-level, whichever subdir the session was launched
+# from — the skills resolve the same root (dod_repo_root "$PWD"), so both
+# sides read and write ONE <root>/.dod. Guarded: if gitref.sh failed to load,
+# PROJECT_DIR stays as given and the fail-open path below handles it.
+command -v dod_repo_root >/dev/null 2>&1 && PROJECT_DIR=$(dod_repo_root "$PROJECT_DIR")
 
 ERRLOG="$PROJECT_DIR/.dod/errors.log"
 
@@ -84,12 +90,15 @@ case "$TOOL_NAME" in
 esac
 [ -n "$FILE_PATH" ] || exit 0
 
-# A write under .dod/ (absolute, under $PROJECT_DIR, or relative) is dod's
-# OWN bookkeeping, never task work — it must not be logged as an edit (D8
-# would then treat writing a result.json as "the agent claimed this task")
-# and must not trigger the no-contract nudge either.
+# A write under .dod/ (absolute, or relative) is dod's OWN bookkeeping,
+# never task work — it must not be logged as an edit (D8 would then treat
+# writing a result.json as "the agent claimed this task") and must not
+# trigger the no-contract nudge either. Matched as any */.dod/* rather than
+# "$PROJECT_DIR"/.dod/*: PROJECT_DIR is the git top-level, which git
+# resolves through symlinks, while the tool's file_path may not be — same
+# exclusion as gitref.sh's diff hash.
 case "$FILE_PATH" in
-  "$PROJECT_DIR"/.dod/*|.dod/*) exit 0 ;;
+  */.dod/*|.dod/*) exit 0 ;;
 esac
 
 TASK_KEY=$(dod_task_key "$PROJECT_DIR")
