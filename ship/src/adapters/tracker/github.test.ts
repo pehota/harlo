@@ -350,11 +350,31 @@ const projectCalls = (fake: Fake): string[][] => fake.calls().map(({ argv }) => 
 describe("tracker/github adapter, Project mode", () => {
   const inProject = { flags: PROJECT_FLAGS };
 
-  test("next: lowest issue number among ready items, whatever order item-list returns", async () => {
+  test("next: the first ready item in board order, not the lowest number", async () => {
     const fake = fakeGh(projectState([issueItem(9, "ready"), issueItem(3, "ready"), issueItem(7, "ready"), issueItem(1, "Done")]));
-    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-3" }));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-9" }));
     expect(projectCalls(fake)[0]).toEqual(expect.arrayContaining(["item-list", "4", "--owner", "acme", "--format", "json"]));
     expect(fake.calls().some(({ argv }) => argv[0] === "issue")).toBe(false);
+  });
+
+  test("next: items served out of number order, the first one wins", async () => {
+    const fake = fakeGh(projectState([issueItem(7, "ready"), issueItem(3, "ready")]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-7" }));
+  });
+
+  test.each([
+    ["not ready", issueItem(2, "Todo")],
+    ["a draft", { id: "PVTI_d", status: "ready", content: { type: "DraftIssue" } }],
+    ["a pull request", issueItem(2, "ready", { type: "PullRequest" })],
+    ["another repo's issue", issueItem(2, "ready", { repository: "acme/other" })],
+  ])("next: a first item that is %s is skipped; the next eligible one in board order wins", async (_name, first) => {
+    const fake = fakeGh(projectState([first as ProjectItem, issueItem(9, "ready"), issueItem(4, "ready")]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-9" }));
+  });
+
+  test("next: regression (#55), a higher-numbered item placed on top wins over a lower-numbered one", async () => {
+    const fake = fakeGh(projectState([issueItem(51, "ready"), issueItem(53, "ready"), issueItem(52, "ready"), issueItem(39, "ready")]));
+    expect(await call(fake, next(), inProject)).toEqual(ok({ key: "harlo-51" }));
   });
 
   test("next: null when no item has the ready value", async () => {
