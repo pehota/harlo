@@ -55,7 +55,7 @@ after its progress lines.
 | Exit | Meaning |
 |---|---|
 | 0 | drained: `ship next` returned `delivery: null` |
-| 1 | a `ship next` / `ship status` call failed (stderr has its output), the re-pick guard's own `ship stop` failed, or bad usage |
+| 1 | a `ship next` / `ship status` call failed (stderr has its output, and names the Delivery when `ship` printed one, e.g. on exit 5), the re-pick guard's own `ship stop` failed, or bad usage |
 | 2 | the lockfile already exists: another queue holds it |
 | 3 | re-pick guard fired (see below) |
 

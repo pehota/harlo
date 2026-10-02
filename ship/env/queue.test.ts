@@ -29,8 +29,10 @@ const LEAVES_READY = { tracker: { steps: { define: "in_progress" }, outcomes: {
   rolled_back: { status: "reopened", comment: true }, abandoned: { comment: true },
 } } };
 
-const project = (items: Record<string, string>, policy: Record<string, unknown> = LEAVES_READY): Project => {
-  const p = lifecycle(EVERY_STEP_OK, policy, { items });
+const project = (
+  items: Record<string, string>, policy: Record<string, unknown> = LEAVES_READY, replies: Record<string, unknown> = {},
+): Project => {
+  const p = lifecycle({ ...EVERY_STEP_OK, ...replies }, policy, { items });
   projects.push(p);
   return p;
 };
@@ -164,6 +166,16 @@ describe("queue", () => {
     expect(await atOf(p, "k-2")).not.toBe("abandoned");
     expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
   }, 60_000);
+
+  test("a failing `ship next` that started a Delivery: exit 1, stderr names it", async () => {
+    // Setup's adapter crashes: `ship next` exits 5, its output line still naming the Delivery it created.
+    const p = project({ a: "ready" }, LEAVES_READY, { "workspace.setup": { exit: 1, stderr: "boom" } });
+    const ran = await queue(p);
+
+    expect(ran.exit).toBe(1);
+    expect(ran.stderr).toContain("ship next: exit 5 (Delivery a-1)");
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+  }, 30_000);
 
   test.each([
     { signal: "SIGTERM", exit: 143 }, { signal: "SIGINT", exit: 130 }, { signal: "SIGHUP", exit: 129 },

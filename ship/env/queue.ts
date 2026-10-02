@@ -57,10 +57,24 @@ const parseArgs = (args: string[]): Omit<Options, "ship"> & { ship: string | und
 /** A failed `ship` call: the queue stops with exit 1. */
 class ShipCallError extends Error {}
 
+/** The `delivery` a `ship` output line names, if it is JSON and names one. */
+const deliveryIn = (stdout: string): string | undefined => {
+  try {
+    const { delivery } = JSON.parse(stdout) as { delivery?: unknown };
+    return typeof delivery === "string" ? delivery : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /** One `ship <args…>` call whose JSON stdout line is returned; a nonzero exit is a ShipCallError. */
 const shipJson = async <T>(ship: string, args: string[]): Promise<T> => {
   const ran = await runShip(ship, args);
-  if (ran.exitCode !== 0) throw new ShipCallError(`ship ${args.join(" ")}: exit ${ran.exitCode}\n${ran.stderr}`);
+  if (ran.exitCode !== 0) {
+    const delivery = deliveryIn(ran.stdout); // e.g. exit 5: the Delivery was created, then an adapter crashed
+    const named = delivery === undefined ? "" : ` (Delivery ${delivery})`;
+    throw new ShipCallError(`ship ${args.join(" ")}: exit ${ran.exitCode}${named}\n${ran.stderr}`);
+  }
   return JSON.parse(ran.stdout) as T;
 };
 
