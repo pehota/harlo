@@ -12,11 +12,21 @@ export type Port =
 
 export type WorkItem = { key: string; title: string; body: string; url?: string };
 export type Finding = { text: string; ref?: string };
-export type EvidenceItem = { label: string; text?: string; url?: string }; // P9: opaque, never read
+/** One agent call's cost (harlo-56), each figure non-negative and present only when the agent reported it. */
+export type Usage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  turns?: number;
+};
+export type EvidenceItem = { label: string; text?: string; url?: string; usage?: Usage }; // P9: opaque, never read
 
 export type Result<Body = unknown> =
   | { status: "ok"; body: Body; evidence?: EvidenceItem[] }
-  | { status: "failed"; info: string } // could not run, changed nothing
+  | { status: "failed"; info: string; evidence?: EvidenceItem[] } // could not run, changed nothing
   | { status: "question"; prompt: string; about: string; options?: string[]; evidence?: EvidenceItem[] };
 export type Stdout<Body = unknown> = Result<Body> | { status: "accepted" };
 
@@ -92,12 +102,25 @@ export const findingSchema: JSONSchemaType<Finding> = {
 };
 export const findingsSchema: JSONSchemaType<Finding[]> = { type: "array", items: findingSchema };
 
+const figure = { type: "number", minimum: 0, nullable: true } as const;
+
+export const usageSchema: JSONSchemaType<Usage> = {
+  type: "object",
+  properties: {
+    inputTokens: figure, outputTokens: figure, cacheReadTokens: figure, cacheCreationTokens: figure,
+    costUsd: figure, durationMs: figure, turns: figure,
+  },
+  required: [],
+  additionalProperties: false,
+};
+
 export const evidenceItemSchema: JSONSchemaType<EvidenceItem> = {
   type: "object",
   properties: {
     label: { type: "string" },
     text: { type: "string", nullable: true },
     url: { type: "string", nullable: true },
+    usage: { ...usageSchema, nullable: true },
   },
   required: ["label"],
   additionalProperties: false,
@@ -188,7 +211,9 @@ export const okSchema = <Body>(body: JSONSchemaType<Body>): JSONSchemaType<Ok<Bo
 
 export const failedSchema: JSONSchemaType<Failed> = {
   type: "object",
-  properties: { status: { type: "string", const: "failed" }, info: { type: "string" } },
+  properties: {
+    status: { type: "string", const: "failed" }, info: { type: "string" }, evidence: { ...evidenceSchema, nullable: true },
+  },
   required: ["status", "info"],
   additionalProperties: false,
 };

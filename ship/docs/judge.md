@@ -132,3 +132,19 @@ For an older delivery (one recorded before the `payload` field or the
 Both are expected for older deliveries — not a bug in judge. Every call in
 `freetext-signal-1`, for example, shows the "no payload recorded" INPUT line,
 because that delivery predates the `payload` field.
+
+## USAGE and the Delivery total
+
+Each step-call also gets a USAGE section: input, output, cache-read and
+cache-write tokens, cost in USD, duration and turns, as the agent adapter
+reported them for that call alone (`src/adapters/agent/claude/index.ts`
+records a resumed session's cost as the difference from the session total).
+It is shown for ok, question and failed results, and for crashed calls: those
+have no `result` entry, so judge lists their `adapter_error` entry and reads
+the `ship-usage: {json}` line the adapter wrote as the last line of stderr.
+A call with no usage data (a gate's answer, a non-agent step, an older
+delivery) shows `(none)`.
+
+After the per-call blocks, `=== TOTAL <delivery> ===` sums each figure over
+every call with usage, whatever its outcome, and says how many calls had no
+usage data. With `--step`, the total covers only the filtered calls.

@@ -83,6 +83,40 @@ describe("Result", () => {
   });
 });
 
+describe("usage evidence item (harlo-56)", () => {
+  const step = must(schemaFor("implement", "run"));
+  const usage = {
+    inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheCreationTokens: 40, costUsd: 0.25, durationMs: 1200, turns: 3,
+  };
+  const item = (u: unknown) => ({ label: "usage", usage: u });
+  const okImpl = { status: "ok", body: { changeset: "ship/PROJ-1-1@abc" } };
+  const failed = { status: "failed", info: "boom" };
+  const question = { status: "question", prompt: "p", about: "clarify" };
+
+  const rows: [string, unknown, boolean][] = [
+    ["failed without evidence", failed, true],
+    ["failed with a usage item", { ...failed, evidence: [item(usage)] }, true],
+    ["failed with a plain evidence item", { ...failed, evidence: [{ label: "log", text: "x" }] }, true],
+    ["ok with reasoning then usage", { ...okImpl, evidence: [{ label: "reasoning", text: "r" }, item(usage)] }, true],
+    ["question with a usage item", { ...question, evidence: [item(usage)] }, true],
+    ["usage with only some fields", { ...failed, evidence: [item({ outputTokens: 7 })] }, true],
+    ["usage figures of zero", { ...failed, evidence: [item({ inputTokens: 0, costUsd: 0 })] }, true],
+    ["failed with evidence that isn't a list", { ...failed, evidence: item(usage) }, false],
+    ...(["ok", "failed", "question"] as const).flatMap((status): [string, unknown, boolean][] => {
+      const base = status === "ok" ? okImpl : status === "failed" ? failed : question;
+      return [
+        [`${status}: usage figure of the wrong type`, { ...base, evidence: [item({ ...usage, inputTokens: "10" })] }, false],
+        [`${status}: negative usage figure`, { ...base, evidence: [item({ ...usage, costUsd: -0.1 })] }, false],
+        [`${status}: unknown usage key`, { ...base, evidence: [item({ ...usage, input_tokens: 10 })] }, false],
+        [`${status}: usage that isn't an object`, { ...base, evidence: [item(5)] }, false],
+      ];
+    }),
+  ];
+  test.each(rows)("%s", (_, data, expected) => {
+    expect(valid(step.stdout, data)).toBe(expected);
+  });
+});
+
 describe("check ok union", () => {
   const check = must(schemaFor("check", "run")).result;
   const findings: Finding[] = [{ text: "missing test", ref: "src/a.ts:3" }];

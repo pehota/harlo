@@ -3,8 +3,9 @@
 // env/poll/stalled.ts's shape). Reads a Delivery's journal straight off the configured State adapter (the same
 // Stdin/Stdout contract the Runner uses; this is environment code, not core/runner, so it shells out to the
 // adapter directly rather than importing runner internals) and renders, per step-call, what the adapter was
-// asked, what it returned, and — when the adapter populates it — the raw reasoning behind that answer. Purely a
-// read/render tool: no gating, no verdict of its own.
+// asked, what it returned, and — when the adapter populates it — the raw reasoning behind that answer and what the
+// call cost (USAGE: tokens, USD, duration, turns), then one usage total for the Delivery. Purely a read/render
+// tool: no gating, no verdict of its own.
 //
 // argv: --delivery <id> --state <state-adapter argv…> [--root <main-line-repo>] [--step <name>]
 //   `--state` takes the rest of argv (same convention as `poll/stalled.ts`): spawns `state journal <delivery>`
@@ -17,7 +18,11 @@
 // A CommandId is `<delivery>/<name>-<n>` (`src/core/ids.ts`); this is environment code (it must not import
 // `src/core`), so the `<name>-<n>` split is re-derived locally, matching how `env/drive.ts` re-checks
 // `isTerminal`'s literals rather than importing them.
-import type { CommandId, DeliveryId, EvidenceItem, Finding, RunnerStdin } from "../src/contracts/common";
+//
+// Usage (harlo-56): an ok/question/failed Result carries it as a `usage` evidence item; a crashed call (an
+// `adapter_error` entry, no `result`) has it as the stderr tail's last `ship-usage: {json}` line in `info`, written
+// by the agent adapter (src/adapters/agent/claude/index.ts) — re-matched here, not imported, like STEP_CALL_RE.
+import type { CommandId, DeliveryId, EvidenceItem, Finding, RunnerStdin, Usage } from "../src/contracts/common";
 import { schemaFor } from "../src/contracts/ports";
 import type { TimedEntry } from "../src/contracts/snapshot";
 import { check } from "../src/contracts/validate";
@@ -64,9 +69,12 @@ const parseStepCall = (id: CommandId): { step: string; sequence: number } | null
 type ResultEntry = TimedEntry & { signal: Extract<TimedEntry["signal"], { kind: "result" }> };
 type SentEntry = TimedEntry & { signal: Extract<TimedEntry["signal"], { kind: "sent" }> };
 
-/** One step-call to render: a `result` entry, its step/sequence, and (when found) the `sent` entry that named
- *  its payload. Journal order is already chronological, so a plain filter/map keeps it that way. */
-type StepCall = { id: CommandId; step: string; sequence: number; result: ResultEntry; sent: SentEntry | undefined };
+/** How a step-call ended: its `result` entry, or the `adapter_error` entry's info when the adapter crashed. */
+type Outcome = { kind: "result"; entry: ResultEntry } | { kind: "crash"; info: string };
+
+/** One step-call to render: how it ended, its step/sequence, and (when found) the `sent` entry that named its
+ *  payload. Journal order is already chronological, so a plain filter/map keeps it that way. */
+type StepCall = { id: CommandId; step: string; sequence: number; outcome: Outcome; sent: SentEntry | undefined };
 
 const stepCalls = (entries: TimedEntry[], step: string | undefined): StepCall[] => {
   const sentById = new Map<CommandId, SentEntry>(
@@ -74,11 +82,15 @@ const stepCalls = (entries: TimedEntry[], step: string | undefined): StepCall[] 
   );
   const calls: StepCall[] = [];
   for (const entry of entries) {
-    if (entry.signal.kind !== "result") continue;
-    const parsed = parseStepCall(entry.signal.id);
+    const signal = entry.signal;
+    if (signal.kind !== "result" && signal.kind !== "adapter_error") continue;
+    const parsed = parseStepCall(signal.id);
     if (!parsed) continue;
     if (step !== undefined && parsed.step !== step) continue;
-    calls.push({ id: entry.signal.id, ...parsed, result: entry as ResultEntry, sent: sentById.get(entry.signal.id) });
+    const outcome: Outcome = signal.kind === "result"
+      ? { kind: "result", entry: entry as ResultEntry }
+      : { kind: "crash", info: entry.info ?? "" };
+    calls.push({ id: signal.id, ...parsed, outcome, sent: sentById.get(signal.id) });
   }
   return calls;
 };
@@ -121,26 +133,81 @@ const outputLines = (port: string, body: Record<string, unknown>, root: string |
   }
 };
 
-// ── REASONING (Result.evidence, printed verbatim) ──
-const reasoningLines = (evidence: EvidenceItem[] | undefined): string[] | null =>
-  evidence && evidence.length > 0 ? evidence.map((e) => [e.label, e.text, e.url].filter(Boolean).join(": ")) : null;
+// ── REASONING (Result.evidence other than usage, printed verbatim) ──
+const reasoningLines = (evidence: EvidenceItem[] | undefined): string[] | null => {
+  const items = (evidence ?? []).filter((e) => e.usage === undefined);
+  return items.length > 0 ? items.map((e) => [e.label, e.text, e.url].filter(Boolean).join(": ")) : null;
+};
+
+// ── USAGE (the usage evidence item, or a crash's `ship-usage:` line) ──
+const USAGE_LINE_PREFIX = "ship-usage: ";
+
+/** The last `ship-usage: {json}` line of a crash's stderr tail; undefined when absent or unparseable. */
+const crashUsage = (info: string): Usage | undefined => {
+  const line = info.split("\n").findLast((l) => l.startsWith(USAGE_LINE_PREFIX));
+  if (line === undefined) return undefined;
+  try { return JSON.parse(line.slice(USAGE_LINE_PREFIX.length)) as Usage; } catch { return undefined; }
+};
+
+const usageOf = (outcome: Outcome): Usage | undefined =>
+  outcome.kind === "crash"
+    ? crashUsage(outcome.info)
+    : outcome.entry.signal.result.evidence?.find((e) => e.usage !== undefined)?.usage;
+
+/** Each figure's label and rendering, in display order; a figure the call didn't report is left out. */
+const FIGURES: [keyof Usage, string, (n: number) => string][] = [
+  ["inputTokens", "input tokens", String],
+  ["outputTokens", "output tokens", String],
+  ["cacheReadTokens", "cache-read tokens", String],
+  ["cacheCreationTokens", "cache-write tokens", String],
+  ["costUsd", "cost", (n) => `$${n.toFixed(4)}`],
+  ["durationMs", "duration", (n) => `${(n / 1000).toFixed(1)}s`],
+  ["turns", "turns", String],
+];
+
+const usageLines = (usage: Usage | undefined): string[] =>
+  usage ? FIGURES.flatMap(([key, label, show]) => (usage[key] === undefined ? [] : [`${label}: ${show(usage[key])}`])) : [];
+
+/** Every figure summed over the calls that reported it, and how many calls reported no usage at all. */
+const totalLines = (delivery: string, calls: StepCall[]): string[] => {
+  const usages = calls.map((c) => usageOf(c.outcome));
+  const sum: Usage = {};
+  for (const usage of usages) {
+    for (const [key] of FIGURES) if (usage?.[key] !== undefined) sum[key] = (sum[key] ?? 0) + usage[key];
+  }
+  const without = usages.filter((u) => u === undefined).length;
+  return [
+    `=== TOTAL ${delivery} ===`,
+    ...section("USAGE", usageLines(Object.keys(sum).length > 0 ? sum : undefined)),
+    `calls: ${calls.length} (${calls.length - without} with usage, ${without} without usage data)`,
+  ];
+};
 
 const section = (title: string, lines: string[]): string[] => [`-- ${title} --`, ...(lines.length > 0 ? lines : ["(none)"])];
 
+/** The crash's stderr tail without its usage line (that has its own section). */
+const crashLines = (info: string): string[] => [
+  "crashed (adapter_error):", ...info.split("\n").filter((l) => l !== "" && !l.startsWith(USAGE_LINE_PREFIX)),
+];
+
 const render = (call: StepCall, root: string | undefined): string[] => {
-  const result = call.result.signal.result;
   const lines = [`=== ${call.id} ===`, ...section("INPUT", inputLines(call))];
-  if (result.status === "ok") {
-    lines.push(...section("OUTPUT", outputLines(call.step, result.body as Record<string, unknown>, root)));
-    const reasoning = reasoningLines(result.evidence);
-    if (reasoning) lines.push(...section("REASONING", reasoning));
-  } else if (result.status === "failed") {
-    lines.push(...section("OUTPUT", [`failed: ${result.info}`]));
+  const outcome = call.outcome;
+  if (outcome.kind === "crash") {
+    lines.push(...section("OUTPUT", crashLines(outcome.info)));
   } else {
-    lines.push(...section("OUTPUT", [`question (${result.about}): ${result.prompt}`]));
+    const result = outcome.entry.signal.result;
+    if (result.status === "ok") {
+      lines.push(...section("OUTPUT", outputLines(call.step, result.body as Record<string, unknown>, root)));
+    } else if (result.status === "failed") {
+      lines.push(...section("OUTPUT", [`failed: ${result.info}`]));
+    } else {
+      lines.push(...section("OUTPUT", [`question (${result.about}): ${result.prompt}`]));
+    }
     const reasoning = reasoningLines(result.evidence);
     if (reasoning) lines.push(...section("REASONING", reasoning));
   }
+  lines.push(...section("USAGE", usageLines(usageOf(outcome))));
   return lines;
 };
 
@@ -153,6 +220,7 @@ const main = async (): Promise<void> => {
   const entries = await journal(state, delivery);
   const calls = stepCalls(entries, step);
   for (const call of calls) console.log(`${render(call, root).join("\n")}\n`);
+  console.log(totalLines(delivery, calls).join("\n"));
 };
 
 await main();

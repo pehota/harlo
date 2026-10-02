@@ -3,7 +3,7 @@
 // implement's workspace so its `changeset` comes from a real commit, never an invented sha.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Stdin, WorkItem } from "../../../../src/contracts/common";
@@ -35,6 +35,10 @@ type Reply = {
   commit?: boolean;
   commitIn?: string;
   dirty?: string;
+  usage?: Record<string, unknown>;
+  total_cost_usd?: unknown;
+  duration_ms?: unknown;
+  num_turns?: unknown;
 };
 
 /** A fresh `<fixture-dir>/replies.json`, so the returned path is also usable as `<file>.calls` scratch space. */
@@ -82,7 +86,7 @@ type CallOpts = {
 };
 
 /** Run `agent/claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
-const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown }> => {
+const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
   const delivery = opts.delivery ?? "PROJ-1-1";
   const stdin: Stdin = {
     id: `${delivery}/${opts.port}-1`, delivery, port: opts.port, op: opts.op,
@@ -103,14 +107,16 @@ const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown
       ...(opts.cwdLog ? { FAKE_AGENT_CWD_LOG: opts.cwdLog } : {}),
     },
   });
-  const [text, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  const [text, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+  ]);
   let stdout: unknown;
   try { stdout = JSON.parse(text); } catch { stdout = undefined; }
   if (stdout !== undefined) {
     const contract = schemaFor(opts.port, opts.op);
     if (contract && !ajv.validate(contract.stdout, stdout)) throw new Error(`stdout breaks the contract: ${text}`);
   }
-  return { exitCode, stdout };
+  return { exitCode, stdout, stderr };
 };
 
 const readLog = (log: string): string[][] =>
@@ -778,5 +784,179 @@ describe("agent-claude adapter: cancel", () => {
     const { exitCode, stdout } = await call({ port, op: "cancel", payload: { target: "PROJ-1-1/run-1" }, home, agentReplies });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "ok", body: {} });
+  });
+});
+
+describe("agent-claude adapter: usage per call (harlo-56)", () => {
+  /** The real CLI's reply fields, as the fake prints them; `service_tier` is one it reports that usage ignores. */
+  const CLI_USAGE = {
+    usage: {
+      input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40,
+      service_tier: "standard",
+    },
+    total_cost_usd: 0.5, duration_ms: 1200, num_turns: 3,
+  };
+  const USAGE = {
+    inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheCreationTokens: 40, costUsd: 0.5, durationMs: 1200, turns: 3,
+  };
+  const usageItem = (usage: unknown = USAGE) => ({ label: "usage", usage });
+  const usageLine = (stderr: string): string => stderr.trimEnd().split("\n").at(-1)!;
+
+  const run = async (port: "define" | "implement" | "check", reply: Reply | Reply[], payload?: unknown) => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const agentReplies = repliesFile(tempDir("ship-agent-fx-"), reply);
+    const given = payload ?? (port === "define" ? {} : port === "implement" ? { criteria: ["c"], findings: [] } : checkPayload(ws));
+    return { ...(await call({ port, op: "run", payload: given, home, workspace: ws, agentReplies })), ws };
+  };
+
+  test("define ok carries the reasoning, then the usage item", async () => {
+    const { stdout } = await run("define", {
+      is_error: false, result: "r", structured_output: { criteria: ["c"], runbook: ["r"] }, ...CLI_USAGE,
+    });
+    expect(stdout).toEqual({
+      status: "ok", body: { criteria: ["c"], runbook: ["r"] }, evidence: [{ label: "reasoning", text: "r" }, usageItem()],
+    });
+  });
+
+  test("implement ok carries the reasoning, then the usage item", async () => {
+    const { stdout, ws } = await run("implement", { is_error: false, result: "done", commit: true, ...CLI_USAGE });
+    expect(stdout).toEqual({
+      status: "ok", body: { changeset: `ship/PROJ-1-1@${headSha(ws)}` },
+      evidence: [{ label: "reasoning", text: "done" }, usageItem()],
+    });
+  });
+
+  test("check ok carries the reasoning, then the usage item", async () => {
+    const { stdout } = await run("check", { is_error: false, result: "r", structured_output: { verdict: "pass" }, ...CLI_USAGE });
+    expect(stdout).toEqual({
+      status: "ok", body: { verdict: "pass" }, evidence: [{ label: "reasoning", text: "r" }, usageItem()],
+    });
+  });
+
+  test("define question carries the usage item (and still no reasoning)", async () => {
+    const { stdout } = await run("define", {
+      is_error: false, result: "r", structured_output: { question: "Which?" }, ...CLI_USAGE,
+    });
+    expect(stdout).toEqual({ status: "question", about: "clarify", prompt: "Which?", evidence: [usageItem()] });
+  });
+
+  test("implement finishing without a commit stays failed, with the usage as its evidence", async () => {
+    const { exitCode, stdout } = await run("implement", { is_error: false, result: "done", ...CLI_USAGE });
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes", evidence: [usageItem()] });
+  });
+
+  test.each(["define", "implement", "check"] as const)("%s is_error with no commit is failed with the usage", async (port) => {
+    const { exitCode, stdout } = await run(port, { is_error: true, result: "boom", ...CLI_USAGE });
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({ status: "failed", info: "boom", evidence: [usageItem()] });
+  });
+
+  test("a reply the adapter rejects after parsing is failed with the usage too", async () => {
+    const { stdout } = await run("check", { is_error: false, result: "r", structured_output: { verdict: "nope" }, ...CLI_USAGE });
+    expect(stdout).toMatchObject({ status: "failed", evidence: [usageItem()] });
+  });
+
+  test("feedback replies: no valid outcome, or applied with no commit, are failed with the usage", async () => {
+    for (const structured_output of [{ summary: "x" }, { feedback: { outcome: "applied", reason: "done" } }]) {
+      const { stdout } = await run(
+        "implement", { is_error: false, result: "r", structured_output, ...CLI_USAGE },
+        { criteria: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
+      );
+      expect(stdout).toMatchObject({ status: "failed", evidence: [usageItem()] });
+    }
+  });
+
+  test("is_error after a commit crashes with the usage line as the last line of stderr", async () => {
+    const { exitCode, stdout, stderr } = await run("implement", { is_error: true, result: "boom", commit: true, ...CLI_USAGE });
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBeUndefined();
+    expect(stderr).toContain("agent reported is_error after a commit");
+    expect(usageLine(stderr)).toBe(`ship-usage: ${JSON.stringify(USAGE)}`);
+  });
+
+  test("no valid feedback outcome after a commit, and a stray-workspace crash, both end stderr with the usage line", async () => {
+    const feedback = await run(
+      "implement", { is_error: false, result: "r", commit: true, structured_output: { summary: "x" }, ...CLI_USAGE },
+      { criteria: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
+    );
+    expect(feedback.exitCode).not.toBe(0);
+    expect(usageLine(feedback.stderr)).toBe(`ship-usage: ${JSON.stringify(USAGE)}`);
+
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const main = gitRepo();
+    const agentReplies = repliesFile(tempDir("ship-agent-fx-"), {
+      is_error: false, result: "done", commit: true, commitIn: main, ...CLI_USAGE,
+    });
+    const stray = await call({
+      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] }, home, workspace: ws, cwd: main, agentReplies,
+    });
+    expect(stray.exitCode).not.toBe(0);
+    expect(usageLine(stray.stderr)).toBe(`ship-usage: ${JSON.stringify(USAGE)}`);
+  });
+
+  test("a reply without usage fields gives exactly today's Result, and a crash writes no usage line", async () => {
+    const { stdout } = await run("implement", { is_error: false, result: "done" });
+    expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes" });
+    const asked = await run("define", { is_error: false, result: "r", structured_output: { question: "Which?" } });
+    expect(asked.stdout).toEqual({ status: "question", about: "clarify", prompt: "Which?" });
+    const crashed = await run("implement", { is_error: true, result: "boom", commit: true });
+    expect(crashed.exitCode).not.toBe(0);
+    expect(crashed.stderr).not.toContain("ship-usage:");
+  });
+
+  test("only the fields the reply has are recorded; malformed figures are left out", async () => {
+    const { stdout } = await run("implement", {
+      is_error: true, result: "boom", usage: { output_tokens: 7, input_tokens: -1 }, num_turns: "2", duration_ms: 50,
+    });
+    expect(stdout).toEqual({ status: "failed", info: "boom", evidence: [usageItem({ outputTokens: 7, durationMs: 50 })] });
+  });
+
+  test("a resumed call records its own share of the session-total cost; tokens, duration and turns pass through", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", session_id: "s-def", structured_output: { question: "Which?" }, ...CLI_USAGE, total_cost_usd: 0.0415368 },
+      {
+        is_error: false, result: "r2", session_id: "s-def", structured_output: { criteria: ["c"], runbook: ["r"] },
+        ...CLI_USAGE, total_cost_usd: 0.0762618,
+      },
+      // implement's own fresh session: its cost never includes define's.
+      { is_error: false, result: "r3", session_id: "s-impl", ...CLI_USAGE, total_cost_usd: 0.2 },
+      // a resumed implement that crashes after a commit: the crash line carries the delta too.
+      { is_error: true, result: "boom", session_id: "s-impl", commit: true, ...CLI_USAGE, total_cost_usd: 0.35 },
+    ]);
+    const define = (payload: DefinePayload) => call({ port: "define", op: "run", payload, home, workspace: ws, agentReplies });
+    expect(await define({})).toMatchObject({ stdout: { evidence: [usageItem({ ...USAGE, costUsd: 0.0415368 })] } });
+    expect((await define({ answer: "this one" })).stdout).toMatchObject({
+      status: "ok", evidence: [{ label: "reasoning" }, usageItem({ ...USAGE, costUsd: 0.034725 })],
+    });
+
+    const implement = (payload: ImplementPayload) => call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
+    expect((await implement({ criteria: ["c"], findings: [] })).stdout).toEqual({
+      status: "failed", info: "agent finished without committing any changes", evidence: [usageItem({ ...USAGE, costUsd: 0.2 })],
+    });
+    const crashed = await implement({ criteria: ["c"], findings: [{ text: "f" }] });
+    expect(crashed.exitCode).not.toBe(0);
+    expect(usageLine(crashed.stderr)).toBe(`ship-usage: ${JSON.stringify({ ...USAGE, costUsd: 0.15 })}`);
+  });
+
+  test("a resumed call with a pre-harlo-56 state file (bare session id) leaves the cost out rather than guess", async () => {
+    const home = tempDir("ship-agent-home-");
+    const dir = join(home, ".local", "state", "ship", "agent-claude");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "define.json"), JSON.stringify({ "PROJ-1-1": "s-old" }));
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "r", session_id: "s-old", structured_output: { criteria: ["c"], runbook: ["r"] }, ...CLI_USAGE,
+    });
+    const { stdout } = await call({ port: "define", op: "run", payload: { answer: "a" }, home, agentReplies, log });
+    expect(readLog(log)[0]).toContain("s-old");
+    const { costUsd: _unknown, ...rest } = USAGE;
+    expect(stdout).toMatchObject({ evidence: [{ label: "reasoning" }, usageItem(rest)] });
   });
 });
