@@ -13,7 +13,9 @@ import { snapshotSchema, timedEntrySchema, type TimedEntry } from "./snapshot";
 export type DefinePayload = { feedback?: string; answer?: string };
 export type DefineBody = { criteria: string[]; runbook: string[] };
 export type ImplementPayload = { criteria: string[]; findings: Finding[]; feedback?: string; answer?: string };
-export type ImplementBody = { changeset: string }; // opaque ref
+/** `feedback` is present exactly when the payload carried `feedback`: what the agent did with the Principal's comment. */
+export type ImplementFeedback = { outcome: "applied" | "declined"; reason: string };
+export type ImplementBody = { changeset: string; feedback?: ImplementFeedback }; // changeset: opaque ref
 export type CheckPayload = { criteria: string[]; changeset: string; answer?: string };
 export type CheckBody =
   | { verdict: "pass" }
@@ -85,7 +87,16 @@ const implementPayload: JSONSchemaType<ImplementPayload> = { type: "object", add
   properties: { criteria: stringsSchema, findings: findingsSchema, feedback: answer, answer },
   required: ["criteria", "findings"],
 };
-const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additionalProperties: false, properties: { changeset: str }, required: ["changeset"] };
+const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additionalProperties: false,
+  properties: {
+    changeset: str,
+    feedback: { type: "object", additionalProperties: false, nullable: true,
+      properties: { outcome: { type: "string", enum: ["applied", "declined"] }, reason: { type: "string", minLength: 1 } },
+      required: ["outcome", "reason"],
+    },
+  },
+  required: ["changeset"],
+};
 const checkPayload: JSONSchemaType<CheckPayload> = { type: "object", additionalProperties: false,
   properties: { criteria: stringsSchema, changeset: str, answer }, required: ["criteria", "changeset"],
 };

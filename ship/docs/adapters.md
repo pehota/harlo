@@ -91,6 +91,32 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 - An orphaned target process may be killed by the `(pid, started)` pair from its
   `sent` journal entry, only while the pid's start time still equals `started`.
 
+## `implement.run` and Principal feedback
+
+Payload: `{criteria, findings, feedback?, answer?}`. `feedback` is the Principal's
+comment, verbatim, from any gate answer that sends the Delivery back to Implement
+with one: Land `rework`, Decision `keep_going`, Failure `fix_forward`. No comment,
+no `feedback` key.
+
+`ok` body: `{changeset, feedback?}`.
+
+- `changeset` is an opaque ref the core passes on to Check, Integrate and Deploy.
+- `feedback: {outcome: "applied" | "declined", reason}` says what the adapter did
+  with the payload's `feedback`. Include it **exactly when** the payload carried
+  `feedback`, never otherwise. `reason` is non-empty. The core does not read it.
+- Both ends land in the journal. The comment is on the command's `sent` entry
+  (`signal.payload.feedback`). The outcome is on the entry for the implement `ok`
+  result (`signal.result.body.feedback`). Together they show whether a comment
+  was acted on, without reading the agent's reasoning.
+- The schema alone cannot require the field, because it never sees the payload.
+  So **the adapter validates it**. In `agent/claude/index.ts`, a reply to feedback
+  with a missing outcome, an outcome outside `applied`/`declined`, or an empty
+  `reason` never becomes `ok`. It is `failed` if nothing was committed, and a crash
+  once a commit happened (the crash-vs-`failed` rule above). The schema still
+  rejects a bad outcome or an empty `reason` as a backstop. An `applied` with no
+  new commit is `failed`. A `declined` may leave HEAD unchanged; then the changeset
+  is the current HEAD.
+
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 
 Real, timeboxed calls against the installed `claude` CLI, for `src/adapters/agent/claude/index.ts` (M1.9–M1.11):
@@ -220,19 +246,22 @@ process launched from an interactive coding session (not a login shell):
   agent). No fix landed in `runner/spawn.ts` — flagged here rather than silently
   broadening the stripped env, since that's a real security boundary (P5) and widening
   it deserves its own decision, not a side effect of one dogfood session's auth method.
-- **The Decision gate's `keep_going` comment does not reliably reach Implement as an
+- **The Decision gate's `keep_going` comment did not reach Implement as an
   actionable code change.** Across 3 fix rounds on the same Check finding (a
   `PLACEHOLDER`-string hardcode that fights the mapper's own genericity goal), first a
   prose description and then an exact, literal code diff were both given as the
   `comment` on `keep_going` — neither produced the requested code change. The only
   effect was two doc-comment-only commits explaining the existing (unchanged) behavior.
-  Check re-raised the identical finding, near-verbatim, each round. Whether this is a
-  wiring gap (the comment isn't reaching Implement's resumed context) or a deliberate,
-  unstated hesitation by Implement (a single-candidate block *could* legitimately be a
-  real one-option decision, not just an open question — collapsing that distinction
-  unconditionally is a real edge case, just never surfaced as the reason) is unresolved.
-  Accepted the finding as a known gap rather than a fourth round. Worth instrumenting
-  before relying on `keep_going` for anything but "proceed" in an unattended run.
+  Check re-raised the identical finding, near-verbatim, each round. **Cause: a wiring
+  gap in the core** (harlo-38). `decision.keep_going` and `failure.fix_forward` in
+  `src/core/transition.ts` never forwarded `b.comment`, unlike `land.rework` and
+  `accept.adjust`. So the comment never reached Implement's payload; the resumed agent
+  saw only the same finding again. **Fix:** both branches now issue `implement.run`
+  with `payload.feedback` set to the comment, verbatim. `agent/claude/index.ts` frames
+  it as a Principal directive that takes priority over the agent's earlier reading of
+  the finding: make the change, or decline it with a reason; re-explaining the code
+  does not count. The agent must report `feedback: {outcome, reason}`, which is
+  journaled with the `ok` result (see `implement.run` above).
 
 ## Idempotency on the command id
 

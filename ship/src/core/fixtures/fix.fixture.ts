@@ -84,6 +84,20 @@ export const fixRows: TransitionRow[] = [
     },
   },
   {
+    id: "F4", name: "decision keep_going + comment → implement with findings and feedback, fix rounds reset",
+    state: snapshotAt("decision", decision1, { fixRounds: 2, findings, seq: { implement: 3, decision: 1 } }),
+    signal: answer(decision1, "keep_going", "person", "reject an empty name with a 400\n```diff\n-ok\n+no\n```"),
+    expect: {
+      at: "implement",
+      commands: [cmd(implementRun(4, { feedback: "reject an empty name with a 400\n```diff\n-ok\n+no\n```" }))],
+      state: {
+        fixRounds: 0, findings,
+        awaiting: implementRun(4, { feedback: "reject an empty name with a 400\n```diff\n-ok\n+no\n```" }),
+      },
+      entry: { from: "decision", to: "implement", issued: [id("implement-4")], by: "person" },
+    },
+  },
+  {
     id: "F5", name: "decision accept → land gate",
     state: snapshotAt("decision", decision1, { fixRounds: 2, findings }),
     signal: answer(decision1, "accept", "model"),

@@ -71,7 +71,7 @@ const onOk: { [P in Position]?: OnOk } = {
   decision: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      keep_going: () => enterStep(p, { ...s, fixRounds: 0 }, "implement"),
+      keep_going: () => enterStep(p, { ...s, fixRounds: 0 }, "implement", feedback(b)),
       accept: () => enterGate(p, s, "land"),
       stop: () => abandon(p, s, "abandoned", b.comment ?? "stopped at decision"),
     });
@@ -96,10 +96,13 @@ const onOk: { [P in Position]?: OnOk } = {
     pass: () => enterClose(p, s, "delivered"),
     fail: (b) => enterGate(p, { ...s, findings: b.findings }, "failure"),
   }),
-  failure: (p, s, body) => branch(s, (body as DecideBody).answer, {
-    fix_forward: () => enterStep(p, s, "implement"),
-    accept: () => enterClose(p, s, "accepted_with_failure"),
-  }),
+  failure: (p, s, body) => {
+    const b = body as DecideBody;
+    return branch(s, b.answer, {
+      fix_forward: () => enterStep(p, s, "implement", feedback(b)),
+      accept: () => enterClose(p, s, "accepted_with_failure"),
+    });
+  },
   close: (p, s) => enterStep(p, s, "teardown"),
   blocked: (p, s, body) => {
     const b = body as DecideBody;
