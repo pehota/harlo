@@ -57,6 +57,30 @@ export const failureRows: TransitionRow[] = [
     },
   },
   {
+    id: "X3", name: "failure fix_forward + comment → implement with the findings and feedback, rounds unchanged",
+    state: snapshotAt("failure", failure(), { findings, fixRounds: 1, seq: { implement: 2, failure: 1 } }),
+    signal: answer(failure(), "fix_forward", "person", "return 503, not 500, while the store warms up"),
+    expect: {
+      at: "implement",
+      commands: [cmd(awaited("implement-3", "implement", "run",
+        { criteria, findings, feedback: "return 503, not 500, while the store warms up" }, "implement", "run"))],
+      state: { fixRounds: 1, findings },
+      entry: { from: "failure", to: "implement", issued: [id("implement-3")], by: "person" },
+    },
+  },
+  {
+    id: "X3", name: "failure fix_forward + comment with no findings → implement with [] findings and feedback",
+    state: snapshotAt("failure", failure(gateEvidence()), { findings: [], fixRounds: 0, seq: { implement: 1, failure: 1 } }),
+    signal: answer(failure(gateEvidence()), "fix_forward", "person", "add the missing env var"),
+    expect: {
+      at: "implement",
+      commands: [cmd(awaited("implement-2", "implement", "run",
+        { criteria, findings: [], feedback: "add the missing env var" }, "implement", "run"))],
+      state: { fixRounds: 0, findings: [] },
+      entry: { from: "failure", to: "implement", issued: [id("implement-2")], by: "person" },
+    },
+  },
+  {
     id: "X4", name: "failure accept → close with accepted_with_failure, plus its comment",
     state: snapshotAt("failure", failure(), { findings }),
     signal: answer(failure(), "accept"),

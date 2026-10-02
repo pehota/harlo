@@ -139,6 +139,55 @@ describe("lifecycle on fakes", () => {
     expect(payloadOf(p.log(), "define-2")).toEqual({ feedback: "split off the farewell" });
   }, TIMEOUT);
 
+  // harlo-38: a comment on keep_going / fix_forward reaches Implement verbatim, and Implement's answer to it
+  // lands in the journal — the comment on the `sent` entry, the outcome on the implement result's entry.
+  const directive = "Reject an empty name with a 400.\n```diff\n-  return greet(name);\n+  if (!name) return bad();\n```";
+  const applied = { outcome: "applied", reason: "added the empty-name guard" };
+  const journaledRound = async (p: Project, implementId: string) => {
+    const entries = await p.journal();
+    const sent = entries.find((e) => e.signal.kind === "sent" && e.signal.id === `${D}/${implementId}`);
+    const result = entries.find((e) => e.signal.kind === "result" && e.signal.id === `${D}/${implementId}`);
+    return {
+      sent: sent?.signal.kind === "sent" ? (sent.signal.payload as { feedback?: string }) : undefined,
+      body: result?.signal.kind === "result" ? (result.signal.result as { body?: unknown }).body : undefined,
+    };
+  };
+
+  test.concurrent("Decision keep_going + comment → Implement with feedback; the outcome is journaled", async () => {
+    const fix = verdict("fix", findings);
+    const p = project(
+      {
+        ...HAPPY, "check.run": [fix, fix, verdict("pass")],
+        "implement.run": [implemented("c1"), implemented("c2"), ok({ changeset: "c3", feedback: applied })],
+      },
+      { fixRounds: 1 },
+    );
+    await start(p, "accept-1");
+    await signal(p, "accept-1", answer("accept"), "decision-1");
+    await signal(p, "decision-1", answer("keep_going", directive), "land-1");
+    expect(payloadOf(p.log(), "implement-3")).toEqual({ criteria, findings, feedback: directive });
+    const { sent, body } = await journaledRound(p, "implement-3");
+    expect(sent?.feedback).toBe(directive);
+    expect(body).toEqual({ changeset: "c3", feedback: applied });
+    expect((await p.snapshot()).fixRounds).toBe(0);
+  }, TIMEOUT);
+
+  test.concurrent("Failure fix_forward + comment → Implement with feedback; the outcome is journaled", async () => {
+    const declined = { outcome: "declined", reason: "the 500 is the store, not this change" };
+    const p = project({
+      ...HAPPY, "deploy.run": [verdict("not_live"), verdict("live")],
+      "implement.run": [implemented("c1"), ok({ changeset: "c1", feedback: declined })],
+      "check.run": [verdict("pass"), verdict("pass")],
+    });
+    await toLand(p);
+    await signal(p, "land-1", answer("approve"), "failure-1");
+    await signal(p, "failure-1", answer("fix_forward", directive), "land-2");
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ criteria, findings: [], feedback: directive });
+    const { sent, body } = await journaledRound(p, "implement-2");
+    expect(sent?.feedback).toBe(directive);
+    expect(body).toEqual({ changeset: "c1", feedback: declined });
+  }, TIMEOUT);
+
   test.concurrent("a step's question goes to the Principal; the answer re-runs the step with it", async () => {
     const p = project({ ...HAPPY, "define.run": [question("Greet in which language?", "clarify"), defined] });
     await start(p, "ask-1");

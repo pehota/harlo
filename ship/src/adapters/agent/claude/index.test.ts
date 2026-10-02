@@ -316,6 +316,99 @@ describe("agent-claude adapter: implement", () => {
     expect(prompt(second!)).toContain("fix the greeting");
   });
 
+  const feedback = "Reject an empty name — don't re-explain the guard.\n```diff\n-  if (name) greet(name);\n+  if (!name) throw new Error(\"empty name\");\n```\nThen commit.";
+
+  /** First call stores the session; the second carries `feedback` with the given agent reply. */
+  const feedbackRound = async (second: Reply) => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", commit: true, session_id: "sess-impl-fb" },
+      { session_id: "sess-impl-fb", ...second },
+    ]);
+    await call({
+      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies, log,
+    });
+    const payload: ImplementPayload = { criteria: ["c"], findings: [{ text: "empty name is not rejected" }], feedback };
+    const result = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    return { ...result, ws, argv: readLog(log)[1]! };
+  };
+
+  test("feedback resumes the stored session and reaches the prompt verbatim, framed as a Principal directive", async () => {
+    const { exitCode, stdout, ws, argv } = await feedbackRound({
+      is_error: false, result: "r2", commit: true, structured_output: { feedback: { outcome: "applied", reason: "added the throw" } },
+    });
+    expect(exitCode).toBe(0);
+    expect(argv[argv.indexOf("--resume") + 1]).toBe("sess-impl-fb");
+    const prompt = argv[argv.indexOf("-p") + 1]!;
+    expect(prompt).toContain(feedback);
+    expect(prompt).toContain("PRINCIPAL DIRECTIVE");
+    expect(prompt).toContain("takes priority over your earlier reading of the same finding");
+    expect(prompt).toContain("explicitly decline it with a stated reason");
+    expect(prompt).toContain("Re-explaining or defending the existing code is not an acceptable response");
+    expect(prompt).not.toContain("Feedback: ");
+    expect(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).required).toEqual(["feedback"]);
+    expect(stdout).toEqual({
+      status: "ok",
+      body: { changeset: `ship/PROJ-1-1@${headSha(ws)}`, feedback: { outcome: "applied", reason: "added the throw" } },
+      evidence: [{ label: "reasoning", text: "r2" }],
+    });
+  });
+
+  test("an explicit decline with a reason is ok even without a new commit", async () => {
+    const { stdout, ws } = await feedbackRound({
+      is_error: false, result: "r2", structured_output: { feedback: { outcome: "declined", reason: "the caller validates" } },
+    });
+    expect(stdout).toEqual({
+      status: "ok",
+      body: { changeset: `ship/PROJ-1-1@${headSha(ws)}`, feedback: { outcome: "declined", reason: "the caller validates" } },
+      evidence: [{ label: "reasoning", text: "r2" }],
+    });
+  });
+
+  for (const [name, structured_output] of [
+    ["missing", { summary: "the guard already handles it" }],
+    ["outside {applied, declined}", { feedback: { outcome: "explained", reason: "it already works" } }],
+    ["with an empty reason", { feedback: { outcome: "declined", reason: "  " } }],
+  ] as const) {
+    test(`a feedback outcome ${name} is failed when nothing was committed`, async () => {
+      const { exitCode, stdout } = await feedbackRound({ is_error: false, result: "r2", structured_output });
+      expect(exitCode).toBe(0);
+      expect((stdout as { status: string }).status).toBe("failed");
+    });
+
+    test(`a feedback outcome ${name} is a crash once a commit happened`, async () => {
+      const { exitCode, stdout } = await feedbackRound({ is_error: false, result: "r2", commit: true, structured_output });
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toBeUndefined();
+    });
+  }
+
+  test("feedback reported applied with no commit is failed", async () => {
+    const { stdout } = await feedbackRound({
+      is_error: false, result: "r2", structured_output: { feedback: { outcome: "applied", reason: "done" } },
+    });
+    expect((stdout as { status: string }).status).toBe("failed");
+  });
+
+  test("without feedback the --json-schema does not ask for it and the body stays { changeset }", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "done", commit: true, structured_output: { feedback: { outcome: "applied", reason: "x" } },
+    });
+    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const { stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    const argv = readLog(log)[0]!;
+    expect(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).properties).not.toHaveProperty("feedback");
+    expect((stdout as { body: unknown }).body).toEqual({ changeset: `ship/PROJ-1-1@${headSha(ws)}` });
+  });
+
   test("returns failed when the agent errors before committing (safe: nothing changed)", async () => {
     const home = tempDir("ship-agent-home-");
     const ws = gitRepo();
@@ -336,6 +429,23 @@ describe("agent-claude adapter: implement", () => {
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).not.toBe(0);
     expect(stdout).toBeUndefined(); // no stdout Result line was printed: a crash, not a swallowed `failed`
+  });
+});
+
+describe("implement ok body contract (harlo-38)", () => {
+  const stdout = schemaFor("implement", "run")!.stdout;
+  const ok = (body: unknown) => ({ status: "ok", body });
+  test.each([
+    ["changeset only", { changeset: "c" }, true],
+    ["applied with a reason", { changeset: "c", feedback: { outcome: "applied", reason: "done" } }, true],
+    ["declined with a reason", { changeset: "c", feedback: { outcome: "declined", reason: "no" } }, true],
+    ["outcome outside the enum", { changeset: "c", feedback: { outcome: "explained", reason: "x" } }, false],
+    ["missing outcome", { changeset: "c", feedback: { reason: "x" } }, false],
+    ["empty reason", { changeset: "c", feedback: { outcome: "declined", reason: "" } }, false],
+    ["unknown key in feedback", { changeset: "c", feedback: { outcome: "applied", reason: "x", extra: 1 } }, false],
+    ["unknown key in body", { changeset: "c", summary: "x" }, false],
+  ] as const)("%s", (_, body, valid) => {
+    expect(ajv.validate(stdout, ok(body))).toBe(valid);
   });
 });
 

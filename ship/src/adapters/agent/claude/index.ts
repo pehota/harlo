@@ -40,7 +40,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Finding, Stdin, WorkItem } from "../../../../src/contracts/common";
-import type { CheckPayload, DefinePayload, ImplementPayload } from "../../../../src/contracts/ports";
+import type { CheckPayload, DefinePayload, ImplementFeedback, ImplementPayload } from "../../../../src/contracts/ports";
 import { schemaFor } from "../../../../src/contracts/ports";
 import { check } from "../../../../src/contracts/validate";
 import { STEP_PORTS, type StepPort } from "../../../../src/core/ports/agent";
@@ -169,6 +169,37 @@ const implementSchema = {
   additionalProperties: false,
 } as const;
 
+/** Asked for only when the payload carried `feedback`: what the agent did with the Principal's comment, so the
+ *  outcome is journaled in the `ok` body rather than buried in free-text reasoning (harlo-38). */
+const implementFeedbackSchema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    feedback: {
+      type: "object",
+      properties: { outcome: { type: "string", enum: ["applied", "declined"] }, reason: { type: "string" } },
+      required: ["outcome", "reason"],
+      additionalProperties: false,
+    },
+  },
+  required: ["feedback"],
+  additionalProperties: false,
+} as const;
+
+/** The Principal's comment, framed as a directive, not context. Found by dogfooding (harlo-38): a bare
+ *  `Feedback: …` line next to the same finding let a resumed agent re-explain the code it already wrote instead
+ *  of changing it — so the framing ranks the comment above the agent's own earlier reading and names the only
+ *  two acceptable replies. */
+const feedbackDirective = (feedback: string): string[] => [
+  "PRINCIPAL DIRECTIVE — this takes priority over your earlier reading of the same finding:",
+  "<<<",
+  feedback,
+  ">>>",
+  "Either make the requested change and commit it, or explicitly decline it with a stated reason.",
+  "Re-explaining or defending the existing code is not an acceptable response.",
+  'Report what you did in the `feedback` field: outcome "applied" or "declined", with a non-empty reason.',
+];
+
 /** Fresh call: the full task framing. A resumed call sends ONLY the new delta (findings/feedback/answer) —
  *  see definePrompt's comment for why resending the whole task on a resumed session backfires. */
 const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: boolean): string => {
@@ -177,7 +208,7 @@ const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: 
     if (payload.findings.length > 0) {
       lines.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
     }
-    if (payload.feedback !== undefined) lines.push(`Feedback: ${payload.feedback}`);
+    if (payload.feedback !== undefined) lines.push(...feedbackDirective(payload.feedback));
     if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
     lines.push("Continue implementing and commit your changes — no further questions.");
     return lines.join("\n");
@@ -187,6 +218,15 @@ const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: 
     "Implement it in this working directory and commit your changes.",
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
   ].join("\n");
+};
+
+/** The agent's `feedback` report, or undefined when it is missing or malformed (outcome outside the enum,
+ *  empty reason) — never trusted blindly, the schema is guidance the agent may not follow. */
+const feedbackOutcome = (out: unknown): ImplementFeedback | undefined => {
+  const fb = (out as { feedback?: { outcome?: unknown; reason?: unknown } } | undefined)?.feedback;
+  if (fb?.outcome !== "applied" && fb?.outcome !== "declined") return undefined;
+  if (typeof fb.reason !== "string" || fb.reason.trim() === "") return undefined;
+  return { outcome: fb.outcome, reason: fb.reason };
 };
 
 const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
@@ -201,10 +241,12 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const state = readState("implement");
   const sessionId = resume ? state[stdin.delivery] : undefined;
   const prompt = implementPrompt(stdin.workItem, payload, resume);
+  const withFeedback = payload.feedback !== undefined;
+  const schema = withFeedback ? implementFeedbackSchema : implementSchema;
 
   let reply: AgentReply;
   try {
-    reply = await callAgent({ ctx, prompt, schema: implementSchema, resume: sessionId, cwd: workspace });
+    reply = await callAgent({ ctx, prompt, schema, resume: sessionId, cwd: workspace });
   } catch (error) {
     if (headSha(workspace) !== before) throw new Crash(`agent call errored after a commit: ${String(error)}`);
     throw error;
@@ -218,8 +260,26 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     if (committed) throw new Crash(`agent reported is_error after a commit: ${reply.result}`);
     return { status: "failed", info: reply.result }; // nothing committed: safe, changed nothing
   }
-  if (!committed) return { status: "failed", info: "agent finished without committing any changes" };
-  return { status: "ok", body: { changeset: `ship/${stdin.delivery}@${after}` }, ...evidenceOf(reply) };
+  const changeset = `ship/${stdin.delivery}@${after}`;
+  if (!withFeedback) {
+    if (!committed) return { status: "failed", info: "agent finished without committing any changes" };
+    return { status: "ok", body: { changeset }, ...evidenceOf(reply) };
+  }
+
+  // Feedback given: a reply without a valid outcome never passes as a normal ok. Validated HERE, in the
+  // adapter (the contract can't see the payload, so it can't require the field): `failed` when nothing was
+  // committed, a crash once a commit happened (the crash-vs-`failed` rule above).
+  const outcome = feedbackOutcome(reply.structured_output);
+  if (!outcome) {
+    const info = `agent reply to feedback has no valid feedback.outcome (applied|declined) with a reason: ${reply.result}`;
+    if (committed) throw new Crash(info);
+    return { status: "failed", info };
+  }
+  // A stated decline is a real answer, so it may leave HEAD where it was; an "applied" with no commit is not.
+  if (!committed && outcome.outcome === "applied") {
+    return { status: "failed", info: "agent reported feedback applied but committed no changes" };
+  }
+  return { status: "ok", body: { changeset, feedback: outcome }, ...evidenceOf(reply) };
 };
 
 // ── check ──
