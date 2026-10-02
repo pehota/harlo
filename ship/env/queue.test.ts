@@ -139,7 +139,7 @@ describe("queue", () => {
     const p = project({ a: "ready" });
     const lock = join(p.dir, ".ship-queue.lock");
     const ran = queue(p); // parks at a-1's Accept gate: nobody answers yet
-    for (let i = 0; i < 500 && !existsSync(lock); i++) await Bun.sleep(10);
+    for (let i = 0; i < 500 && !(existsSync(lock) && readFileSync(lock, "utf8") !== ""); i++) await Bun.sleep(10); // token is written after the file is created
     writeFileSync(lock, "another run's token"); // A's lock deleted as stale, B took it
 
     const human = gatekeeper(p);

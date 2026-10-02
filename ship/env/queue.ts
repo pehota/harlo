@@ -15,8 +15,8 @@
 // its new Delivery stopped as `abandoned` with that reason, and the queue exits 3 (1 if that stop fails: the
 // Delivery then stays open).
 //
-// One queue per State: an exclusive lockfile (atomic create) guards the run. It is removed on drain, on error
-// and on SIGINT/SIGTERM/SIGHUP — never on SIGKILL, which leaves it stale — and only while it still holds this
+// One queue per State: an exclusive lockfile (atomic create) guards the run. It is removed on every exit (drain,
+// errors, exit 3, SIGINT/SIGTERM/SIGHUP) except SIGKILL, which leaves it stale — and only while it still holds this
 // run's token (pid + random id): a lock another run took since is kept.
 // A stale one (from a killed process) is left for a person to delete — the queue never guesses.
 //
