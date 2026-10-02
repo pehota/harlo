@@ -62,8 +62,10 @@ after its progress lines.
 ## The lock
 
 One queue per project. On start the queue creates the lockfile atomically
-(fails if it exists) and writes its pid into it. It removes it on every exit
-path: drained, error, SIGINT, SIGTERM.
+(fails if it exists) and writes a per-run token into it: its pid plus a random
+id. It removes it on every exit path (drained, error, SIGINT, SIGTERM), but only
+if the file still holds that token: a lock another queue took after this one's
+was deleted as stale is left alone.
 
 If the lockfile exists, the queue exits 2 with
 `lock <path> exists: another queue holds it; delete it if stale`, and starts

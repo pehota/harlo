@@ -14,7 +14,8 @@
 // its outcome mapping sets no status) would be picked again forever. A key picked a second time in one run gets
 // its new Delivery stopped as `abandoned` with that reason, and the queue exits 3.
 //
-// One queue per State: an exclusive lockfile (atomic create) guards the run; it is removed on every exit path.
+// One queue per State: an exclusive lockfile (atomic create) guards the run; it is removed on every exit path,
+// but only while it still holds this run's token (pid + random id) — a lock another run took since is kept.
 // A stale one (from a killed process) is left for a person to delete — the queue never guesses.
 //
 // ponytail: no --concurrency flag — one Delivery at a time, deliberately. Parallel Deliveries are the open
@@ -26,7 +27,8 @@
 //   `poll/stalled.ts` only when given; `--interval` defaults to 5000ms. `--lock` defaults to `.ship-queue.lock`
 //   in the working directory (where `ship.config.json` is).
 // exit: 0 queue drained · 1 a `ship` call failed (or bad usage) · 2 lock already held · 3 re-pick guard fired
-import { closeSync, openSync, rmSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import type { DeliveryId } from "../src/contracts/common";
 import { type StatusBody, driveDelivery, runShip } from "./drive-loop";
 
@@ -60,17 +62,27 @@ const shipJson = async <T>(ship: string, args: string[]): Promise<T> => {
   return JSON.parse(ran.stdout) as T;
 };
 
-/** Atomically create the lockfile; false when it already exists. Removed on any exit once held. */
+/** Removes the lockfile only while it still holds this run's token: never another run's lock. */
+const releaseLock = (lock: string, token: string): void => {
+  try {
+    if (readFileSync(lock, "utf8") === token) rmSync(lock);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+};
+
+/** Atomically create the lockfile with a per-run token; false when it already exists. Released on any exit. */
 const acquireLock = (lock: string): boolean => {
+  const token = `${process.pid} ${randomUUID()}\n`;
   try {
     const fd = openSync(lock, "wx");
-    writeSync(fd, `${process.pid}\n`);
+    writeSync(fd, token);
     closeSync(fd);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
     throw error;
   }
-  process.on("exit", () => rmSync(lock, { force: true }));
+  process.on("exit", () => releaseLock(lock, token));
   process.on("SIGINT", () => process.exit(130));
   process.on("SIGTERM", () => process.exit(143));
   return true;

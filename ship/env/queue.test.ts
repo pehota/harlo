@@ -112,6 +112,21 @@ describe("queue", () => {
     expect(readFileSync(lock, "utf8")).toBe("someone else");
   }, 30_000);
 
+  test("a lock replaced by another run mid-run survives this queue's exit", async () => {
+    const p = project({ a: "ready" });
+    const lock = join(p.dir, ".ship-queue.lock");
+    const ran = queue(p); // parks at a-1's Accept gate: nobody answers yet
+    for (let i = 0; i < 500 && !existsSync(lock); i++) await Bun.sleep(10);
+    writeFileSync(lock, "another run's token"); // A's lock deleted as stale, B took it
+
+    const human = gatekeeper(p);
+    const done = await ran;
+    await human.halt();
+
+    expect(done.exit).toBe(0);
+    expect(readFileSync(lock, "utf8")).toBe("another run's token");
+  }, 60_000);
+
   test("an already-open Delivery is driven first, then `ship next`", async () => {
     const p = project({ a: "ready", b: "ready" });
     expect((await p.ship("start", "b")).out).toMatchObject({ delivery: "b-1", awaiting: "b-1/accept-1" });
