@@ -824,7 +824,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Test: with the fake agent, the adapter:
     - commits in the workspace and returns `ok{changeset: "ship/<d>@<sha>"}`
     - stores the session id in its own state file, keyed by Delivery
-    - resumes that session when payload has `findings`, `feedback` or `answer`
+    - resumes that session when payload has `findings`, `feedback` or `answer` and a session is stored; with none stored (Define-gate `accept` + comment, harlo-51) it starts fresh with the full task plus that delta
     - never returns `failed` after any commit
   - Done when green on the fake plus one real run.
 - [x] **M1.11 Agent adapter: Check.**

@@ -358,6 +358,30 @@ describe("agent-claude adapter: implement", () => {
     });
   });
 
+  test("feedback on the first call (Define-gate accept) starts fresh with the full task plus the directive", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, {
+      is_error: false, result: "r1", commit: true, session_id: "sess-impl-new",
+      structured_output: { feedback: { outcome: "applied", reason: "kept it short" } },
+    });
+    const payload: ImplementPayload = { criteria: ["greets the given name"], findings: [], feedback };
+    const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    expect(exitCode).toBe(0);
+    const [argv] = readLog(log);
+    expect(argv).not.toContain("--resume");
+    const prompt = argv![argv!.indexOf("-p") + 1]!;
+    expect(prompt).toContain(workItem.title);
+    expect(prompt).toContain("- greets the given name");
+    expect(prompt).toContain("PRINCIPAL DIRECTIVE");
+    expect(prompt).toContain(feedback);
+    expect(prompt).not.toContain("Continue implementing");
+    expect(JSON.parse(argv![argv!.indexOf("--json-schema") + 1]!).required).toEqual(["feedback"]);
+    expect(stdout).toMatchObject({ status: "ok", body: { feedback: { outcome: "applied", reason: "kept it short" } } });
+  });
+
   test("an explicit decline with a reason is ok even without a new commit", async () => {
     const { stdout, ws } = await feedbackRound({
       is_error: false, result: "r2", structured_output: { feedback: { outcome: "declined", reason: "the caller validates" } },

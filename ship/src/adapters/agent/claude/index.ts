@@ -130,25 +130,25 @@ const defineSchema = {
  *  an answer" reads as a brand-new ambiguous request and was found, by dogfooding M1.12, to make the agent
  *  re-enter its confirm-first loop indefinitely instead of proceeding. */
 const definePrompt = (workItem: WorkItem, payload: DefinePayload, resume: boolean): string => {
-  if (resume) {
-    const lines: string[] = [];
-    if (payload.feedback !== undefined) lines.push(`Feedback from a prior review: ${payload.feedback}`);
-    if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
-    lines.push("Reply now with the criteria/runbook (or question) fields — no further questions.");
-    return lines.join("\n\n");
-  }
+  const delta: string[] = [];
+  if (payload.feedback !== undefined) delta.push(`Feedback from a prior review: ${payload.feedback}`);
+  if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
+  if (resume) return [...delta, "Reply now with the criteria/runbook (or question) fields — no further questions."].join("\n\n");
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     workItem.body,
     "Define acceptance criteria and a runbook for verifying them.",
+    ...delta,
   ].join("\n\n");
 };
 
 const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const payload = stdin.payload as DefinePayload;
-  const resume = payload.feedback !== undefined || payload.answer !== undefined;
+  // Resume only a session this delivery already has: a delta with no stored session gets the full framing.
+  const delta = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
-  const sessionId = resume ? state[stdin.delivery] : undefined;
+  const sessionId = delta ? state[stdin.delivery] : undefined;
+  const resume = sessionId !== undefined;
   const reply = await callAgent({
     ctx, prompt: definePrompt(stdin.workItem, payload, resume), schema: defineSchema, resume: sessionId,
     disallowedTools: NO_EDIT_TOOLS,
@@ -200,23 +200,22 @@ const feedbackDirective = (feedback: string): string[] => [
   'Report what you did in the `feedback` field: outcome "applied" or "declined", with a non-empty reason.',
 ];
 
-/** Fresh call: the full task framing. A resumed call sends ONLY the new delta (findings/feedback/answer) —
- *  see definePrompt's comment for why resending the whole task on a resumed session backfires. */
+/** Fresh call: the full task framing, then any delta. A resumed call sends ONLY the new delta
+ *  (findings/feedback/answer) — see definePrompt's comment for why resending the whole task on a resumed session
+ *  backfires. A delta can arrive fresh: Define-gate `accept` with a comment is the first Implement (harlo-51). */
 const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: boolean): string => {
-  if (resume) {
-    const lines: string[] = [];
-    if (payload.findings.length > 0) {
-      lines.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
-    }
-    if (payload.feedback !== undefined) lines.push(...feedbackDirective(payload.feedback));
-    if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
-    lines.push("Continue implementing and commit your changes — no further questions.");
-    return lines.join("\n");
+  const delta: string[] = [];
+  if (payload.findings.length > 0) {
+    delta.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
   }
+  if (payload.feedback !== undefined) delta.push(...feedbackDirective(payload.feedback));
+  if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
+  if (resume) return [...delta, "Continue implementing and commit your changes — no further questions."].join("\n");
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Implement it in this working directory and commit your changes.",
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
+    ...delta,
   ].join("\n");
 };
 
@@ -235,11 +234,12 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   if (!workspace) throw new Error("implement run requires a workspace (from workspace.setup)");
   const before = headSha(workspace);
 
-  // A re-issue after a fix round or a question answer resumes this delivery's own Implement session; the
-  // very first call for a delivery starts fresh.
-  const resume = payload.findings.length > 0 || payload.feedback !== undefined || payload.answer !== undefined;
+  // A re-issue after a fix round, feedback or a question answer resumes this delivery's own Implement session.
+  // With no stored session yet (the first call, even one carrying Define-gate feedback) it starts fresh.
+  const delta = payload.findings.length > 0 || payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("implement");
-  const sessionId = resume ? state[stdin.delivery] : undefined;
+  const sessionId = delta ? state[stdin.delivery] : undefined;
+  const resume = sessionId !== undefined;
   const prompt = implementPrompt(stdin.workItem, payload, resume);
   const withFeedback = payload.feedback !== undefined;
   const schema = withFeedback ? implementFeedbackSchema : implementSchema;

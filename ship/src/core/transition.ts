@@ -40,7 +40,16 @@ const onVerdict = <B extends { verdict: string }>(s: Snapshot, body: B, cases: V
 const enterClosed = (s: Snapshot): Move =>
   withFire({ state: { ...s, at: "closed" }, commands: [] }, "principal", "notify", { text: `closed: ${present(s, "outcome")}` });
 
-const feedback = (b: DecideBody) => (b.comment === undefined ? {} : { feedback: b.comment });
+/** Run the step COMMENT_ROUTES sends answer `b` at `on` to, with its comment as `feedback`. */
+const forward = (p: Policy, s: Snapshot, on: DecidePoint, b: DecideBody): Move => {
+  const route = commentRoute(on, b.answer);
+  if (route?.goes !== "feedback" || route.to === undefined) throw new Error(`${on}.${b.answer} has no feedback route`);
+  return enterStep(p, s, route.to, b.comment === undefined ? {} : { feedback: b.comment });
+};
+
+/** Answer `b`'s comment when COMMENT_ROUTES makes it the reason at `on`. */
+const reasonOf = (on: DecidePoint, b: DecideBody): string | undefined =>
+  commentRoute(on, b.answer)?.goes === "reason" ? b.comment : undefined;
 
 /** A `fix` verdict from Check or Integrate: another fix round while rounds are left, else the Decision gate. */
 const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
@@ -58,8 +67,8 @@ const onOk: { [P in Position]?: OnOk } = {
   accept: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      accept: () => enterStep(p, s, "implement", feedback(b)),
-      adjust: () => enterStep(p, s, "define", feedback(b)),
+      accept: () => forward(p, s, "accept", b),
+      adjust: () => forward(p, s, "accept", b),
     });
   },
   implement: (p, s, body) => enterStep(p, { ...s, changeset: (body as ImplementBody).changeset }, "check"),
@@ -71,17 +80,17 @@ const onOk: { [P in Position]?: OnOk } = {
   decision: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      keep_going: () => enterStep(p, { ...s, fixRounds: 0 }, "implement", feedback(b)),
+      keep_going: () => forward(p, { ...s, fixRounds: 0 }, "decision", b),
       accept: () => enterGate(p, s, "land"),
-      stop: () => abandon(p, s, "abandoned", b.comment ?? "stopped at decision"),
+      stop: () => abandon(p, s, "abandoned", reasonOf("decision", b) ?? "stopped at decision"),
     });
   },
   land: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
       approve: () => enterStep(p, s, "integrate"),
-      rework: () => enterStep(p, s, "implement", feedback(b)),
-      rescope: () => enterStep(p, s, "define", feedback(b)),
+      rework: () => forward(p, s, "land", b),
+      rescope: () => forward(p, s, "land", b),
     });
   },
   integrate: (p, s, body) => onVerdict(s, body as IntegrateBody, {
@@ -99,8 +108,8 @@ const onOk: { [P in Position]?: OnOk } = {
   failure: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      fix_forward: () => enterStep(p, s, "implement", feedback(b)),
-      accept: () => enterClose(p, { ...s, reason: b.comment ?? null }, "accepted_with_failure"),
+      fix_forward: () => forward(p, s, "failure", b),
+      accept: () => enterClose(p, { ...s, reason: reasonOf("failure", b) ?? null }, "accepted_with_failure"),
     });
   },
   close: (p, s) => enterStep(p, s, "teardown"),
@@ -109,7 +118,7 @@ const onOk: { [P in Position]?: OnOk } = {
     const node = present(s, "blockedAt");
     return branch(s, b.answer, {
       retry: () => reissue({ ...s, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd")),
-      stop: () => abandon(p, s, "abandoned", b.comment ?? `stopped at blocked ${node}`),
+      stop: () => abandon(p, s, "abandoned", reasonOf("blocked", b) ?? `stopped at blocked ${node}`),
     });
   },
   teardown: (_, s) => enterClosed(s),
