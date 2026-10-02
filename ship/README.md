@@ -10,6 +10,7 @@ around it loads and saves state and runs one executable adapter per port.
 - Terms: [`CONTEXT.md`](CONTEXT.md)
 - Draining the tracker one Delivery at a time (environment loop around `ship next`): [`docs/queue.md`](docs/queue.md)
 - Judging a step's real output (dev/debugging tool, not part of the shipped runtime): [`docs/judge.md`](docs/judge.md)
+- Setting up ship in another repo (writes both config layers): [Set up ship in another repo](#set-up-ship-in-another-repo)
 
 ## Install
 
@@ -71,6 +72,64 @@ a profile `env` value:
 | `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
 | `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
+
+## Set up ship in another repo
+
+Run from anywhere inside the target git repo:
+
+```bash
+bun /abs/path/harlo/ship/env/setup.ts           # asks; [enter] accepts each default
+bun /abs/path/harlo/ship/env/setup.ts --yes     # every default, no prompts
+```
+
+**It asks**, each as a numbered list with the default marked:
+
+| Prompt | Default |
+|---|---|
+| Project id | the repo's directory name |
+| Tracker | `github` if `origin` is on GitHub, else `md`; or own path |
+| GitHub: repo, project number, project owner, ready status, status labels | `origin`'s `owner/name`; no project (label mode); repo owner; `Todo` (project) / `ready` (labels); `in_progress,done` (labels) |
+| md: tracker dir | `~/.local/state/ship/<projectId>/tracker` (created) |
+| Workspace, Define, Implement, Check, Integrate, Deploy, Verify, Principal, State | the one fully implemented adapter; or own path |
+| Main line | the current branch; or an existing local branch; or a new one (created from HEAD) |
+| Worktrees root | `<git root>/.ship/worktrees` (hidden: `bun test` skips it; a non-hidden root inside the repo gets a warning) |
+| State dir | `~/.local/state/ship/<projectId>/state` (created) |
+
+Only adapters that implement every op of their port are listed (Jira is not, yet).
+"Own path" takes an argv, split on whitespace.
+
+**It writes**:
+
+- `<git root>/ship.config.json`: all eight project ports, Integrate `--root` = the git root, and a policy that
+  moves a picked item to in progress (`In Progress` / `in_progress`), done on delivery, a comment on every stop.
+- `~/.config/ship/<projectId>.json`: tty Principal, file State, `USER` for the Claude steps.
+- `.ship/` as a line in the repo's `info/exclude` (once).
+
+It refuses to overwrite either file without `--force` (exit 1, nothing written), then loads both
+with `ship status` (exit 2 if ship rejects them).
+
+| Flag | Sets |
+|---|---|
+| `--yes` | the default for every value not given as a flag |
+| `--force` | overwrite existing config files |
+| `--project-id <id>` | Project id |
+| `--tracker github\|md\|path:<argv>` | Tracker |
+| `--repo`, `--project`, `--project-owner`, `--ready-label`, `--status-labels` | the GitHub tracker's flags of the same name |
+| `--tracker-dir <dir>` | md tracker dir |
+| `--main current\|<existing>\|new:<name>` | Main line (workspace `--main`) |
+| `--worktrees <dir>` | Worktrees root (workspace `--root`) |
+| `--state-dir <dir>` | State dir |
+| `--<port> <adapter>\|path:<argv>` | any other port, e.g. `--define path:my-agent --fast` |
+| `--help` | usage |
+
+A value given as a flag is never asked. Last, it prints the queue command to run from the git root:
+
+```bash
+bun <ship>/env/queue.ts --ship <ship>/bin/ship --interval 30000 --state bun <ship>/src/adapters/state/files.ts --dir <state dir>
+```
+
+The tty Principal reads `/dev/tty`: run the queue in a real terminal.
+A new Main line is not checked out: Integrate lands onto the branch checked out in the git root, so check it out there first.
 
 ## CLI
 

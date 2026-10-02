@@ -9,3 +9,4 @@
 ## Dev tools
 
 - `env/judge.ts` renders a Delivery's real journal (input/output/reasoning per step-call) for a human judging step-output quality. It's a development/debugging tool, not part of the shipped runtime — `ship` never invokes it. See [`docs/judge.md`](docs/judge.md).
+- `env/setup.ts` writes a repo's `ship.config.json` and its machine config `~/.config/ship/<projectId>.json`, then loads them with `bin/ship status`; `ship` never invokes it. Environment code: never import `src/core` or `src/runner` (`src/contracts` is fine). Its `ADAPTERS` registry lists only adapters that implement every op of their port; add one when it is completed (e.g. jira after pehota/harlo#43). An agent setting up a repo runs it non-interactively: `bun <ship>/env/setup.ts --yes [flags]`. See [`README.md`](README.md#set-up-ship-in-another-repo).
