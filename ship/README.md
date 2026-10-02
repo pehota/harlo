@@ -8,6 +8,7 @@ around it loads and saves state and runs one executable adapter per port.
 - Writing an adapter: [`docs/adapters.md`](docs/adapters.md)
 - Dogfood data layout, backup and recovery: [`docs/dogfood.md`](docs/dogfood.md)
 - Terms: [`CONTEXT.md`](CONTEXT.md)
+- Draining the tracker one Delivery at a time (environment loop around `ship next`): [`docs/queue.md`](docs/queue.md)
 - Judging a step's real output (dev/debugging tool, not part of the shipped runtime): [`docs/judge.md`](docs/judge.md)
 
 ## Install
@@ -36,7 +37,8 @@ Two layers with disjoint keys. Each layer's schema rejects the other's keys.
 - **Machine ports:** `principal`, `state`.
 - **`policy`:** only `policy.tracker.outcomes` is required. It must give a
   `status` for `delivered` and `accepted_with_failure` (Close awaits it), and
-  map every stop outcome in `policy.outcomes`.
+  map every stop outcome in `policy.outcomes` with `"comment": true` (a stop's
+  reason is kept as a tracker comment).
 
 | `policy` key | Default |
 |---|---|
@@ -137,7 +139,7 @@ cat > ship.config.json <<EOF
                 "check": $fake, "integrate": $fake, "deploy": $fake, "verify": $fake },
   "policy": { "tracker": { "outcomes": {
     "delivered": { "status": "done" }, "accepted_with_failure": { "status": "done" },
-    "rolled_back": { "status": "reopened" }, "abandoned": { "comment": true } } } } }
+    "rolled_back": { "status": "reopened", "comment": true }, "abandoned": { "comment": true } } } } }
 EOF
 cat > machine.json <<EOF
 { "principal": $fake,

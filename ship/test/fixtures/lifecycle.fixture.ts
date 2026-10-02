@@ -1,7 +1,7 @@
 // Test data for test/e2e/lifecycle.test.ts and terminal-principal.test.ts: a project whose every port is the
 // scripted fake adapter except State (the real file adapter) and, when asked, the Principal (the real tty
 // adapter), plus readers that go through the adapters, never around them.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerStdin } from "../../src/contracts/common";
@@ -14,6 +14,7 @@ const BIN = join(ROOT, "bin", "ship");
 const FAKE = join(ROOT, "src", "adapters", "fake.ts");
 const STATE = join(ROOT, "src", "adapters", "state", "files.ts");
 const TTY = join(ROOT, "src", "adapters", "principal", "tty.ts");
+const MD = join(ROOT, "src", "adapters", "tracker", "md.ts");
 
 export const D = "k-1"; // every scenario runs WorkItem `k`, so its first Delivery
 
@@ -43,7 +44,7 @@ const POLICY = {
   tracker: {
     outcomes: {
       delivered: { status: "done" }, accepted_with_failure: { status: "done-with-failure" },
-      rolled_back: { status: "reopened" }, abandoned: { comment: true },
+      rolled_back: { status: "reopened", comment: true }, abandoned: { comment: true },
     },
   },
 };
@@ -58,22 +59,30 @@ export type Logged = RunnerStdin;
  * Unscripted awaited calls (every Principal decide/ask) print `accepted`: the test answers with `ship signal`.
  * `principal: "tty"` puts the real tty Principal on that port instead, blocking on /dev/tty: drive it with
  * `shipPty()`, which answers gates inline via a real pty as they appear, in the same `ship` invocation.
+ * `items` (key → frontmatter status) puts the real md Tracker on the tracker port instead, one `<key>.md` each
+ * in `trackerDir`, so `ship next` and the tracker's status/comment writes are real.
  */
 export const lifecycle = (
   replies: Record<string, unknown>, policy: Record<string, unknown> = {},
-  { principal = "fake" }: { principal?: "fake" | "tty" } = {},
+  { principal = "fake", items }: { principal?: "fake" | "tty"; items?: Record<string, string> } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "ship-e2e-"));
   const stateDir = join(dir, "state");
   const script = join(dir, "script.json");
   const machinePath = join(dir, "machine.json");
   const fake = ["bun", FAKE, "--script", script];
+  const trackerDir = join(dir, "tracker");
+  mkdirSync(trackerDir);
+  for (const [key, status] of Object.entries(items ?? {})) {
+    writeFileSync(join(trackerDir, `${key}.md`), `---\nstatus: ${status}\ntitle: Item ${key}\n---\nDo ${key}.\n`);
+  }
 
   const scriptReplies = { "tracker.read": workItem(), "tracker.update": ok(), "workspace.teardown": ok(), ...replies };
   writeFileSync(script, JSON.stringify({ replies: scriptReplies }));
   const adapters = Object.fromEntries(
     ["tracker", "workspace", "define", "implement", "check", "integrate", "deploy", "verify"].map((port) => [port, fake]),
   );
+  if (items) adapters.tracker = ["bun", MD, "--dir", trackerDir];
   writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "e2e", adapters, policy: { ...POLICY, ...policy } }));
   const principalArgv = principal === "tty" ? ["bun", TTY] : fake;
   writeFileSync(machinePath, JSON.stringify({ principal: principalArgv, state: ["bun", STATE, "--dir", stateDir] }));
@@ -129,7 +138,7 @@ export const lifecycle = (
   // The State adapter's own spawn argv, exactly as the machine config's `state` entry: for env scripts
   // (poll/stalled.ts, drive.ts) that take `--state <state-adapter argv…>` directly rather than reading config.
   const stateArgv = ["bun", STATE, "--dir", stateDir];
-  return { ship, shipPty, bash, journal, snapshot, log, rescript, cleanup, stateArgv };
+  return { ship, shipPty, bash, journal, snapshot, log, rescript, cleanup, stateArgv, dir, trackerDir };
 };
 
 const RUNNER_KINDS = new Set(["sent", "accepted", "adapter_error"]);

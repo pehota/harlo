@@ -10,9 +10,8 @@
 // happens to reach a gate will itself block right there until a human types a reply at that same terminal —
 // this loop simply pauses mid-pass while that happens, then continues once the call returns.
 //
-// A Delivery is terminal once `at` is "closed" or "abandoned" — the same two literals `src/core/types.ts`'s
-// `isTerminal` checks. This is environment code (it must not import `src/core`), so it re-checks those literals
-// locally, matching how the pollers avoid importing runner internals.
+// The per-pass loop itself (pollers, `ship status`, terminal check) lives in `env/drive-loop.ts`, shared with
+// `env/queue.ts`; this file is its CLI: argv, resolving the Delivery, exit 0 once it is terminal.
 //
 // argv: --ship <path to bin/ship> (--key <workItem-key> | --delivery <id>) [--interval <ms>]
 //       [--grace <ms>] [--max-runtime <ms>] --state <state-adapter argv…>
@@ -21,16 +20,10 @@
 //   state adapter's own spawn argv, exactly as the machine config's `state` entry does. `--grace`/`--max-runtime`
 //   are forwarded to `poll/stalled.ts` only when given (it supplies its own defaults otherwise). `--interval`
 //   defaults to 5000ms.
-import { join } from "node:path";
 import type { DeliveryId } from "../src/contracts/common";
+import { driveDelivery, runShip } from "./drive-loop";
 
 const DEFAULT_INTERVAL_MS = 5000;
-const TERMINAL_POSITIONS = new Set(["closed", "abandoned"]);
-
-const CHANGED = join(import.meta.dir, "poll", "changed.ts");
-const STALLED = join(import.meta.dir, "poll", "stalled.ts");
-
-type StatusBody = { deliveries: { delivery: DeliveryId; at: string; awaiting: string | null }[] };
 
 const parseArgs = (
   args: string[],
@@ -48,24 +41,6 @@ const parseArgs = (
     interval: num("--interval", DEFAULT_INTERVAL_MS), grace: flag("--grace"), maxRuntime: flag("--max-runtime"),
     state,
   };
-};
-
-/** One `ship <args…>` call, run exactly as a person invoking the binary would. */
-const runShip = async (ship: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
-  const proc = Bun.spawn([ship, ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
-};
-
-/** One `bun <args…>` call: the pollers this driver invokes each pass. */
-const runBun = async (args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
-  const proc = Bun.spawn(["bun", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
 };
 
 /** `--delivery` drives it directly; `--key` starts a fresh one. A failed or delivery-less start is fatal. */
@@ -90,32 +65,9 @@ const main = async (): Promise<void> => {
   }
 
   const delivery = await resolveDelivery(ship, key, deliveryArg);
-
-  for (;;) {
-    await runBun([CHANGED, "--ship", ship]); // covers every open Delivery, not just this one
-
-    const stalledArgs = [
-      STALLED, "--ship", ship,
-      ...(grace !== undefined ? ["--grace", grace] : []),
-      ...(maxRuntime !== undefined ? ["--max-runtime", maxRuntime] : []),
-      "--state", ...state,
-    ];
-    const stalled = await runBun(stalledArgs);
-    if (stalled.stdout) process.stdout.write(stalled.stdout); // stall flags: for a human watching
-
-    const status = await runShip(ship, ["status", delivery]);
-    if (status.exitCode !== 0) throw new Error(`ship status ${delivery}: exit ${status.exitCode}\n${status.stderr}`);
-    const { deliveries } = JSON.parse(status.stdout) as StatusBody;
-    const [current] = deliveries; // exactly one: we asked for a specific delivery
-    if (!current) throw new Error(`ship status ${delivery}: no Delivery returned`);
-
-    console.log(`${current.delivery} at=${current.at} awaiting=${current.awaiting}`);
-    if (TERMINAL_POSITIONS.has(current.at)) {
-      console.log(`${current.delivery}: done at=${current.at}`);
-      process.exit(0);
-    }
-    await Bun.sleep(interval);
-  }
+  const at = await driveDelivery({ ship, delivery, interval, grace, maxRuntime, state });
+  console.log(`${delivery}: done at=${at}`);
+  process.exit(0);
 };
 
 await main();

@@ -41,7 +41,7 @@ Legend:
   - crash recovery and rollback
   - scheduling `next` and running several Deliveries in parallel
 
-  ship ships no daemon.
+  ship ships no daemon. `env/queue.ts` (M1.14) is an environment harness for scheduling `next`, one Delivery at a time; it is not part of `ship` itself, and parallel Deliveries stay out (pehota/harlo#50).
 - **Rollback after Close.** Signals on Closed are ignored.
 - **Repo mode for the md tracker** (committing the task file to the main line). External-path mode only.
 - **Emitted `.json` schema files, a linter beyond `tsc --noEmit`, a DB State adapter, journal replay.**
@@ -363,7 +363,7 @@ transition(p: Policy, s: Snapshot, sig: Signal): { state: Snapshot; commands: Co
 - The two layers have disjoint keys. Each schema rejects the other layer's keys.
 - An undeclared `$secrets.X` is a config error.
 - `policy.tracker.outcomes` must give a `status` for `delivered` and `accepted_with_failure`, because Close awaits it.
-- Every entry in `policy.outcomes` must have a `policy.tracker.outcomes` mapping.
+- Every entry in `policy.outcomes` must have a `policy.tracker.outcomes` mapping, with `comment: true`: a stop's reason must at least be kept as a tracker comment for inspection.
 
 ---
 
@@ -820,6 +820,11 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Test: `env/drive.test.ts` drives `env/drive.ts` as a real subprocess against `bin/ship` (scripted fake adapters, real file State), started via `--key` with a short `--interval`; while it loops, the test answers each gate with `ship signal` as a human would, and asserts the driver's own stdout shows several passes (not one shot) before it exits 0 on `closed`. A second case starts the Delivery itself and drives it via `--delivery`, asserting no extra `ship start` call and that termination is still detected. Both assert the journal holds only the test's own `result` signals — the driver never calls `ship signal`.
   - Impl: `env/drive.ts` — resolves the target Delivery (`ship start <key>`, or `--delivery` directly), then loops: `poll/changed.ts`, `poll/stalled.ts` (echoing its flags), `ship status <delivery>` (one progress line), sleeping `--interval` until `at` is `closed`/`abandoned`, then exits 0.
   - Done when green: it is the "cron or loop" harness plan.md §7 leaves to the environment.
+  - The per-pass loop now lives in `env/drive-loop.ts` (`driveDelivery`), shared with M1.14; `env/drive.ts` is its CLI.
+- [x] **M1.14 Queue loop.**
+  - Test: `env/queue.test.ts` runs `env/queue.ts` as a real subprocess against `bin/ship` (real md Tracker, real file State, scripted fakes elsewhere) while a background loop in the test answers or stops each gate as a human would. Cases: two `ready` items both reach `closed`, exit 0, `ship next` then returns `delivery: null` and the lock is gone; an item abandoned at a gate is passed over and the next one still closes; a lockfile already present gives exit 2 naming it, nothing started, the lock untouched; an already-open Delivery is driven before the first `ship next`; an item that stays `ready` after its Delivery ends gets its second Delivery stopped (`abandoned`, reason in the tracker comment) and exit 3.
+  - Impl: `env/queue.ts` — takes an exclusive lockfile (`--lock`, default `.ship-queue.lock`, removed on every exit path), drives every open Delivery from `ship status` to terminal, then loops `ship next` → `driveDelivery` until `delivery: null` (exit 0). A key picked twice in one run → `ship stop <D> abandoned "<key> still ready…"`, exit 3. A failing `ship next`/`ship status` → exit 1. No `--concurrency` (discovery issue pehota/harlo#50). See `docs/queue.md`.
+  - Done when green.
 
 ### M2 — Home setup complete
 
@@ -897,6 +902,7 @@ The Runner starts no listeners. The environment must provide what follows.
   - On exit 3, it resubmits the signals in `unapplied`.
 - **Coding agent:** the CLI installed and authenticated (subscription login or an API key in the capability env). **[unverified]** headless and structured-output behaviour, pending spike M1.8.
 - **Change detection:** a cron or loop running `env/poll/changed.ts`.
+- **Scheduling `ship next`:** still the environment's job — ship never picks work on its own. `env/queue.ts` (M1.14, `docs/queue.md`) is the environment harness that does it: it drains the tracker one Delivery at a time, running both pollers each pass via `env/drive-loop.ts`.
 - **Stall detection:** a cron or loop running `env/poll/stalled.ts` on the Runner's host, with its alert wired to a person, and its own config giving the grace period and `maxRuntime` per port.
 
 ### Home

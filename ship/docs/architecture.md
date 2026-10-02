@@ -258,13 +258,14 @@ stateDiagram-v2
 - **Outcome.** Outcomes the core reaches on its own path are derived from it
   (Verify pass → `delivered`; Failure gate accept → `accepted_with_failure`).
   Outcomes decided outside arrive typed in `stop{outcome}`. The Tracker is
-  updated per outcome from config:
+  updated per outcome from config. A stop outcome must comment (config rule):
+  its reason is kept on the WorkItem for inspection.
 
 | Outcome | Tracker (example config) |
 |---|---|
 | `delivered` | WorkItem → Done |
 | `accepted_with_failure` | Done + comment |
-| `rolled_back` | WorkItem reopened |
+| `rolled_back` | WorkItem reopened + comment with reason |
 | `abandoned` | unchanged + comment with reason |
 
 ### Edge cases
