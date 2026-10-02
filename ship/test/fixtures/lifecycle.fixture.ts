@@ -31,7 +31,7 @@ export const failed = (info: string) => ({ status: "failed", info });
 
 /** Every step succeeds at once: Define → Accept → … → Land → … → Closed, with only the gates awaited. */
 export const HAPPY = {
-  "workspace.setup": ok({ path: "/ws/k-1" }), "define.run": [defined], "implement.run": [implemented("c1")],
+  "workspace.setup": ok({ path: "/ws/k-1", base: "trunk" }), "define.run": [defined], "implement.run": [implemented("c1")],
   "check.run": [verdict("pass")], "integrate.run": [verdict("landed")], "deploy.run": [verdict("live")],
   "verify.run": [verdict("pass")],
 };

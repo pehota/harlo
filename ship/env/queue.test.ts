@@ -19,7 +19,7 @@ afterAll(() => {
 
 /** Every step succeeds on every call (single replies, not lists), so any number of Deliveries run through. */
 const EVERY_STEP_OK = {
-  "workspace.setup": ok({ path: "/ws" }), "define.run": defined, "implement.run": implemented("c1"),
+  "workspace.setup": ok({ path: "/ws", base: "trunk" }), "define.run": defined, "implement.run": implemented("c1"),
   "check.run": verdict("pass"), "integrate.run": verdict("landed"), "deploy.run": verdict("live"),
   "verify.run": verdict("pass"),
 };

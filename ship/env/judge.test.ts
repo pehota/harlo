@@ -71,7 +71,7 @@ describe("env/judge", () => {
     const changeset = `ship/${D}@${ws.sha}`;
 
     const p = project({
-      "workspace.setup": { status: "ok", body: { path: "/ws/whatever" } },
+      "workspace.setup": { status: "ok", body: { path: "/ws/whatever", base: "trunk" } },
       "define.run": [
         okE({ criteria: ["c1"], runbook: ["r1"] }, "reasoning-define-1"),
         okE({ criteria: ["c2"], runbook: ["r2"] }, "reasoning-define-2"),
@@ -108,7 +108,7 @@ describe("env/judge", () => {
     // define-1 and define-2 are both present, distinctly, each with its own input/output/reasoning.
     const define1 = out.slice(out.indexOf(`=== ${D}/define-1 ===`), out.indexOf(`=== ${D}/define-2 ===`));
     const define2 = out.slice(out.indexOf(`=== ${D}/define-2 ===`), out.indexOf(`=== ${D}/accept-2 ===`));
-    expect(define1).toContain("-- INPUT --\n{}");
+    expect(define1).toContain("-- INPUT --\n{\n  \"base\": \"trunk\"\n}");
     expect(define1).toContain("Criteria:\n  - c1");
     expect(define1).toContain("Runbook:\n  - r1");
     expect(define1).toContain("-- REASONING --\nreasoning: reasoning-define-1");
@@ -141,7 +141,7 @@ describe("env/judge", () => {
 
   test("no --root: implement's changeset is shown without attempting `git show`", async () => {
     const p = project({
-      "workspace.setup": { status: "ok", body: { path: "/ws/whatever" } },
+      "workspace.setup": { status: "ok", body: { path: "/ws/whatever", base: "trunk" } },
       "define.run": [{ status: "ok", body: { criteria: ["c"], runbook: ["r"] } }],
       "implement.run": [{ status: "ok", body: { changeset: `ship/${D}@deadbeef` } }],
       "check.run": [{ status: "ok", body: { verdict: "pass" } }],

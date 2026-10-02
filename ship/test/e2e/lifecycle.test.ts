@@ -91,8 +91,8 @@ describe("lifecycle on fakes", () => {
       ...TO_ACCEPT.calls,
       "implement.run implement-1", "check.run check-1", "implement.run implement-2", "check.run check-2", "principal.decide land-1",
     ]);
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ criteria, findings });
-    expect(payloadOf(p.log(), "check-2")).toEqual({ criteria, changeset: "c2" });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings });
+    expect(payloadOf(p.log(), "check-2")).toEqual({ base: "trunk", criteria, changeset: "c2" });
   }, TIMEOUT);
 
   test.concurrent("N fix rounds reach Decision; keep_going resets the rounds", async () => {
@@ -135,8 +135,8 @@ describe("lifecycle on fakes", () => {
       ...TO_ACCEPT.calls, ...TO_LAND.calls,
       "implement.run implement-2", "check.run check-2", "principal.decide land-2", "define.run define-2", "principal.decide accept-2",
     ]);
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ criteria, findings: [], feedback: "shorter greeting" });
-    expect(payloadOf(p.log(), "define-2")).toEqual({ feedback: "split off the farewell" });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings: [], feedback: "shorter greeting" });
+    expect(payloadOf(p.log(), "define-2")).toEqual({ base: "trunk", feedback: "split off the farewell" });
   }, TIMEOUT);
 
   // harlo-38: a comment on keep_going / fix_forward reaches Implement verbatim, and Implement's answer to it
@@ -165,7 +165,7 @@ describe("lifecycle on fakes", () => {
     await start(p, "accept-1");
     await signal(p, "accept-1", answer("accept"), "decision-1");
     await signal(p, "decision-1", answer("keep_going", directive), "land-1");
-    expect(payloadOf(p.log(), "implement-3")).toEqual({ criteria, findings, feedback: directive });
+    expect(payloadOf(p.log(), "implement-3")).toEqual({ base: "trunk", criteria, findings, feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-3");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c3", feedback: applied });
@@ -182,7 +182,7 @@ describe("lifecycle on fakes", () => {
     await toLand(p);
     await signal(p, "land-1", answer("approve"), "failure-1");
     await signal(p, "failure-1", answer("fix_forward", directive), "land-2");
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ criteria, findings: [], feedback: directive });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings: [], feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-2");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c1", feedback: declined });
@@ -193,7 +193,7 @@ describe("lifecycle on fakes", () => {
     const p = project({ ...HAPPY, "implement.run": [ok({ changeset: "c1", feedback: applied })] });
     await start(p, "accept-1");
     await signal(p, "accept-1", answer("accept", directive), "land-1");
-    expect(payloadOf(p.log(), "implement-1")).toEqual({ criteria, findings: [], feedback: directive });
+    expect(payloadOf(p.log(), "implement-1")).toEqual({ base: "trunk", criteria, findings: [], feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-1");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c1", feedback: applied });
@@ -211,7 +211,7 @@ describe("lifecycle on fakes", () => {
       "principal.decide accept-1",
     ]);
     expect(payloadOf(p.log(), "ask-1")).toMatchObject({ prompt: "Greet in which language?", min: "person" });
-    expect(payloadOf(p.log(), "define-2")).toEqual({ answer: "English" });
+    expect(payloadOf(p.log(), "define-2")).toEqual({ base: "trunk", answer: "English" });
   }, TIMEOUT);
 
   test.concurrent("an integrate conflict: resolved re-runs Integrate; rework goes back to Implement", async () => {
@@ -239,7 +239,7 @@ describe("lifecycle on fakes", () => {
   }, TIMEOUT);
 
   test.concurrent("failed past the retry cap → Blocked; retry re-runs the failed command", async () => {
-    const p = project({ ...HAPPY, "workspace.setup": [failed("disk full"), failed("disk full"), ok({ path: "/ws/k-1" })] });
+    const p = project({ ...HAPPY, "workspace.setup": [failed("disk full"), failed("disk full"), ok({ path: "/ws/k-1", base: "trunk" })] });
     await start(p, "blocked-1");
     expect((await p.snapshot())).toMatchObject({ at: "blocked", blockedAt: "setup" });
     await signal(p, "blocked-1", answer("retry"), "accept-1");

@@ -10,13 +10,14 @@ import type { Snapshot } from "../core/types";
 import { snapshotSchema, timedEntrySchema, type TimedEntry } from "./snapshot";
 
 // ── Step ports (op `run`) ──
-export type DefinePayload = { feedback?: string; answer?: string };
+// base: the main-line branch the Delivery branched off (SetupBody.base); absent only for a Delivery set up before it.
+export type DefinePayload = { base?: string; feedback?: string; answer?: string };
 export type DefineBody = { criteria: string[]; runbook: string[] };
-export type ImplementPayload = { criteria: string[]; findings: Finding[]; feedback?: string; answer?: string };
+export type ImplementPayload = { base?: string; criteria: string[]; findings: Finding[]; feedback?: string; answer?: string };
 /** `feedback` is present exactly when the payload carried `feedback`: what the agent did with the Principal's comment. */
 export type ImplementFeedback = { outcome: "applied" | "declined"; reason: string };
 export type ImplementBody = { changeset: string; feedback?: ImplementFeedback }; // changeset: opaque ref
-export type CheckPayload = { criteria: string[]; changeset: string; answer?: string };
+export type CheckPayload = { base?: string; criteria: string[]; changeset: string; answer?: string };
 export type CheckBody =
   | { verdict: "pass" }
   | { verdict: "fix"; findings: Finding[] }
@@ -30,7 +31,7 @@ export type VerifyBody = { verdict: "pass" } | { verdict: "fail"; findings: Find
 
 // ── Service ports ──
 export type Empty = Record<string, never>;
-export type SetupBody = { path: string };
+export type SetupBody = { path: string; base: string }; // base: the main-line branch `ship/<delivery>` branched off
 export type TeardownPayload = { path: string };
 export type TrackerUpdatePayload = { status: string }; // opaque, from config
 export type TrackerCommentPayload = { text: string };
@@ -78,13 +79,13 @@ const answer = { type: "string", nullable: true } as const;
 const emptySchema: JSONSchemaType<Empty> = { type: "object", properties: {}, required: [], additionalProperties: false };
 
 const definePayload: JSONSchemaType<DefinePayload> = { type: "object", additionalProperties: false,
-  properties: { feedback: answer, answer }, required: [],
+  properties: { base: answer, feedback: answer, answer }, required: [],
 };
 const defineBody: JSONSchemaType<DefineBody> = { type: "object", additionalProperties: false,
   properties: { criteria: stringsSchema, runbook: stringsSchema }, required: ["criteria", "runbook"],
 };
 const implementPayload: JSONSchemaType<ImplementPayload> = { type: "object", additionalProperties: false,
-  properties: { criteria: stringsSchema, findings: findingsSchema, feedback: answer, answer },
+  properties: { base: answer, criteria: stringsSchema, findings: findingsSchema, feedback: answer, answer },
   required: ["criteria", "findings"],
 };
 const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additionalProperties: false,
@@ -98,7 +99,7 @@ const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additiona
   required: ["changeset"],
 };
 const checkPayload: JSONSchemaType<CheckPayload> = { type: "object", additionalProperties: false,
-  properties: { criteria: stringsSchema, changeset: str, answer }, required: ["criteria", "changeset"],
+  properties: { base: answer, criteria: stringsSchema, changeset: str, answer }, required: ["criteria", "changeset"],
 };
 const checkBody: JSONSchemaType<CheckBody> = {
   oneOf: [
@@ -142,7 +143,9 @@ const verifyBody: JSONSchemaType<VerifyBody> = {
   ],
 };
 
-const setupBody: JSONSchemaType<SetupBody> = { type: "object", additionalProperties: false, properties: { path: str }, required: ["path"] };
+const setupBody: JSONSchemaType<SetupBody> = { type: "object", additionalProperties: false,
+  properties: { path: str, base: str }, required: ["path", "base"],
+};
 const teardownPayload: JSONSchemaType<TeardownPayload> = { type: "object", additionalProperties: false, properties: { path: str }, required: ["path"] };
 const trackerUpdatePayload: JSONSchemaType<TrackerUpdatePayload> = { type: "object", additionalProperties: false, properties: { status: str }, required: ["status"] };
 const textPayload: JSONSchemaType<TrackerCommentPayload> = { type: "object", additionalProperties: false, properties: { text: str }, required: ["text"] };

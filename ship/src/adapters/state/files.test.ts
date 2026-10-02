@@ -64,6 +64,12 @@ const saved = ok({ saved: true });
 const s1 = snap("PROJ-1-1", "PROJ-1");
 const s2 = snap("PROJ-1-1", "PROJ-1", { at: "check" });
 const s10 = snap("PROJ-1-1", "PROJ-1", { at: "land" });
+const based = snap("PROJ-1-1", "PROJ-1", { base: "dogfood" });
+const setupDone: TimedEntry = {
+  delivery: "PROJ-1-1",
+  signal: { kind: "result", id: "PROJ-1-1/setup-1", result: { status: "ok", body: { path: "/ws/PROJ-1-1", base: "dogfood" } } },
+  from: "setup", to: "define", issued: ["PROJ-1-1/define-1"], time: "2026-09-28T12:00:00.000Z",
+};
 const [a, b, c, d] = ["a", "b", "c", "d"].map((info) => entry("PROJ-1-1", info)) as [TimedEntry, TimedEntry, TimedEntry, TimedEntry];
 
 type Row = {
@@ -89,6 +95,22 @@ const rows: Row[] = [
       { call: save("PROJ-1-1", 1, s1, [a]), expect: saved },
       { call: load("PROJ-1-1"), expect: ok({ version: 1, state: s1 }) },
     ],
+  },
+  {
+    name: "a Snapshot's main-line base and the setup result carrying it survive save, load and journal (harlo-52)",
+    steps: [
+      { call: save("PROJ-1-1", 1, based, [setupDone]), expect: saved },
+      { call: load("PROJ-1-1"), expect: ok({ version: 1, state: based }) },
+      { call: journal("PROJ-1-1"), expect: ok({ entries: [setupDone] }) },
+    ],
+  },
+  {
+    name: "a Snapshot persisted before harlo-52, with no base, still loads",
+    seed: (dir) => {
+      mkdirSync(join(dir, "PROJ-1-1"), { recursive: true });
+      writeFileSync(join(dir, "PROJ-1-1", "1.json"), JSON.stringify({ state: s1, entries: [] }));
+    },
+    steps: [{ call: load("PROJ-1-1"), expect: ok({ version: 1, state: s1 }) }],
   },
   {
     name: "load of an unknown Delivery is version 0, state null",

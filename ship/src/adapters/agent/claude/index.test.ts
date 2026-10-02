@@ -708,6 +708,68 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
   });
 });
 
+describe("agent-claude adapter: the main-line branch, never an assumed one (harlo-52)", () => {
+  const MAIN_AS_BRANCH = /\bmain\b(?!-line)/; // "main-line checkout" wording stays allowed
+
+  /** The five prompt variants — define fresh/resumed, implement fresh/resumed, check — for payloads with `base`. */
+  const prompts = async (base: string | undefined): Promise<Record<string, string>> => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const on = base === undefined ? {} : { base };
+    const defineReplies = repliesFile(tempDir("ship-agent-fx-"), {
+      is_error: false, result: "…", session_id: "sess-def", structured_output: { criteria: ["c"], runbook: ["r"] },
+    });
+    await call({ port: "define", op: "run", payload: { ...on } satisfies DefinePayload, home, workspace: ws, agentReplies: defineReplies, log });
+    await call({
+      port: "define", op: "run", payload: { ...on, answer: "yes" } satisfies DefinePayload, home, workspace: ws, agentReplies: defineReplies, log,
+    });
+    const implementReplies = repliesFile(tempDir("ship-agent-fx-"), { is_error: false, result: "r", commit: true, session_id: "sess-impl" });
+    await call({
+      port: "implement", op: "run", payload: { ...on, criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies: implementReplies, log,
+    });
+    await call({
+      port: "implement", op: "run", payload: { ...on, criteria: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies: implementReplies, log,
+    });
+    const checkReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    await call({ port: "check", op: "run", payload: { ...on, ...checkPayload(ws) }, home, workspace: ws, agentReplies: checkReplies, log });
+    const argvs = readLog(log);
+    expect(argvs).toHaveLength(5);
+    expect(argvs[1]).toContain("--resume");
+    expect(argvs[3]).toContain("--resume");
+    const [defineFresh, defineResumed, implementFresh, implementResumed, check] = argvs.map(promptOf);
+    return { defineFresh: defineFresh!, defineResumed: defineResumed!, implementFresh: implementFresh!, implementResumed: implementResumed!, check: check! };
+  };
+
+  test("with base dogfood every prompt names it, the three-dot diff against it, and never `main` as a branch", async () => {
+    for (const [variant, prompt] of Object.entries(await prompts("dogfood"))) {
+      expect({ variant, named: prompt.includes("Main-line branch: dogfood") }).toEqual({ variant, named: true });
+      expect({ variant, diff: prompt.includes("`git diff dogfood...HEAD`") }).toEqual({ variant, diff: true });
+      expect({ variant, main: prompt.match(MAIN_AS_BRANCH)?.[0] }).toEqual({ variant, main: undefined });
+    }
+  });
+
+  test("define requires <base>...HEAD in its criteria and runbook, fresh and resumed; check judges scope by it", async () => {
+    const { defineFresh, defineResumed, check } = await prompts("dogfood");
+    for (const prompt of [defineFresh, defineResumed]) {
+      expect(prompt).toContain("Any diff or scope command in the criteria and runbook must use `git diff dogfood...HEAD`");
+      expect(prompt).toContain("never a two-dot diff against dogfood");
+    }
+    expect(check).toContain("Judge scope by `git diff dogfood...HEAD` only");
+    expect(check).toContain("commits on dogfood that are not on ship/PROJ-1-1 are not part of this changeset");
+  });
+
+  test("a legacy payload with no base falls back to generic wording, still never naming `main`", async () => {
+    for (const [variant, prompt] of Object.entries(await prompts(undefined))) {
+      expect({ variant, generic: prompt.includes("the main-line branch") }).toEqual({ variant, generic: true });
+      expect({ variant, main: prompt.match(MAIN_AS_BRANCH)?.[0] }).toEqual({ variant, main: undefined });
+    }
+  });
+});
+
 describe("agent-claude adapter: cancel", () => {
   test.each(["define", "implement", "check"] as const)("%s cancel is a no-op ok{}", async (port) => {
     const home = tempDir("ship-agent-home-");

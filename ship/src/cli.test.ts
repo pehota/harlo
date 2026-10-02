@@ -156,7 +156,7 @@ describe("ship signal", () => {
   test("results chain to a gate; an answer outside the options reaches the core (exit 0, invalid_answer)", async () => {
     const p = project();
     await p.ship("start", "k");
-    expect((await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1" }))).out).toMatchObject({ awaiting: "k-1/define-1" });
+    expect((await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }))).out).toMatchObject({ awaiting: "k-1/define-1" });
     const defined = await p.ship("signal", "k-1", "k-1/define-1", ok({ criteria: ["greets"], runbook: ["greet Ada"] }));
     expect(defined.out).toMatchObject({ awaiting: "k-1/accept-1" });
     const ran = await p.ship("signal", "k-1", "k-1/accept-1", ok({ answer: "maybe", by: "person" }));

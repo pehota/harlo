@@ -59,7 +59,10 @@ const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
 
 /** ok results, by the position they arrive at. Gate answers are ok results of `principal.decide`. */
 const onOk: { [P in Position]?: OnOk } = {
-  setup: (p, s, body) => enterStep(p, { ...s, workspace: (body as SetupBody).path }, "define"),
+  setup: (p, s, body) => {
+    const { path, base } = body as SetupBody;
+    return enterStep(p, { ...s, workspace: path, base }, "define");
+  },
   define: (p, s, body) => {
     const { criteria, runbook } = body as DefineBody;
     return enterGate(p, { ...s, criteria, runbook }, "accept");

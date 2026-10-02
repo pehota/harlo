@@ -34,13 +34,13 @@ const setup = async (ctx: Ctx): Promise<SetupBody> => {
   const branch = branchFor(ctx.delivery);
   if (existsSync(path)) {
     const head = await git(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd);
-    if (head.code === 0 && head.out.trim() === branch) return { path }; // already set up: idempotent
+    if (head.code === 0 && head.out.trim() === branch) return { path, base: ctx.main }; // already set up: idempotent
     throw new Error(`path exists and is not the ${branch} worktree: ${path}`);
   }
   mkdirSync(ctx.root, { recursive: true });
   const add = await git(["worktree", "add", path, "-b", branch, ctx.main], ctx.cwd);
   if (add.code !== 0) throw new Error(`git worktree add failed: ${add.err || add.out}`);
-  return { path };
+  return { path, base: ctx.main }; // base: step agents diff against it, never an assumed `main` (harlo-52)
 };
 
 const teardown = async (ctx: Ctx, { path }: TeardownPayload): Promise<Empty> => {

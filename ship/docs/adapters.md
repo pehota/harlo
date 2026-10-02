@@ -91,9 +91,27 @@ Every adapter must accept op `cancel` with payload `{"target": "<command id>"}`.
 - An orphaned target process may be killed by the `(pid, started)` pair from its
   `sent` journal entry, only while the pid's start time still equals `started`.
 
+## `workspace.setup` and the main-line `base`
+
+`ok` body: `{path, base}`. `path` is the Delivery workspace; `base` is the
+main-line branch `ship/<delivery>` was branched off (`workspace/worktree.ts`
+returns its `--main` value, on a fresh and an idempotent re-setup alike). The
+core records `base` in the Delivery's state next to `workspace` and passes it to
+every `define.run`, `implement.run` and `check.run` as `payload.base` (fresh runs
+and feedback/answer/findings re-runs). A Delivery persisted before `base`
+existed has none, and its payloads omit the key.
+
+`agent/claude/index.ts` names the branch in every prompt's workspace rule
+(`Main-line branch: <base>`), and says scope and diffs compare against it with a
+three-dot diff, `git diff <base>...HEAD`, never an assumed default branch name.
+Define must write any diff or scope command in its criteria and runbook that way;
+Check judges scope by it, so commits on the main line that are not on
+`ship/<delivery>` never count as the changeset's files. With no `base` it falls
+back to generic wording ("the main-line branch").
+
 ## `implement.run` and Principal feedback
 
-Payload: `{criteria, findings, feedback?, answer?}`. `feedback` is the Principal's
+Payload: `{base?, criteria, findings, feedback?, answer?}`. `feedback` is the Principal's
 comment, verbatim, from any gate answer that sends the Delivery back to Implement
 with one: Accept `accept`, Land `rework`, Decision `keep_going`, Failure
 `fix_forward`. No comment, no `feedback` key. Which answers carry a comment, and

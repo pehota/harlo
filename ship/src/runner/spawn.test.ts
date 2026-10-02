@@ -38,7 +38,7 @@ const reply = async (spec: AdapterSpec, command: Command = setup): Promise<Reply
 describe("§5.3 table: awaited workspace.setup", () => {
   const rows: { name: string; spec: AdapterSpec; expect: Reply | ((r: Reply) => void) }[] = [
     { name: "ok → that Result", spec: fixture("ok"),
-      expect: { kind: "result", result: { status: "ok", body: { path: "/ws/k-1" } } } },
+      expect: { kind: "result", result: { status: "ok", body: { path: "/ws/k-1", base: "trunk" } } } },
     { name: "accepted → waiting", spec: fixture("accepted"), expect: { kind: "accepted" } },
     { name: "explicit failed → that Result", spec: fixture("failed"),
       expect: { kind: "result", result: { status: "failed", info: "disk full" } } },
@@ -95,7 +95,7 @@ describe("process identity for the `sent` entry", () => {
     expect(spawned.started).not.toBe("");
     expect(spawned.started).toBe(processStartTime(spawned.pid)); // still running: same start time
     writeFileSync(release, "");
-    expect(await spawned.done).toEqual({ kind: "result", result: { status: "ok", body: { path: "/ws/k-1" } } });
+    expect(await spawned.done).toEqual({ kind: "result", result: { status: "ok", body: { path: "/ws/k-1", base: "trunk" } } });
   });
 
   test("a pid that is gone has no start time", async () => {

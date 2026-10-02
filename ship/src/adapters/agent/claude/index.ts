@@ -133,11 +133,27 @@ const mainLineOf = (workspace: string): string | undefined => {
   return real(path) === real(workspace) ? undefined : path;
 };
 
+// ── The main-line branch (harlo-52) ──
+// Found by dogfooding on a repo whose main line is `dogfood`: agents assumed `main`, so Define wrote
+// `git diff main` into criteria and Check counted the main line's own newer commits as the changeset's files.
+// The branch comes from workspace.setup (payload `base`); prompts never name a branch the payload didn't give.
+
+/** The ref to diff against: the payload's `base`, or a placeholder for a Delivery that predates it. */
+const baseRef = (base: string | undefined): string => base ?? "<main-line branch>";
+
+/** The three-dot diff that is this Delivery's changeset: only commits on `ship/<delivery>` since it left the base. */
+const scopeDiff = (base: string | undefined): string => `\`git diff ${baseRef(base)}...HEAD\``;
+
 /** Stated in every prompt, fresh or resumed: a resumed session must get it too, it may predate this rule. */
-const workspaceRule = (workspace: string, mainLine: string | undefined): string[] => [
+const workspaceRule = (workspace: string, mainLine: string | undefined, delivery: string, base: string | undefined): string[] => [
   `Delivery workspace: ${workspace}`,
   `This is the only directory to read, edit, run commands or commit in. Never \`cd\` into any other checkout, ${
     mainLine ? `including the main-line checkout at ${mainLine}` : "including the main-line/integration checkout"}.`,
+  base ? `Main-line branch: ${base}` : `Main-line branch: not recorded; it is the branch ship/${delivery} was created from.`,
+  `This Delivery's branch is ship/${delivery}, branched off ${base ?? "the main-line branch"}. Scope and diffs compare `
+    + `against it with a three-dot diff, ${scopeDiff(base)}; ${base
+      ? "do not assume the main-line branch has any other name."
+      : "find which branch that is rather than assuming a conventional default name."}`,
 ];
 
 type MainLineMark = { path: string; head: string; changes: Set<string> };
@@ -179,16 +195,20 @@ const defineSchema = {
  *  re-enter its confirm-first loop indefinitely instead of proceeding. */
 type DefinePromptArgs = {
   workItem: WorkItem; payload: DefinePayload; resume: boolean; workspace: string; mainLine: string | undefined;
+  delivery: string;
 };
 
-const definePrompt = ({ workItem, payload, resume, workspace, mainLine }: DefinePromptArgs): string => {
+const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery }: DefinePromptArgs): string => {
   const delta: string[] = [];
   if (payload.feedback !== undefined) delta.push(`Feedback from a prior review: ${payload.feedback}`);
   if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
   // harlo-53: Implement and Check follow the runbook literally, so a hard-coded path sends them out of the workspace.
   const rule = [
-    ...workspaceRule(workspace, mainLine),
+    ...workspaceRule(workspace, mainLine, delivery, payload.base),
     "The runbook must run from the Delivery workspace and must not hard-code any other checkout path.",
+    // harlo-52: Implement and Check run these commands as written, so a wrong base or a two-dot diff mis-scopes them.
+    `Any diff or scope command in the criteria and runbook must use ${scopeDiff(payload.base)}: never another branch `
+      + `name, and never a two-dot diff against ${baseRef(payload.base)}.`,
   ].join("\n");
   if (resume) {
     return [rule, ...delta, "Reply now with the criteria/runbook (or question) fields — no further questions."].join("\n\n");
@@ -214,7 +234,7 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const sessionId = delta ? state[stdin.delivery] : undefined;
   const resume = sessionId !== undefined;
   const reply = await callAgent({
-    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine }), schema: defineSchema,
+    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery }), schema: defineSchema,
     resume: sessionId, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
   });
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
@@ -269,10 +289,11 @@ const feedbackDirective = (feedback: string): string[] => [
  *  backfires. A delta can arrive fresh: Define-gate `accept` with a comment is the first Implement (harlo-51). */
 type ImplementPromptArgs = {
   workItem: WorkItem; payload: ImplementPayload; resume: boolean; workspace: string; mainLine: string | undefined;
+  delivery: string;
 };
 
-const implementPrompt = ({ workItem, payload, resume, workspace, mainLine }: ImplementPromptArgs): string => {
-  const rule = workspaceRule(workspace, mainLine);
+const implementPrompt = ({ workItem, payload, resume, workspace, mainLine, delivery }: ImplementPromptArgs): string => {
+  const rule = workspaceRule(workspace, mainLine, delivery, payload.base);
   const delta: string[] = [];
   if (payload.findings.length > 0) {
     delta.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
@@ -320,7 +341,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const state = readState("implement");
   const sessionId = delta ? state[stdin.delivery] : undefined;
   const resume = sessionId !== undefined;
-  const prompt = implementPrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine });
+  const prompt = implementPrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery });
   const withFeedback = payload.feedback !== undefined;
   const schema = withFeedback ? implementFeedbackSchema : implementSchema;
 
@@ -394,11 +415,14 @@ const checkSchema = {
   additionalProperties: false,
 } as const;
 
-const checkPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string): string => {
+const checkPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string, delivery: string): string => {
   const lines = [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Check this changeset against the acceptance criteria.",
-    ...workspaceRule(workspace, mainLineOf(workspace)),
+    ...workspaceRule(workspace, mainLineOf(workspace), delivery, payload.base),
+    // harlo-52: a two-dot diff, or the wrong base, counts the main line's own newer commits as this changeset's.
+    `Judge scope by ${scopeDiff(payload.base)} only: commits on ${baseRef(payload.base)} that are not on `
+      + `ship/${delivery} are not part of this changeset, and their files never count as its files.`,
     `Changeset: ${payload.changeset}`,
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
   ];
@@ -426,7 +450,7 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   if (!workspace) throw new Error("check run requires a workspace (from workspace.setup)");
   const mismatch = changesetMismatch(workspace, stdin.delivery, payload.changeset);
   if (mismatch !== undefined) return { status: "failed", info: mismatch };
-  const prompt = checkPrompt(stdin.workItem, payload, workspace);
+  const prompt = checkPrompt(stdin.workItem, payload, workspace, stdin.delivery);
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever.
   const reply = await callAgent({

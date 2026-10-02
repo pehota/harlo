@@ -42,6 +42,7 @@ export type Snapshot = {
   retries: number; // consecutive `failed` on the current node
   fixRounds: number;
   workspace: string | null;
+  base?: string; // main-line branch from workspace.setup; absent before Setup, and on a Delivery that predates it
   criteria: string[] | null;
   runbook: string[] | null;
   changeset: string | null;

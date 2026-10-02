@@ -173,9 +173,9 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 
 | Port | payload | `ok` body |
 |---|---|---|
-| define | `{ feedback?: string; answer?: string }` | `{ criteria: string[]; runbook: string[] }` |
-| implement | `{ criteria; findings: Finding[]; feedback?; answer? }` | `{ changeset: string }` (opaque ref) |
-| check | `{ criteria; changeset; answer? }` | `{verdict:"pass"}` \| `{verdict:"fix"; findings}` \| `{verdict:"decide"; about:"scope"\|"advisory"; findings}` |
+| define | `{ base?: string; feedback?: string; answer?: string }` | `{ criteria: string[]; runbook: string[] }` |
+| implement | `{ base?; criteria; findings: Finding[]; feedback?; answer? }` | `{ changeset: string }` (opaque ref) |
+| check | `{ base?; criteria; changeset; answer? }` | `{verdict:"pass"}` \| `{verdict:"fix"; findings}` \| `{verdict:"decide"; about:"scope"\|"advisory"; findings}` |
 | integrate | `{ changeset; answer? }` | `{verdict:"landed"}` \| `{verdict:"fix"; findings}` (a conflict is `question{about:"conflict"}`) |
 | deploy | `{ changeset; answer? }` | `{verdict:"live"}` \| `{verdict:"not_live"; findings?}` |
 | verify | `{ runbook; answer? }` | `{verdict:"pass"}` \| `{verdict:"fail"; findings}` |
@@ -184,7 +184,7 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 
 | Port.op | Awaited? | payload | `ok` body |
 |---|---|---|---|
-| workspace.setup | yes | `{}` | `{ path: string }` |
+| workspace.setup | yes | `{}` | `{ path: string; base: string }` (base: the main-line branch; harlo-52) |
 | workspace.teardown | yes | `{ path }` | `{}` |
 | tracker.update | yes at Close, fire elsewhere | `{ status: string }` (opaque, from config) | `{}` |
 | tracker.comment | fire | `{ text }` | `{}` |
@@ -412,7 +412,7 @@ Notation:
 
 | # | state | signal | → | commands | snapshot / entry |
 |---|---|---|---|---|---|
-| H1 | setup | ok `{path}` | define | run define `{}` | workspace = path |
+| H1 | setup | ok `{path, base}` | define | run define `{base}` | workspace = path, base = base |
 | H2 | define | ok `{criteria, runbook}` + evidence | accept | decide accept | criteria, runbook set; evidence appended |
 | H3 | accept | answer `accept` [+ comment] | implement | run implement `{criteria, findings: [], feedback?}` | entry.by |
 | H3a | accept, policy `tracker.steps.implement = "in_progress"` | answer `accept` | implement | run implement, plus fire `tracker.update{status: "in_progress"}` | entry.by |

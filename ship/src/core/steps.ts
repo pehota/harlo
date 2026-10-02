@@ -67,11 +67,18 @@ const outcomeStatus = (p: Policy, outcome: Outcome): string => {
 };
 
 type Call = { port: Port; op: string; payload: Record<string, unknown> };
+/** The agent steps' main-line branch (harlo-52); omitted only for a Delivery that predates it. */
+const baseOf = (s: Snapshot): { base?: string } => (s.base === undefined ? {} : { base: s.base });
+
 const STEP_CALL: Record<Step, (p: Policy, s: Snapshot) => Call> = {
   setup: () => ({ port: "workspace", op: "setup", payload: {} }),
-  define: () => ({ port: "define", op: "run", payload: {} }),
-  implement: (_, s) => ({ port: "implement", op: "run", payload: { criteria: present(s, "criteria"), findings: s.findings } }),
-  check: (_, s) => ({ port: "check", op: "run", payload: { criteria: present(s, "criteria"), changeset: present(s, "changeset") } }),
+  define: (_, s) => ({ port: "define", op: "run", payload: { ...baseOf(s) } }),
+  implement: (_, s) => ({
+    port: "implement", op: "run", payload: { ...baseOf(s), criteria: present(s, "criteria"), findings: s.findings },
+  }),
+  check: (_, s) => ({
+    port: "check", op: "run", payload: { ...baseOf(s), criteria: present(s, "criteria"), changeset: present(s, "changeset") },
+  }),
   integrate: (_, s) => ({ port: "integrate", op: "run", payload: { changeset: present(s, "changeset") } }),
   deploy: (_, s) => ({ port: "deploy", op: "run", payload: { changeset: present(s, "changeset") } }),
   verify: (_, s) => ({ port: "verify", op: "run", payload: { runbook: present(s, "runbook") } }),
