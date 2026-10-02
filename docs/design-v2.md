@@ -508,7 +508,7 @@ Owned by `lib/contract.sh`.
   "works_when": "It works when <observable outcome>",
   "baseline": { "sha": "a1b2c3", "dirty_files": ["README.md"] },
   "waivers": [ { "id": "lint", "reason": "user: prototype spike" } ],
-  "brief": { "applicable": true, "path": ".dod/feat-invite-flow/brief.md" },
+  "brief": { "applicable": true, "path": "/path/to/repo/.dod/feat-invite-flow/brief.md" },
   "requirements": [
     { "id": "build",  "type": "check", "cmd": "pnpm build",
       "expect_exit": 0, "source": "auto-detected",
