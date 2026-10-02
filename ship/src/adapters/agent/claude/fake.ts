@@ -10,6 +10,8 @@
 // call the nth reply (src/adapters/fake.ts's own idea); a single reply answers every call.
 // env FAKE_AGENT_LOG (optional): every call's argv is appended here as one JSON line, so a test can assert
 // what the adapter passed — e.g. whether `--resume` was sent, and with which session id.
+// env FAKE_AGENT_CWD_LOG (optional): every call's cwd is appended here as one line, so a test can assert
+// which directory the adapter ran the agent in (harlo-53).
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,6 +22,8 @@ type Reply = {
   session_id?: string;
   exitCode?: number;
   commit?: boolean; // when true, `git commit --allow-empty` in cwd before printing the reply
+  commitIn?: string; // a repo OUTSIDE cwd to also commit in: a stray agent that cd'd elsewhere (harlo-53)
+  dirty?: string; // a tracked file to append to without committing (harlo-53)
 };
 type Script = { replies: Reply | Reply[] };
 
@@ -39,6 +43,8 @@ const claimTurn = (dir: string): number => {
 const args = process.argv.slice(2);
 const log = process.env.FAKE_AGENT_LOG;
 if (log) appendFileSync(log, `${JSON.stringify(args)}\n`);
+const cwdLog = process.env.FAKE_AGENT_CWD_LOG;
+if (cwdLog) appendFileSync(cwdLog, `${process.cwd()}\n`);
 
 const repliesFile = process.env.FAKE_AGENT_REPLIES;
 if (!repliesFile) {
@@ -48,15 +54,18 @@ if (!repliesFile) {
 const { replies } = JSON.parse(readFileSync(repliesFile, "utf8")) as Script;
 const reply = Array.isArray(replies) ? (replies[claimTurn(`${repliesFile}.calls`)] ?? replies.at(-1)!) : replies;
 
-if (reply.commit) {
-  const commit = Bun.spawnSync(["git", "commit", "--allow-empty", "-q", "-m", "fake agent commit"], {
+const commitAt = (dir: string): void => {
+  const commit = Bun.spawnSync(["git", "-C", dir, "commit", "--allow-empty", "-q", "-m", "fake agent commit"], {
     stdout: "pipe", stderr: "pipe",
   });
   if (commit.exitCode !== 0) {
     console.error(commit.stderr.toString());
     process.exit(commit.exitCode);
   }
-}
+};
+if (reply.commit) commitAt(process.cwd());
+if (reply.commitIn) commitAt(reply.commitIn);
+if (reply.dirty) appendFileSync(reply.dirty, "stray edit\n");
 
 console.log(JSON.stringify({
   is_error: reply.is_error, result: reply.result, structured_output: reply.structured_output, session_id: reply.session_id,

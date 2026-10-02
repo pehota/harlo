@@ -36,7 +36,7 @@
 // Crash vs `failed` (`implement` only): once the agent has made a real commit in the workspace, an error
 // is never swallowed into `failed` (that would mean "changed nothing", which is false) — it is thrown past
 // the top-level catch instead, so the process exits non-zero: a crash, per docs/adapters.md.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Finding, Stdin, WorkItem } from "../../../../src/contracts/common";
@@ -107,10 +107,58 @@ const callAgent = async ({ ctx, prompt, schema, resume, cwd, disallowedTools }: 
 const evidenceOf = (reply: AgentReply): { evidence?: [{ label: "reasoning"; text: string }] } =>
   reply.result ? { evidence: [{ label: "reasoning", text: reply.result }] } : {};
 
+const git = (dir: string, args: string[]): { code: number; stdout: string; stderr: string } => {
+  const proc = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" });
+  return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+};
+
 const headSha = (dir: string): string => {
-  const proc = Bun.spawnSync(["git", "-C", dir, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
-  if (proc.exitCode !== 0) throw new Error(`git rev-parse HEAD failed in ${dir}: ${proc.stderr.toString()}`);
-  return proc.stdout.toString().trim();
+  const head = git(dir, ["rev-parse", "HEAD"]);
+  if (head.code !== 0) throw new Error(`git rev-parse HEAD failed in ${dir}: ${head.stderr}`);
+  return head.stdout.trim();
+};
+
+// ── The Delivery workspace vs the main-line checkout (harlo-53) ──
+// Found by dogfooding: Define ran in the adapter's own cwd — the main-line checkout — so its runbook named that
+// path, and Implement followed it there and committed on the integration branch instead of `ship/<delivery>`.
+// Every step now runs in, and is told to stay in, the Delivery workspace; Implement and Check also verify it.
+
+/** The main-line checkout: the git toplevel of this adapter's own process cwd (the Runner spawns it from
+ *  there). Undefined outside a repo, or when that toplevel IS the workspace — then there is nothing to forbid. */
+const mainLineOf = (workspace: string): string | undefined => {
+  const top = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
+  if (top.code !== 0) return undefined;
+  const path = top.stdout.trim();
+  const real = (dir: string): string => { try { return realpathSync(dir); } catch { return dir; } };
+  return real(path) === real(workspace) ? undefined : path;
+};
+
+/** Stated in every prompt, fresh or resumed: a resumed session must get it too, it may predate this rule. */
+const workspaceRule = (workspace: string, mainLine: string | undefined): string[] => [
+  `Delivery workspace: ${workspace}`,
+  `This is the only directory to read, edit, run commands or commit in. Never \`cd\` into any other checkout, ${
+    mainLine ? `including the main-line checkout at ${mainLine}` : "including the main-line/integration checkout"}.`,
+];
+
+type MainLineMark = { path: string; head: string; changes: Set<string> };
+
+/** Tracked-file changes only (`--untracked-files=no`): a pre-existing dirty tree is fine, only new entries count. */
+const trackedChanges = (dir: string): Set<string> =>
+  new Set(git(dir, ["status", "--porcelain", "--untracked-files=no"]).stdout.split("\n").filter((l) => l !== ""));
+
+const headOrEmpty = (dir: string): string => git(dir, ["rev-parse", "-q", "--verify", "HEAD"]).stdout.trim();
+
+const markMainLine = (path: string | undefined): MainLineMark | undefined =>
+  path === undefined ? undefined : { path, head: headOrEmpty(path), changes: trackedChanges(path) };
+
+/** Why the main-line checkout no longer matches its mark (HEAD moved or new tracked changes), else undefined. */
+const mainLineStray = (mark: MainLineMark | undefined): string | undefined => {
+  if (!mark) return undefined;
+  const head = headOrEmpty(mark.path);
+  if (head !== mark.head) return `agent moved HEAD of the main-line checkout ${mark.path} (${mark.head} -> ${head})`;
+  const added = [...trackedChanges(mark.path)].filter((line) => !mark.changes.has(line));
+  if (added.length > 0) return `agent changed tracked files in the main-line checkout ${mark.path}: ${added.join(", ")}`;
+  return undefined;
 };
 
 // ── define ──
@@ -129,29 +177,45 @@ const defineSchema = {
  *  resumed session already has the original task in its history; resending the whole thing on top of "here's
  *  an answer" reads as a brand-new ambiguous request and was found, by dogfooding M1.12, to make the agent
  *  re-enter its confirm-first loop indefinitely instead of proceeding. */
-const definePrompt = (workItem: WorkItem, payload: DefinePayload, resume: boolean): string => {
+type DefinePromptArgs = {
+  workItem: WorkItem; payload: DefinePayload; resume: boolean; workspace: string; mainLine: string | undefined;
+};
+
+const definePrompt = ({ workItem, payload, resume, workspace, mainLine }: DefinePromptArgs): string => {
   const delta: string[] = [];
   if (payload.feedback !== undefined) delta.push(`Feedback from a prior review: ${payload.feedback}`);
   if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
-  if (resume) return [...delta, "Reply now with the criteria/runbook (or question) fields — no further questions."].join("\n\n");
+  // harlo-53: Implement and Check follow the runbook literally, so a hard-coded path sends them out of the workspace.
+  const rule = [
+    ...workspaceRule(workspace, mainLine),
+    "The runbook must run from the Delivery workspace and must not hard-code any other checkout path.",
+  ].join("\n");
+  if (resume) {
+    return [rule, ...delta, "Reply now with the criteria/runbook (or question) fields — no further questions."].join("\n\n");
+  }
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     workItem.body,
     "Define acceptance criteria and a runbook for verifying them.",
+    rule,
     ...delta,
   ].join("\n\n");
 };
 
 const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const payload = stdin.payload as DefinePayload;
+  // harlo-53: never fall back to the adapter's own cwd — that is the main-line checkout.
+  const workspace = stdin.workspace;
+  if (!workspace) throw new Error("define run requires a workspace (from workspace.setup)");
+  const mainLine = mainLineOf(workspace);
   // Resume only a session this delivery already has: a delta with no stored session gets the full framing.
   const delta = payload.feedback !== undefined || payload.answer !== undefined;
   const state = readState("define");
   const sessionId = delta ? state[stdin.delivery] : undefined;
   const resume = sessionId !== undefined;
   const reply = await callAgent({
-    ctx, prompt: definePrompt(stdin.workItem, payload, resume), schema: defineSchema, resume: sessionId,
-    disallowedTools: NO_EDIT_TOOLS,
+    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine }), schema: defineSchema,
+    resume: sessionId, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
   });
   if (reply.session_id) writeState("define", { ...state, [stdin.delivery]: reply.session_id });
   if (reply.is_error) return { status: "failed", info: reply.result };
@@ -203,17 +267,23 @@ const feedbackDirective = (feedback: string): string[] => [
 /** Fresh call: the full task framing, then any delta. A resumed call sends ONLY the new delta
  *  (findings/feedback/answer) — see definePrompt's comment for why resending the whole task on a resumed session
  *  backfires. A delta can arrive fresh: Define-gate `accept` with a comment is the first Implement (harlo-51). */
-const implementPrompt = (workItem: WorkItem, payload: ImplementPayload, resume: boolean): string => {
+type ImplementPromptArgs = {
+  workItem: WorkItem; payload: ImplementPayload; resume: boolean; workspace: string; mainLine: string | undefined;
+};
+
+const implementPrompt = ({ workItem, payload, resume, workspace, mainLine }: ImplementPromptArgs): string => {
+  const rule = workspaceRule(workspace, mainLine);
   const delta: string[] = [];
   if (payload.findings.length > 0) {
     delta.push("Findings from a prior check:", ...payload.findings.map((f) => `- ${f.text}${f.ref ? ` (${f.ref})` : ""}`));
   }
   if (payload.feedback !== undefined) delta.push(...feedbackDirective(payload.feedback));
   if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
-  if (resume) return [...delta, "Continue implementing and commit your changes — no further questions."].join("\n");
+  if (resume) return [...rule, ...delta, "Continue implementing and commit your changes — no further questions."].join("\n");
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Implement it in this working directory and commit your changes.",
+    ...rule,
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
     ...delta,
   ].join("\n");
@@ -233,6 +303,16 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const workspace = stdin.workspace;
   if (!workspace) throw new Error("implement run requires a workspace (from workspace.setup)");
   const before = headSha(workspace);
+  // harlo-53: defence in depth behind the prompt rule — mark the main-line checkout, verify it after the call.
+  const mainLine = mainLineOf(workspace);
+  const mark = markMainLine(mainLine);
+  /** A stray main-line change is never `ok`: `failed` if the workspace has no new commit, else a crash. */
+  const strayResult = (committed: boolean): unknown => {
+    const stray = mainLineStray(mark);
+    if (stray === undefined) return undefined;
+    if (committed) throw new Crash(stray);
+    return { status: "failed", info: stray };
+  };
 
   // A re-issue after a fix round, feedback or a question answer resumes this delivery's own Implement session.
   // With no stored session yet (the first call, even one carrying Define-gate feedback) it starts fresh.
@@ -240,7 +320,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const state = readState("implement");
   const sessionId = delta ? state[stdin.delivery] : undefined;
   const resume = sessionId !== undefined;
-  const prompt = implementPrompt(stdin.workItem, payload, resume);
+  const prompt = implementPrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine });
   const withFeedback = payload.feedback !== undefined;
   const schema = withFeedback ? implementFeedbackSchema : implementSchema;
 
@@ -248,13 +328,18 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   try {
     reply = await callAgent({ ctx, prompt, schema, resume: sessionId, cwd: workspace });
   } catch (error) {
-    if (headSha(workspace) !== before) throw new Crash(`agent call errored after a commit: ${String(error)}`);
+    const committed = headSha(workspace) !== before;
+    const stray = strayResult(committed);
+    if (stray !== undefined) return stray;
+    if (committed) throw new Crash(`agent call errored after a commit: ${String(error)}`);
     throw error;
   }
 
   const after = headSha(workspace);
   const committed = after !== before;
   if (reply.session_id) writeState("implement", { ...state, [stdin.delivery]: reply.session_id });
+  const stray = strayResult(committed);
+  if (stray !== undefined) return stray;
 
   if (reply.is_error) {
     if (committed) throw new Crash(`agent reported is_error after a commit: ${reply.result}`);
@@ -309,10 +394,11 @@ const checkSchema = {
   additionalProperties: false,
 } as const;
 
-const checkPrompt = (workItem: WorkItem, payload: CheckPayload): string => {
+const checkPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string): string => {
   const lines = [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Check this changeset against the acceptance criteria.",
+    ...workspaceRule(workspace, mainLineOf(workspace)),
     `Changeset: ${payload.changeset}`,
     "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
   ];
@@ -320,13 +406,31 @@ const checkPrompt = (workItem: WorkItem, payload: CheckPayload): string => {
   return lines.join("\n");
 };
 
+/** harlo-53: a changeset committed anywhere but `ship/<delivery>` in the workspace (e.g. on the main-line
+ *  checkout) is not this Delivery's work — reviewing it would pass work that integrate never lands. */
+const changesetMismatch = (workspace: string, delivery: string, changeset: string): string | undefined => {
+  const at = changeset.lastIndexOf("@");
+  const branch = changeset.slice(0, at);
+  const sha = changeset.slice(at + 1);
+  const expected = `ship/${delivery}`;
+  if (at === -1 || branch !== expected) return `changeset ${changeset} is not on this Delivery's branch ${expected}`;
+  if (git(workspace, ["merge-base", "--is-ancestor", sha, expected]).code !== 0) {
+    return `changeset commit ${sha} is not on branch ${expected} in the workspace ${workspace}`;
+  }
+  return undefined;
+};
+
 const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const payload = stdin.payload as CheckPayload;
-  const prompt = checkPrompt(stdin.workItem, payload);
+  const workspace = stdin.workspace;
+  if (!workspace) throw new Error("check run requires a workspace (from workspace.setup)");
+  const mismatch = changesetMismatch(workspace, stdin.delivery, payload.changeset);
+  if (mismatch !== undefined) return { status: "failed", info: mismatch };
+  const prompt = checkPrompt(stdin.workItem, payload, workspace);
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever.
   const reply = await callAgent({
-    ctx, prompt, schema: checkSchema, resume: undefined, cwd: stdin.workspace ?? undefined, disallowedTools: NO_EDIT_TOOLS,
+    ctx, prompt, schema: checkSchema, resume: undefined, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
   });
   if (reply.is_error) return { status: "failed", info: reply.result };
   const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;

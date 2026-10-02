@@ -3,7 +3,7 @@
 // implement's workspace so its `changeset` comes from a real commit, never an invented sha.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Stdin, WorkItem } from "../../../../src/contracts/common";
@@ -33,6 +33,8 @@ type Reply = {
   session_id?: string;
   exitCode?: number;
   commit?: boolean;
+  commitIn?: string;
+  dirty?: string;
 };
 
 /** A fresh `<fixture-dir>/replies.json`, so the returned path is also usable as `<file>.calls` scratch space. */
@@ -42,7 +44,8 @@ const repliesFile = (fixtureDir: string, replies: Reply | Reply[]): string => {
   return file;
 };
 
-/** A real git repo with one commit on `main`, used as an implement/check workspace. */
+/** A real git repo with one commit on `main`, checked out on `ship/PROJ-1-1` as workspace.setup leaves a
+ *  Delivery workspace — also usable as a separate main-line checkout. */
 const gitRepo = (): string => {
   const dir = tempDir("ship-agent-ws-");
   const git = (...args: string[]): void => {
@@ -55,6 +58,7 @@ const gitRepo = (): string => {
   writeFileSync(join(dir, "README.md"), "hello\n");
   git("add", "-A");
   git("commit", "-q", "-m", "init");
+  git("checkout", "-q", "-b", "ship/PROJ-1-1");
   return dir;
 };
 
@@ -73,6 +77,8 @@ type CallOpts = {
   workspace?: string | null;
   log?: string;
   pluginDirs?: string[];
+  cwd?: string; // the adapter's own cwd (the main-line checkout); defaults to a fresh non-repo dir
+  cwdLog?: string;
 };
 
 /** Run `agent/claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
@@ -80,11 +86,13 @@ const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown
   const delivery = opts.delivery ?? "PROJ-1-1";
   const stdin: Stdin = {
     id: `${delivery}/${opts.port}-1`, delivery, port: opts.port, op: opts.op,
-    workItem, workspace: opts.workspace ?? null, payload: opts.payload, tools: [],
+    workItem, workspace: opts.workspace === undefined ? gitRepo() : opts.workspace, payload: opts.payload, tools: [],
   };
   const pluginDirArgs = (opts.pluginDirs ?? []).flatMap((dir) => ["--plugin-dir", dir]);
   const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, opts.port, opts.op], {
     stdin: new Blob([JSON.stringify(stdin)]),
+    // Never the repo running these tests: the implement guard would watch it as the main-line checkout.
+    cwd: opts.cwd ?? tempDir("ship-agent-cwd-"),
     stdout: "pipe",
     stderr: "pipe",
     env: {
@@ -92,6 +100,7 @@ const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown
       HOME: opts.home,
       FAKE_AGENT_REPLIES: opts.agentReplies,
       ...(opts.log ? { FAKE_AGENT_LOG: opts.log } : {}),
+      ...(opts.cwdLog ? { FAKE_AGENT_CWD_LOG: opts.cwdLog } : {}),
     },
   });
   const [text, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
@@ -106,6 +115,11 @@ const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown
 
 const readLog = (log: string): string[][] =>
   readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+
+const promptOf = (argv: string[]): string => argv[argv.indexOf("-p") + 1]!;
+
+/** A changeset for the workspace's current HEAD on its Delivery branch, as implement would report it. */
+const checkPayload = (ws: string): CheckPayload => ({ criteria: ["c"], changeset: `ship/PROJ-1-1@${headSha(ws)}` });
 
 describe("agent-claude adapter: define", () => {
   test("run maps structured output to ok{criteria, runbook}", async () => {
@@ -479,9 +493,10 @@ describe("agent-claude adapter: check", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "ok", structured_output: { verdict: "pass" } });
-    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
-    await call({ port: "check", op: "run", payload, home, agentReplies, log });
-    await call({ port: "check", op: "run", payload, home, agentReplies, log });
+    const ws = gitRepo();
+    const payload = checkPayload(ws);
+    await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+    await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
     for (const argv of readLog(log)) expect(argv).not.toContain("--resume");
   });
 
@@ -496,8 +511,9 @@ describe("agent-claude adapter: check", () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: output });
-    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
-    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, agentReplies });
+    const ws = gitRepo();
+    const payload = checkPayload(ws);
+    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "ok", body, evidence: [{ label: "reasoning", text: "r" }] });
   });
@@ -511,8 +527,9 @@ describe("agent-claude adapter: check", () => {
     const agentReplies = repliesFile(fx, {
       is_error: false, result: "r", structured_output: { verdict: "decide", findings: [{ text: "f2" }] },
     });
-    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
-    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, agentReplies });
+    const ws = gitRepo();
+    const payload = checkPayload(ws);
+    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies });
     // Nothing was committed at Check time, so a clean `failed` is safe (and `call`'s own ajv check already
     // asserts stdout fits the port's contract — a schema-violating `ok{verdict:"decide"}` would fail that
     // assertion before this expectation ever ran).
@@ -525,12 +542,169 @@ describe("agent-claude adapter: check", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "ok", structured_output: { verdict: "pass" } });
-    const payload: CheckPayload = { criteria: ["c"], changeset: "ship/PROJ-1-1@abc" };
-    await call({ port: "check", op: "run", payload, home, agentReplies, log });
+    const ws = gitRepo();
+    const payload = checkPayload(ws);
+    await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
     const argv = readLog(log)[0]!;
     const at = argv.indexOf("--disallowedTools");
     expect(at).toBeGreaterThan(-1);
     expect(argv.slice(at + 1, at + 4)).toEqual(["Edit", "Write", "NotebookEdit"]);
+  });
+});
+
+describe("agent-claude adapter: Delivery workspace, never the main-line checkout (harlo-53)", () => {
+  const defineReply: Reply = {
+    is_error: false, result: "…", session_id: "sess-ws", structured_output: { criteria: ["c"], runbook: ["r"] },
+  };
+
+  test("define prompt names the workspace and forbids every other checkout; main-line appears only in that ban", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const ws = gitRepo();
+    const main = realpathSync(gitRepo());
+    const agentReplies = repliesFile(fx, defineReply);
+    await call({ port: "define", op: "run", payload: {}, home, workspace: ws, cwd: main, agentReplies, log });
+    const prompt = promptOf(readLog(log)[0]!);
+    expect(prompt).toContain(`Delivery workspace: ${ws}`);
+    expect(prompt).toContain("Never `cd` into any other checkout");
+    expect(prompt).toContain("must not hard-code any other checkout path");
+    const ban = prompt.split("\n").filter((line) => line.includes(main));
+    expect(ban).toHaveLength(1);
+    expect(ban[0]).toContain(`Never \`cd\` into any other checkout, including the main-line checkout at ${main}`);
+  });
+
+  test("define runs the agent in the workspace, and a resumed define still gets the rule", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const cwdLog = join(fx, "cwd.log");
+    const ws = gitRepo();
+    const agentReplies = repliesFile(fx, defineReply);
+    await call({ port: "define", op: "run", payload: {}, home, workspace: ws, agentReplies, log, cwdLog });
+    const answer: DefinePayload = { answer: "yes" };
+    await call({ port: "define", op: "run", payload: answer, home, workspace: ws, agentReplies, log, cwdLog });
+    expect(readFileSync(cwdLog, "utf8").trim().split("\n")).toEqual([realpathSync(ws), realpathSync(ws)]);
+    const [, resumed] = readLog(log);
+    expect(resumed).toContain("--resume");
+    expect(promptOf(resumed!)).toContain(`Delivery workspace: ${ws}`);
+    expect(promptOf(resumed!)).toContain("Never `cd` into any other checkout");
+  });
+
+  test("define without a workspace fails clearly and never calls the agent", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, defineReply);
+    const { stdout } = await call({ port: "define", op: "run", payload: {}, home, workspace: null, agentReplies, log });
+    expect(stdout).toEqual({ status: "failed", info: "define run requires a workspace (from workspace.setup)" });
+    expect(() => readFileSync(log)).toThrow();
+  });
+
+  test("implement prompts name the workspace, fresh and resumed", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", commit: true, session_id: "sess-impl-ws" });
+    await call({
+      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies, log,
+    });
+    await call({
+      port: "implement", op: "run", payload: { criteria: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
+      home, workspace: ws, agentReplies, log,
+    });
+    const [fresh, resumed] = readLog(log);
+    expect(resumed).toContain("--resume");
+    for (const argv of [fresh!, resumed!]) {
+      expect(promptOf(argv)).toContain(`Delivery workspace: ${ws}`);
+      expect(promptOf(argv)).toContain("This is the only directory to read, edit, run commands or commit in.");
+    }
+  });
+
+  test("check prompts name the workspace, fresh and with an answer", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    await call({ port: "check", op: "run", payload: checkPayload(ws), home, workspace: ws, agentReplies, log });
+    await call({ port: "check", op: "run", payload: { ...checkPayload(ws), answer: "yes" }, home, workspace: ws, agentReplies, log });
+    for (const argv of readLog(log)) {
+      expect(promptOf(argv)).toContain(`Delivery workspace: ${ws}`);
+      expect(promptOf(argv)).toContain("Never `cd` into any other checkout");
+    }
+  });
+
+  /** One implement call whose adapter cwd is a separate main-line repo, with the given fake-agent reply. */
+  const strayImplement = async (reply: (main: string) => Reply) => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const main = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const agentReplies = repliesFile(fx, reply(main));
+    const result = await call({ port: "implement", op: "run", payload, home, workspace: ws, cwd: main, agentReplies });
+    return { ...result, main: realpathSync(main) };
+  };
+
+  test("implement is failed, naming the main-line path, when the agent commits there instead of the workspace", async () => {
+    const { exitCode, stdout, main } = await strayImplement((main) => ({ is_error: false, result: "done", commitIn: main }));
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain(main);
+  });
+
+  test("implement is failed on the error path too, naming the main-line path", async () => {
+    const { stdout, main } = await strayImplement((main) => ({ is_error: true, result: "boom", commitIn: main }));
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain(main);
+  });
+
+  test("implement is failed when the agent leaves tracked changes in the main-line checkout", async () => {
+    const { stdout, main } = await strayImplement((main) => ({ is_error: false, result: "done", dirty: join(main, "README.md") }));
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain(main);
+  });
+
+  test("implement crashes when the agent commits in both the workspace and the main-line checkout", async () => {
+    const { exitCode, stdout } = await strayImplement((main) => ({ is_error: false, result: "done", commit: true, commitIn: main }));
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBeUndefined();
+  });
+
+  test("implement stays ok when the main-line checkout is untouched", async () => {
+    const { stdout } = await strayImplement(() => ({ is_error: false, result: "done", commit: true }));
+    expect(stdout).toMatchObject({ status: "ok" });
+  });
+
+  test("check is failed, without running the agent, for a sha not on ship/<delivery>", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const script = "git checkout -q -b side && git commit -q --allow-empty -m side && git rev-parse HEAD && git checkout -q ship/PROJ-1-1";
+    const side = Bun.spawnSync(["sh", "-c", script], { cwd: ws, stdout: "pipe" });
+    const sha = side.stdout.toString().trim();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const payload: CheckPayload = { criteria: ["c"], changeset: `ship/PROJ-1-1@${sha}` };
+    const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({ status: "failed", info: `changeset commit ${sha} is not on branch ship/PROJ-1-1 in the workspace ${ws}` });
+    expect(() => readFileSync(log)).toThrow();
+  });
+
+  test("check is failed, without running the agent, for a changeset naming a branch other than ship/<delivery>", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const payload: CheckPayload = { criteria: ["c"], changeset: `main@${headSha(ws)}` };
+    const { stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect(() => readFileSync(log)).toThrow();
   });
 });
 
