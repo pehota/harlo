@@ -52,7 +52,11 @@ reads and writes the same `.dod/`.
 ## Manual escape hatch
 
 The Stop gate blocks once per turn-end cycle while a task is claimed
-(latched) but not yet verified. There is no `/dod:cancel` command — the two
+(latched) but not yet verified. A claim is scoped to the session that made it
+(`/dod:verify` records `$CLAUDE_CODE_SESSION_ID` with the latch): a later
+session that makes no edits is not blocked by an earlier session's claim,
+while edits in any session still claim the open contract. If either side's
+session id is unknown, the latch claims in every session, as before. There is no `/dod:cancel` command — the two
 ordinary ways out are finishing the task (`/dod:verify` until it passes) or
 `/clear` (cancels the open contract for this branch).
 

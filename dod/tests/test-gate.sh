@@ -112,6 +112,59 @@ state_log_edit "$REPO/.dod/main/state.json" "p1" "$REPO/root.txt"
 OUT=$(run_gate "$REPO" "p2")
 eq "branch5 (D8): edit under a different prompt_id releases silently" "" "$OUT"
 
+# --- branch 5: the latch is scoped to the session that claimed it ----------
+# Regression (dogfood, Oct 1 orphan): state.latched persisted across
+# sessions, so a claim made in session X kept "claiming" every Stop of a
+# later session Y — even one with zero edits — and the gate blocked it on
+# X's stale contract forever. dod-claim.sh now records the claiming
+# session ($CLAUDE_CODE_SESSION_ID); a latch from another session is
+# ignored at branch 5. Edits this prompt still claim on their own.
+run_gate_sid() {
+  local repo="$1" sid="$2" prompt_id="${3:-p1}"
+  CLAUDE_PROJECT_DIR="$repo" bash "$GATE" <<JSON
+{"session_id":"$sid","cwd":"$repo","prompt_id":"$prompt_id","stop_hook_active":false}
+JSON
+}
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+CLAUDE_CODE_SESSION_ID="sid-X" bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate_sid "$REPO" "sid-Y" "py1")
+eq "branch5: latch claimed in another session, no edits -> releases" "" "$OUT"
+OUT=$(run_gate_sid "$REPO" "sid-X" "px1")
+if is_block "$OUT"; then
+  ok "branch5: latch claimed in this session still gates"
+else
+  bad "branch5: latch claimed in this session still gates" "$OUT"
+fi
+state_log_edit "$REPO/.dod/main/state.json" "py2" "$REPO/root.txt"
+OUT=$(run_gate_sid "$REPO" "sid-Y" "py2")
+if is_block "$OUT"; then
+  ok "branch5: another session's latch + edits this prompt still blocks"
+else
+  bad "branch5: another session's latch + edits this prompt still blocks" "$OUT"
+fi
+
+# empty session id on either side -> pre-scoping behaviour (latch claims), so
+# a host that doesn't expose the id never under-blocks.
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+env -u CLAUDE_CODE_SESSION_ID bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate_sid "$REPO" "sid-Y" "py1")
+if is_block "$OUT"; then
+  ok "branch5: latch with no recorded session id still gates any session"
+else
+  bad "branch5: latch with no recorded session id still gates any session" "$OUT"
+fi
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+CLAUDE_CODE_SESSION_ID="sid-X" bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+OUT=$(run_gate_sid "$REPO" "" "py1")
+if is_block "$OUT"; then
+  ok "branch5: Stop with no session id still honours the latch"
+else
+  bad "branch5: Stop with no session id still honours the latch" "$OUT"
+fi
+
 # --- branch 3: status != open (already passed) -> release, silent ------------
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"

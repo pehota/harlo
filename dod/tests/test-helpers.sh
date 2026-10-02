@@ -17,6 +17,11 @@
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars)
 
+# Host isolation: the claim script records $CLAUDE_CODE_SESSION_ID with the
+# latch, and a suite run from inside a Claude Code session inherits the
+# host's. Drop it so every claim is session-less unless a test sets it.
+unset CLAUDE_CODE_SESSION_ID
+
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
 # round counter and escalation flag the gate's decision tree reads and
 # (only it) mutates.
 #
-# Fields: latched, round, escalation, last_failed_diff_hash, creep_diff_hash
+# Fields: latched, latched_session_id (below), round, escalation, last_failed_diff_hash, creep_diff_hash
 # (ADR 0004, below), edits[] (track.sh), state ("idle"|"verifying", this
 # file), cache{} (this file), decisions[] / decided_diff_hash (the user's
 # fix/skip decision on the final review's advisory findings, below) and
@@ -49,6 +49,7 @@ state__write_body() {
   dod__has_jq || return 1
   jq -n '{
     latched: false,
+    latched_session_id: null,
     round: 0,
     escalation: "none",
     last_failed_diff_hash: null,
@@ -69,6 +70,7 @@ state_write() { state__locked "$1" state__write_body "$1"; }
 state_read() {
   local state_path="$1"
   STATE_LATCHED=""
+  STATE_LATCHED_SESSION_ID=""
   STATE_ROUND=""
   STATE_ESCALATION=""
   STATE_LAST_FAILED_DIFF_HASH=""
@@ -84,6 +86,7 @@ state_read() {
   jq -e 'type == "object"' "$state_path" >/dev/null 2>&1 || return 1
 
   STATE_LATCHED=$(jq -r '.latched // false' "$state_path" 2>/dev/null)
+  STATE_LATCHED_SESSION_ID=$(jq -r '.latched_session_id // ""' "$state_path" 2>/dev/null)
   STATE_ROUND=$(jq -r '.round // 0' "$state_path" 2>/dev/null)
   STATE_ESCALATION=$(jq -r '.escalation // "none"' "$state_path" 2>/dev/null)
   STATE_LAST_FAILED_DIFF_HASH=$(jq -r '.last_failed_diff_hash // ""' "$state_path" 2>/dev/null)
@@ -111,7 +114,16 @@ state__mutate_body() {
 }
 state__mutate() { state__locked "$1" state__mutate_body "$1" "$2"; }
 
-state_arm_latch() { state__mutate "$1" '.latched = true'; }
+# state_arm_latch <path> [session_id] — arms the claim latch and records the
+# claiming session (empty -> null: unknown). gate.sh branch 5 ignores a
+# latch claimed by a DIFFERENT session than the Stop's, so a claim never
+# outlives its session and wedges a later one (the Oct 1 orphan); an
+# unknown id on either side keeps the latch claiming, as before.
+state_arm_latch() {
+  local state_path="$1" sid="${2:-}"
+  state__mutate "$state_path" ".latched = true
+    | .latched_session_id = $(jq -n --arg s "$sid" 'if $s == "" then null else $s end')"
+}
 
 # state_disarm_latch <path> — clears latched back to false. Sole caller is
 # gate.sh's branch 8, right before it re-blocks on failing findings with the
@@ -127,7 +139,7 @@ state_arm_latch() { state__mutate "$1" '.latched = true'; }
 # guard needs the latch to keep reading as claimed across those
 # re-invocations of the SAME Stop). Edits still re-arm CLAIMED for their own
 # prompt_id via state_has_edit_for_prompt, independently of the latch.
-state_disarm_latch() { state__mutate "$1" '.latched = false'; }
+state_disarm_latch() { state__mutate "$1" '.latched = false | .latched_session_id = null'; }
 
 state_bump_round() { state__mutate "$1" '.round = ((.round // 0) + 1)'; }
 

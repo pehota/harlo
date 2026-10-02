@@ -2,7 +2,7 @@
 #
 # dod/lib/io.sh — hook stdin parsing + the gate's output primitives.
 #
-# dod_hook_read: one `jq … | @tsv` pass instead of 8 separate forks (v1's
+# dod_hook_read: one `jq` pass instead of 8 separate forks (v1's
 # harness-common.sh hc_read_hook_input pattern, collapsed).
 # dod_block/dod_release: block is JSON on stdout + exit 0, never `exit 2` —
 # exit 2 renders in the transcript as a hook *error*, which is wrong for a
@@ -19,7 +19,7 @@ dod__has_jq() { command -v jq >/dev/null 2>&1; }
 # Degrades to empty/false defaults on missing jq or malformed JSON; never
 # crashes the caller.
 dod_hook_read() {
-  local raw tsv
+  local raw fields sep=$'\x1f'
   raw=$(cat 2>/dev/null)
   DOD_HOOK_SESSION_ID=""
   DOD_HOOK_CWD=""
@@ -28,12 +28,14 @@ dod_hook_read() {
 
   dod__has_jq || return 0
 
-  tsv=$(printf '%s' "$raw" | jq -r \
-    '[(.session_id // ""), (.cwd // ""), (.prompt_id // ""), ((.stop_hook_active // false) | tostring)] | @tsv' \
+  # Joined on US (0x1f), not tab: tab is IFS whitespace, so `read` would
+  # collapse an empty field (e.g. no session_id) and shift the rest left.
+  fields=$(printf '%s' "$raw" | jq -r \
+    '[(.session_id // ""), (.cwd // ""), (.prompt_id // ""), ((.stop_hook_active // false) | tostring)] | join("\u001f")' \
     2>/dev/null)
-  [ -n "$tsv" ] || return 0
+  [ -n "$fields" ] || return 0
 
-  IFS=$'\t' read -r DOD_HOOK_SESSION_ID DOD_HOOK_CWD DOD_HOOK_PROMPT_ID DOD_HOOK_STOP_ACTIVE <<<"$tsv"
+  IFS="$sep" read -r DOD_HOOK_SESSION_ID DOD_HOOK_CWD DOD_HOOK_PROMPT_ID DOD_HOOK_STOP_ACTIVE <<<"$fields"
   [ -n "$DOD_HOOK_STOP_ACTIVE" ] || DOD_HOOK_STOP_ACTIVE="false"
   return 0
 }

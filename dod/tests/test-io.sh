@@ -17,6 +17,14 @@ eq "hook_read cwd" "/tmp/x" "$DOD_HOOK_CWD"
 eq "hook_read prompt_id" "p1" "$DOD_HOOK_PROMPT_ID"
 eq "hook_read stop_hook_active" "true" "$DOD_HOOK_STOP_ACTIVE"
 
+# an empty field must not shift the others left: tab is IFS whitespace, so a
+# tab-joined `read` collapsed a leading empty session_id and read cwd into
+# it — the gate then saw a session id where there was none.
+dod_hook_read <<<'{"session_id":"","cwd":"/tmp/x","prompt_id":"p1","stop_hook_active":false}'
+eq "hook_read empty session_id stays empty" "" "$DOD_HOOK_SESSION_ID"
+eq "hook_read cwd after an empty session_id" "/tmp/x" "$DOD_HOOK_CWD"
+eq "hook_read prompt_id after an empty session_id" "p1" "$DOD_HOOK_PROMPT_ID"
+
 # degrade to defaults on garbage input, never crash
 dod_hook_read <<<"not json"
 eq "hook_read degrades session_id on garbage" "" "$DOD_HOOK_SESSION_ID"

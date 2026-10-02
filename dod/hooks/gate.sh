@@ -21,11 +21,12 @@
 # exists. A gap finding (lens:"scope" kind:"gap") is not creep and still
 # takes branch 8 exactly as before. Branch 5 detects both "claimed"
 # (latch armed) and "edited this prompt_id without a latch" via state.edits
-# (track.sh). Branch 4 (expiry) only covers a rebased/force-pushed baseline,
-# not a killed session with untouched history — a session that crashes or is
-# killed leaves the baseline SHA still a perfectly good ancestor of HEAD, just
-# orphaned by the missing SessionEnd; that case has no TTL / liveness check
-# and remains unaddressed.
+# (track.sh); the latch only counts for the session that armed it, so a
+# killed/crashed session's claim no longer gates a later session that makes
+# no edits. Branch 4 (expiry) only covers a rebased/force-pushed baseline:
+# an orphaned contract with untouched history stays "open" (no TTL /
+# liveness check) — it just stops blocking other sessions, and edits in a
+# later session still claim it.
 #
 # D26: round budget = 2. An identical diff_hash across two failing rounds
 # (no progress) burns the budget immediately, same as reaching round 2 —
@@ -152,10 +153,11 @@ fi
 # commit outside the branch's own history, which is meaningless. Expire
 # rather than silently keep gating: `expired` releases via branch 3 on every
 # later turn, same as `passed`/`cancelled`, and does not resurrect itself.
-# Does NOT address a killed/crashed session with untouched history — that
-# baseline is still a perfectly good ancestor, just orphaned by the missing
-# SessionEnd; a separate mechanism, not yet designed, would be needed for
-# that case.
+# Does NOT expire a killed/crashed session's contract with untouched
+# history — that baseline is still a perfectly good ancestor, just orphaned
+# by the missing SessionEnd. The contract stays "open" (no TTL / liveness
+# check); branch 5's session-scoped latch is what keeps it from blocking a
+# later session that makes no edits.
 #
 # `git merge-base --is-ancestor` has three outcomes, not two: exit 0 (is an
 # ancestor), exit 1 (confirmed NOT an ancestor — a real answer), and anything
@@ -182,9 +184,19 @@ fi
 # /dod:verify would silently skip the gate); "edits since open" over-blocks
 # (a question-only turn on an already-open contract would wrongly gate). The
 # per-prompt_id edit log from track.sh is the middle ground.
+#
+# The latch is session-scoped: dod-claim.sh records the claiming session,
+# and a latch armed by a DIFFERENT session than this Stop's is ignored — a
+# claim must not outlive its session and block a later one that made no
+# edits (Oct 1 orphan). Either id empty (older host, or a latch armed before
+# scoping existed) -> the latch claims as before, never under-blocking.
 state_read "$STATE_FILE"
 LATCHED="$STATE_LATCHED"
 [ "$LATCHED" = "true" ] || LATCHED="false"
+if [ "$LATCHED" = "true" ] && [ -n "$STATE_LATCHED_SESSION_ID" ] \
+  && [ -n "$DOD_HOOK_SESSION_ID" ] && [ "$STATE_LATCHED_SESSION_ID" != "$DOD_HOOK_SESSION_ID" ]; then
+  LATCHED="false"
+fi
 
 CLAIMED="$LATCHED"
 if [ "$CLAIMED" != "true" ] && [ -n "$PROMPT_ID" ]; then

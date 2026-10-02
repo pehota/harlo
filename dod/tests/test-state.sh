@@ -49,6 +49,12 @@ state_arm_latch "$SFILE"
 state_read "$SFILE"
 eq "state_arm_latch sets latched" "true" "$STATE_LATCHED"
 
+state_read "$SFILE"
+eq "state_arm_latch without a session id records none" "" "$STATE_LATCHED_SESSION_ID"
+state_arm_latch "$SFILE" "sid-X"
+state_read "$SFILE"
+eq "state_arm_latch records the claiming session id" "sid-X" "$STATE_LATCHED_SESSION_ID"
+
 state_disarm_latch "$SFILE"
 state_read "$SFILE"
 eq "state_disarm_latch clears latched" "false" "$STATE_LATCHED"
