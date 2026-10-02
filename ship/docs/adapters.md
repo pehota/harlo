@@ -272,3 +272,18 @@ process launched from an interactive coding session (not a login shell):
   request) and do not repeat side effects.
 - Put the `id` wherever an external system lets you tag work (branch, PR, message),
   so a later `ship signal` can carry it back.
+
+## `tracker.next` order (GitHub tracker)
+
+`tracker/github.ts` picks the next key differently per mode:
+
+| Mode | Picks | Why |
+|---|---|---|
+| Project (`--project <n>`) | first ready item in **board order** | dragging an item up the board prioritises it |
+| Labels (no `--project`) | ready issue with the **lowest number** | labels have no order |
+
+- Board order is the output order of `gh project item-list`, which matches the
+  item position (as GraphQL `ProjectV2.items`). gh does not document this order.
+  If it ever changes, switch to an explicit GraphQL query that reads the position.
+- Project mode still skips drafts, pull requests and other repos' issues, and
+  lists at most 1000 items.

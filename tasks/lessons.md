@@ -45,3 +45,13 @@
 - **Pattern:** "how many batches?" got a full status table.
 - **Why wrong:** the user asked for a number; extra content costs reading time.
 - **Rule:** a closed question gets the bare answer. Add detail only if asked.
+
+## "Out of scope" needs an owner
+
+- **Pattern:** parallelism was waved off as "out of scope, the environment's
+  job" for `env/queue.ts`, which *is* the environment.
+- **Why wrong:** deferring to a layer without checking whether the thing
+  being designed is that layer leaves the concern with no owner.
+- **Rule:** before calling something out of scope, name who owns it. If the
+  answer is the component in hand, it is in scope: design for it or
+  explicitly defer it with a tracked issue.

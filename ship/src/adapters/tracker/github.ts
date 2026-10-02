@@ -11,10 +11,13 @@
 // outside the set is rejected as `failed` before any `gh` call.
 // Project mode (--project <number>, owned by the repo's owner unless --project-owner overrides it): the item source is that GitHub Project's
 // single-select field --status-field (default `Status`) instead of labels. `next` takes the Issue items of
-// --repo whose field equals the ready value (--ready-label, default `ready`) and returns the lowest number
-// (sorted here, item-list order is not relied on); drafts, PRs and other repos' items are skipped. Items are
-// listed with --limit 1000, so a Project with more than 1000 items is truncated. `update` resolves the
-// project, field and option ids at runtime and makes one `gh project item-edit`; --status-labels is unused
+// --repo whose field equals the ready value (--ready-label, default `ready`) and returns the first one in board
+// order, so dragging an item up the board prioritises it; drafts, PRs and other repos' items are skipped.
+// Board order is `gh project item-list`'s output order (the item position, as GraphQL `ProjectV2.items`).
+// ponytail: that order is observed, not documented by gh; if gh ever changes it, the upgrade path is an
+// explicit GraphQL query that reads the position. Items are listed with --limit 1000, so a Project with
+// more than 1000 items is truncated. Label mode has no board, so there `next` returns the lowest number.
+// `update` resolves the project, field and option ids at runtime and makes one `gh project item-edit`; --status-labels is unused
 // and an empty status is rejected (a single-select cannot be cleared here). `read` and `comment` are unchanged.
 // W1 (no self-echo): `update` only edits labels (or the Project's status field) and `comment` only adds a comment, so title and body
 // (all `read` returns) never change through this adapter.
@@ -149,11 +152,9 @@ const fieldValue = (item: ProjectItem, field: string): unknown =>
   item[field] ?? item[field.charAt(0).toLowerCase() + field.slice(1)];
 
 const projectNext = (config: Config, project: string): TrackerNextBody => {
-  const numbers = repoIssues(config, projectItems(config, project))
-    .filter((item) => fieldValue(item, config.statusField) === config.readyLabel)
-    .map((item) => item.content.number as number);
-  const lowest = numbers.sort((a, b) => a - b)[0];
-  const body = { key: lowest === undefined ? null : `${keyPrefix(config)}${lowest}` };
+  const first = repoIssues(config, projectItems(config, project))
+    .find((item) => fieldValue(item, config.statusField) === config.readyLabel);
+  const body = { key: first === undefined ? null : `${keyPrefix(config)}${first.content.number}` };
   const invalid = check(schemaFor("tracker", "next")?.stdout ?? {}, { status: "ok", body });
   if (invalid) throw new Error(`invalid next body: ${invalid}`);
   return body;

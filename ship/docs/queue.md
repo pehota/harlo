@@ -55,7 +55,7 @@ after its progress lines.
 | Exit | Meaning |
 |---|---|
 | 0 | drained: `ship next` returned `delivery: null` |
-| 1 | a `ship next` / `ship status` call failed (stderr has its output, and names the Delivery when `ship` printed one, e.g. on exit 5), the re-pick guard's own `ship stop` failed, or bad usage |
+| 1 | a `ship next` / `ship status` call failed (stderr has ship's stderr, and names the Delivery when `ship` printed one, e.g. on exit 5), the re-pick guard's own `ship stop` failed, or bad usage |
 | 2 | the lockfile already exists: another queue holds it |
 | 3 | re-pick guard fired (see below) |
 
@@ -63,8 +63,8 @@ after its progress lines.
 
 One queue per project. On start the queue creates the lockfile atomically
 (fails if it exists) and writes a per-run token into it: its pid plus a random
-id. It removes it on drain, on error and on SIGINT, SIGTERM or SIGHUP, but only
-if the file still holds that token: a lock another queue took after this one's
+id. It removes it on every exit (drain, errors, exit 3, SIGINT, SIGTERM, SIGHUP)
+except SIGKILL, but only if the file still holds that token: a lock another queue took after this one's
 was deleted as stale is left alone.
 
 If the lockfile exists, the queue exits 2 with
