@@ -100,8 +100,8 @@ Only adapters that implement every op of their port are listed (Jira is not, yet
 
 **It writes**:
 
-- `<git root>/ship.config.json`: all eight project ports, Integrate `--root` = the git root, and a policy that
-  moves a picked item to in progress (`In Progress` / `in_progress`), done on delivery, a comment on every stop.
+- `<git root>/ship.config.json`: all eight project ports, Integrate `--root` = where the Main line is checked out
+  (see below), and a policy that moves a picked item to in progress (`In Progress` / `in_progress`), done on delivery, a comment on every stop.
 - `~/.config/ship/<projectId>.json`: tty Principal, file State, `USER` for the Claude steps.
 - `.ship/` as a line in the repo's `info/exclude` (once).
 
@@ -119,7 +119,7 @@ with `ship status` (exit 2 if ship rejects them).
 | `--main current\|<existing>\|new:<name>` | Main line (workspace `--main`) |
 | `--worktrees <dir>` | Worktrees root (workspace `--root`) |
 | `--state-dir <dir>` | State dir |
-| `--<port> <adapter>\|path:<argv>` | any other port, e.g. `--define path:my-agent --fast` |
+| `--<port> <adapter>\|path:<argv>` | any other port, e.g. `--define 'path:my-agent --fast'` |
 | `--help` | usage |
 
 A value given as a flag is never asked. Last, it prints the queue command to run from the git root:
@@ -129,7 +129,14 @@ bun <ship>/env/queue.ts --ship <ship>/bin/ship --interval 30000 --state bun <shi
 ```
 
 The tty Principal reads `/dev/tty`: run the queue in a real terminal.
-A new Main line is not checked out: Integrate lands onto the branch checked out in the git root, so check it out there first.
+
+**Where Integrate lands.** It merges into the branch checked out at its `--root`, so setup points `--root` at the Main line:
+
+| Main line is | Integrate `--root` |
+|---|---|
+| the branch checked out at the git root | the git root |
+| checked out in another worktree | that worktree |
+| neither | a new worktree `<git root>/.ship/main-line` (`git worktree add`), reused on a rerun |
 
 ## CLI
 
