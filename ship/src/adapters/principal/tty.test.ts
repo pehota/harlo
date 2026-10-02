@@ -96,6 +96,36 @@ describe("principal/tty", () => {
     expect(printed).toContain("comment ignored");
   });
 
+  test("decide: an exact option name plus punctuation is the answer; alias words in its comment are not a second pick", async () => {
+    const { stdout, printed } = await call("decide", "k-1/land-1", land(["approve", "rework", "rescope"]), [
+      { wait: "Answer with one of:", send: "approve: both mutation checks fail as required\n" },
+    ]);
+    expect(stdout).toEqual(ok("approve"));
+    expect(printed).not.toContain("also mentions");
+    expect(printed).toContain("comment ignored");
+  });
+
+  test("decide: Define's adjust keeps a comment that contains alias words, unchanged", async () => {
+    const payload: Decide = {
+      on: "accept", options: ["accept", "adjust"], min: "person", evidence,
+      comments: { accept: { goes: "dropped" }, adjust: { goes: "feedback", to: "define" } },
+    };
+    const { stdout, printed } = await call("decide", "k-1/accept-1", payload, [
+      { wait: "Answer with one of:", send: "adjust: criteria C1-C18 are good, keep them\n" },
+    ]);
+    expect(stdout).toEqual(ok("adjust", "criteria C1-C18 are good, keep them"));
+    expect(printed).not.toContain("also mentions");
+  });
+
+  test("decide: an alias-led reply naming another option is still refused as ambiguous", async () => {
+    const { stdout, printed } = await call("decide", "k-1/land-1", land(["approve", "rework"]), [
+      { wait: "Answer with one of:", send: "lgtm, but rework\n" },
+      { wait: "also mentions", send: "rework\n" },
+    ]);
+    expect(stdout).toEqual(ok("rework"));
+    expect(printed).toContain('ambiguous reply: also mentions "rework"');
+  });
+
   test("ask: a comment is refused, not silently attached, since AskBody carries none", async () => {
     const payload: AskPayload = { prompt: "Which greeting?", min: "person", options: ["formal", "casual"], evidence };
     const { stdout, printed } = await call("ask", "k-1/ask-1", payload, [

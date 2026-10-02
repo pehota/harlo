@@ -56,7 +56,11 @@ export const match = (reply: string, options: string[], commentAllowed: boolean)
   const remainder = text.slice(hit.length).replace(SEPARATOR, "").replace(/[\s.!]+$/, "");
   const picked = vocab.get(hit)!;
   // Another option named in the rest of the reply ("yes, but reject") means the person did not decide one thing.
-  const words = new Set(norm(remainder).split(/[^a-z0-9 ]+|\s+/).filter(Boolean));
+  // Not when the reply leads with an exact option name ("approve: checks fail as required"): `hit` is only ever
+  // followed by end-of-reply or a clause break, so that is the explicit "option: comment" form, and the comment's
+  // words — alias or stem words included — are the person's text, not a second pick.
+  const explicit = options.some((o) => norm(o) === hit);
+  const words = new Set(explicit ? [] : norm(remainder).split(/[^a-z0-9 ]+|\s+/).filter(Boolean));
   const others = [...vocab].filter(([phrase, set]) => !norm(phrase).includes(" ") && words.has(phrase) && [...set].some((c) => !picked.has(c)));
   if (others.length > 0) return refuse(`ambiguous reply: also mentions ${others.map(([p]) => JSON.stringify(p)).join(", ")}`);
   if (picked.size !== 1) return refuse(`ambiguous reply: ${JSON.stringify(hit)} fits ${picked.size} options`);
