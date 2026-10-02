@@ -104,6 +104,73 @@ echo '{"round":1}' > "$REPO6/.dod/main/result.json"
 H6=$(dod_diff_hash "$REPO6" "$BASE6")
 eq "diff_hash ignores .dod/ even without a .gitignore rule" "$H5" "$H6"
 
+# --- dod_diff_hash from a subdirectory: must stay content-aware -------------
+# Regression (dogfood, Oct 1): called with a subdir (e.g. <root>/ship, where
+# a session was launched), `git diff --name-only` printed top-level-relative
+# paths (ship/x) while `git ls-files --others` printed cwd-relative ones, and
+# hash-object read "$repo/$f" = <root>/ship/ship/x -> MISSING for every
+# file. The hash then encoded only the file list, so a content change that
+# kept the same paths slipped past the gate. Also, ship/.dod/ (where the
+# subdir-keyed skills wrote) was not excluded and self-poisoned the hash.
+REPO9=$(dod__test_mktemp_d)
+CLEANUP_DIRS="$CLEANUP_DIRS $REPO9"
+git -C "$REPO9" init -q -b main
+git -C "$REPO9" config user.email "t@t.t"
+git -C "$REPO9" config user.name "t"
+mkdir -p "$REPO9/ship"
+echo "v1" > "$REPO9/ship/x.txt"
+git -C "$REPO9" add -A
+git -C "$REPO9" commit -q -m root
+BASE9=$(git -C "$REPO9" rev-parse HEAD)
+
+echo "edit1" >> "$REPO9/ship/x.txt"
+echo "new1" > "$REPO9/ship/u.txt"
+H_ROOT=$(dod_diff_hash "$REPO9" "$BASE9")
+H_SUB=$(dod_diff_hash "$REPO9/ship" "$BASE9")
+eq "diff_hash from a subdir equals diff_hash from the root" "$H_ROOT" "$H_SUB"
+
+echo "edit2" >> "$REPO9/ship/x.txt"
+H_SUB_T=$(dod_diff_hash "$REPO9/ship" "$BASE9")
+if [ "$H_SUB" != "$H_SUB_T" ]; then
+  ok "diff_hash from a subdir changes when a tracked file's content changes"
+else
+  bad "diff_hash from a subdir changes when a tracked file's content changes" "$H_SUB_T"
+fi
+
+echo "new2" > "$REPO9/ship/u.txt"
+H_SUB_U=$(dod_diff_hash "$REPO9/ship" "$BASE9")
+if [ "$H_SUB_T" != "$H_SUB_U" ]; then
+  ok "diff_hash from a subdir changes when an untracked file's content changes"
+else
+  bad "diff_hash from a subdir changes when an untracked file's content changes" "$H_SUB_U"
+fi
+
+mkdir -p "$REPO9/ship/.dod/main"
+echo '{"round":1}' > "$REPO9/ship/.dod/main/result.json"
+H_SUB_DOD=$(dod_diff_hash "$REPO9/ship" "$BASE9")
+eq "diff_hash ignores a nested sub/.dod/" "$H_SUB_U" "$H_SUB_DOD"
+
+echo "rules" > "$REPO9/ship/CLAUDE.md"
+CS_SUB=$(dod_changed_standards "$REPO9/ship" "$BASE9")
+eq "changed_standards from a subdir reports top-level-relative paths" '["ship/CLAUDE.md"]' "$CS_SUB"
+
+# dod_repo_root: subdir -> git top-level; non-git dir -> itself (no crash)
+ROOT9=$(cd "$REPO9" && pwd -P)
+eq "repo_root of a subdir is the git top-level" "$ROOT9" "$(dod_repo_root "$REPO9/ship")"
+NOGIT=$(dod__test_mktemp_d)
+CLEANUP_DIRS="$CLEANUP_DIRS $NOGIT"
+eq "repo_root of a non-git dir falls back to the dir" "$NOGIT" "$(dod_repo_root "$NOGIT")"
+
+# baseline worktree from a subdir lands under the root's .dod, not sub/.dod
+WT9=$(dod_baseline_worktree "$REPO9/ship" "main" "$BASE9")
+eq "baseline_worktree from a subdir lives under <root>/.dod" "$ROOT9/.dod/main/baseline-worktree" "$WT9"
+dod_baseline_worktree_remove "$REPO9/ship" "main"
+if [ ! -d "$ROOT9/.dod/main/baseline-worktree" ]; then
+  ok "baseline_worktree_remove from a subdir tears down the root worktree"
+else
+  bad "baseline_worktree_remove from a subdir tears down the root worktree" "still exists"
+fi
+
 # --- dod_is_ancestor ---------------------------------------------------------
 REPO5=$(dod__test_make_repo)
 ROOT_SHA=$(git -C "$REPO5" rev-parse HEAD)

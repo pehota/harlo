@@ -27,6 +27,19 @@ dod_task_key() {
   dod__sanitize "$branch"
 }
 
+# dod_repo_root <dir> — the git top-level containing dir, or dir itself when
+# it is not inside a git repo (never empty, never a crash). The single
+# anchor for everything dod keys on a repo: .dod/ lives at the top-level and
+# every repo-relative path is top-level-relative, whichever subdir a hook or
+# skill was launched from. Without it, `git diff --name-only` (top-level-
+# relative) and `git ls-files --others` (cwd-relative) disagree from a
+# subdir and hash-object reads the wrong path (see dod_diff_hash).
+dod_repo_root() {
+  local top
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$top" ]; then printf '%s' "$top"; else printf '%s' "$1"; fi
+}
+
 # gitref__changed_paths <repo_dir> <baseline_sha> — repo-relative paths
 # changed since baseline: `git diff --name-only` (tracked, vs baseline)
 # unioned with untracked paths (git ls-files --others --exclude-standard),
@@ -35,12 +48,13 @@ dod_task_key() {
 # top) and dod_changed_standards (pattern-filtering on top) — DRY, since both
 # need the same "which paths changed since baseline" answer.
 gitref__changed_paths() {
-  local repo="$1" baseline="$2"
+  local repo baseline="$2"
+  repo=$(dod_repo_root "$1")
   {
     git -C "$repo" diff --name-only "$baseline" -- 2>/dev/null
     git -C "$repo" ls-files --others --exclude-standard 2>/dev/null
   } | sort -u | while IFS= read -r f; do
-    case "$f" in .dod/*) continue ;; esac
+    case "$f" in .dod/*|*/.dod/*) continue ;; esac
     printf '%s\n' "$f"
   done
 }
@@ -76,15 +90,21 @@ gitref__changed_paths() {
 # baseline) hashes to the literal marker "MISSING" rather than being silently
 # skipped — a delete must move the hash same as any other change.
 #
-# Excludes .dod/ defensively even though it belongs in .gitignore: result.json
+# Paths are top-level-relative, so repo is normalised to the git top-level
+# first (dod_repo_root) — called from a subdir, "$repo/$f" would otherwise
+# double the subdir prefix and hash every file as MISSING, leaving a hash
+# blind to content.
+#
+# Excludes .dod/ (and any nested */.dod/) defensively even though it belongs in .gitignore: result.json
 # and state.json are themselves written as untracked files under .dod/, so
 # without this exclusion every dod_diff_hash call after a result_write would
 # hash its own output, self-invalidating the very result it just wrote. Never
 # rely on .gitignore alone for this — a repo that hasn't picked up the ignore
 # rule yet must not wedge the gate.
 dod_diff_hash() {
-  local repo="$1" baseline="$2"
+  local repo baseline="$2"
   [ -n "$baseline" ] || return 1
+  repo=$(dod_repo_root "$1")
   {
     gitref__changed_paths "$repo" "$baseline" | while IFS= read -r f; do
       printf '%s\n' "$f"
@@ -154,7 +174,8 @@ dod_is_ancestor_status() {
 
 # dod_baseline_worktree <repo_dir> <task_key> <baseline_sha> — ensures a
 # worktree checked out at baseline_sha exists at
-# .dod/<task_key>/baseline-worktree, creating it only if missing or stale
+# <top-level>/.dod/<task_key>/baseline-worktree (repo normalised via
+# dod_repo_root), creating it only if missing or stale
 # (§5.3, D18: "resolved lazily in a persistent worktree"). Prints the
 # worktree's absolute path on success, prints nothing and returns 1 on
 # failure. Idempotent and cheap to call every time a caller needs it — the
@@ -174,6 +195,7 @@ dod_is_ancestor_status() {
 dod_baseline_worktree() {
   local repo="$1" task_key="$2" baseline_sha="$3" wt
   [ -n "$repo" ] && [ -n "$task_key" ] && [ -n "$baseline_sha" ] || return 1
+  repo=$(dod_repo_root "$repo")
   wt="$repo/.dod/$task_key/baseline-worktree"
 
   if [ -d "$wt/.git" ] || [ -f "$wt/.git" ]; then
@@ -205,6 +227,7 @@ dod_baseline_worktree() {
 dod_baseline_worktree_remove() {
   local repo="$1" task_key="$2" wt
   [ -n "$repo" ] && [ -n "$task_key" ] || return 1
+  repo=$(dod_repo_root "$repo")
   wt="$repo/.dod/$task_key/baseline-worktree"
   [ -d "$wt" ] || return 0
   git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1
