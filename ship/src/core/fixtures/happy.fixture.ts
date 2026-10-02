@@ -10,6 +10,7 @@ const { accept: ACCEPT, land: LAND } = OPTIONS;
 
 const setup1 = awaited("setup-1", "workspace", "setup", {}, "setup", "run");
 const define1 = awaited("define-1", "define", "run", {}, "define", "run");
+const defineOnBase = awaited("define-1", "define", "run", { base: "trunk" }, "define", "run"); // harlo-52
 const accept1 = decide("accept", 1, ACCEPT, "person");
 const implement1 = awaited("implement-1", "implement", "run", { criteria, findings: [] }, "implement", "run");
 const check1 = awaited("check-1", "check", "run", { criteria, changeset }, "check", "run");
@@ -24,12 +25,12 @@ export const happyRows: TransitionRow[] = [
   {
     id: "H1", name: "setup ok → define",
     state: snapshotAt("setup", setup1, { workspace: null, criteria: null, runbook: null, changeset: null }),
-    signal: ok(setup1, { path: workspace }),
+    signal: ok(setup1, { path: workspace, base: "trunk" }),
     expect: {
       at: "define",
-      commands: [cmd(define1)],
-      state: { workspace, awaiting: define1, lastRun: define1, seq: { setup: 1, define: 1 } },
-      entry: { from: "setup", to: "define", issued: [define1.id] },
+      commands: [cmd(defineOnBase)],
+      state: { workspace, base: "trunk", awaiting: defineOnBase, lastRun: defineOnBase, seq: { setup: 1, define: 1 } },
+      entry: { from: "setup", to: "define", issued: [defineOnBase.id] },
     },
   },
   {
@@ -79,6 +80,19 @@ export const happyRows: TransitionRow[] = [
       commands: [cmd(implement1)],
       state: { awaiting: implement1, seq: { accept: 1, implement: 1 } },
       entry: { from: "accept", to: "implement", issued: [implement1.id], by: "model" },
+    },
+  },
+  {
+    id: "H3c", name: "accept + comment → implement with the comment as feedback, verbatim",
+    state: snapshotAt("accept", accept1),
+    signal: answer(accept1, "accept", "person", "keep the greeting under 20 chars\n- no emoji"),
+    expect: {
+      at: "implement",
+      commands: [cmd(awaited("implement-1", "implement", "run",
+        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run"))],
+      state: { lastRun: awaited("implement-1", "implement", "run",
+        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run") },
+      entry: { from: "accept", to: "implement", issued: [implement1.id], by: "person" },
     },
   },
   {

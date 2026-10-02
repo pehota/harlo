@@ -49,6 +49,7 @@ export const snapshotSchema: JSONSchemaType<Snapshot> = {
     retries: { type: "integer" },
     fixRounds: { type: "integer" },
     workspace: { anyOf: [{ type: "string" }, nullSchema] },
+    base: { type: "string", nullable: true }, // optional: absent on a Delivery persisted before harlo-52
     criteria: { anyOf: [stringsSchema, nullSchema] },
     runbook: { anyOf: [stringsSchema, nullSchema] },
     changeset: { anyOf: [{ type: "string" }, nullSchema] },
@@ -142,7 +143,7 @@ export const timedEntrySchema: JSONSchemaType<TimedEntry> = {
       nullable: true,
       enum: [
         "ignored_stale", "ignored_terminal", "invalid_answer", "rejected_start",
-        "workitem_changed_late", "workitem_unchanged", "ignored_not_blocked",
+        "workitem_changed_late", "workitem_unchanged", "ignored_not_blocked", "ignored_comment",
       ],
     },
     info: { type: "string", nullable: true },

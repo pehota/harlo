@@ -121,7 +121,7 @@ cat > script.json <<'EOF'
 { "replies": {
   "tracker.read":       { "status": "ok", "body": { "workItem": { "key": "hello", "title": "Greet by name", "body": "Say hello." } } },
   "tracker.update":     { "status": "ok", "body": {} },
-  "workspace.setup":    { "status": "ok", "body": { "path": "/fake/ws/hello-1" } },
+  "workspace.setup":    { "status": "ok", "body": { "path": "/fake/ws/hello-1", "base": "main" } },
   "workspace.teardown": { "status": "ok", "body": {} },
   "define.run":         { "status": "ok", "body": { "criteria": ["greets Ada by name"], "runbook": ["run greet Ada"] } },
   "implement.run":      { "status": "ok", "body": { "changeset": "c1" } },

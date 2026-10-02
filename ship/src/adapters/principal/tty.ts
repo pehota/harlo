@@ -2,12 +2,13 @@
 // Terminal Principal (plan M0.20; sync transport, supersedes the old fire-and-forget design): prints each gate
 // or question, then blocks on /dev/tty for the reply itself — the same invocation answers it, no second
 // `ship signal` call needed. argv: principal <op>.
-//   decide, ask → print, block for a reply on /dev/tty, match it, then {"status":"ok", body:{answer, by, comment?}}
+//   decide, ask → print, block for a reply on /dev/tty, match it, then {"status":"ok", body:{answer, by, comment?}};
+//                 a decide's comment is kept only after an option whose `comments` route carries one
 //   notify      → print, then ok {}
 //   cancel      → print "withdrawn", then ok {}
 // Every error is caught: printing a gate the caller never sees the reply to would be worse than failing loudly.
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
-import type { Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
+import type { CommentRoute, Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
 import type { AskPayload, CancelPayload, NotifyPayload } from "../../../src/contracts/ports";
 import { match } from "./match";
 
@@ -31,11 +32,29 @@ const evidenceLines = (e: GateEvidence): string[] => [
 const answerLines = (options: string[] | undefined): string[] =>
   options && options.length > 0 ? ["Answer with one of:", ...options.map((o) => `  ${o}`)] : ["Answer (type your reply):"];
 
+const carries = (route: CommentRoute | undefined): boolean => route !== undefined && route.goes !== "dropped";
+
+/** Where an option's comment goes, as its line's marker: `[+ comment → Implement]`; none when it drops comments. */
+const commentMarker = (route: CommentRoute | undefined): string => {
+  if (!carries(route)) return "";
+  const to = route!.goes === "feedback" && route!.to ? route!.to[0]!.toUpperCase() + route!.to.slice(1) : "reason";
+  return `[+ comment → ${to}]`;
+};
+
+/** A decide's options, each saying for itself whether a trailing comment is kept. */
+const decideAnswerLines = (p: Decide): string[] => {
+  const width = Math.max(...p.options.map((o) => o.length));
+  const line = (o: string) => {
+    const marker = commentMarker(p.comments[o]);
+    return marker === "" ? `  ${o}` : `  ${o.padEnd(width)}  ${marker}`;
+  };
+  return ["Answer with one of:", ...p.options.map(line)];
+};
+
 const decideLines = (stdin: Stdin, p: Decide): string[] => [
   `── ${stdin.delivery}: decide ${p.on} (min ${p.min}) ──`,
   ...evidenceLines(p.evidence),
-  ...answerLines(p.options),
-  `  (optional: add free text after your answer as a comment)`,
+  ...decideAnswerLines(p),
 ];
 
 const askLines = (stdin: Stdin, p: AskPayload): string[] => [
@@ -69,9 +88,11 @@ const openTty = (): Tty => {
   };
 };
 
+type Reply = { answer: string; comment?: string };
+
 /** Block for a reply against `options` (empty/undefined means open-ended: the whole reply is the answer). Loops
  * (not recurses) on an empty/unclear reply, so a stuck or flaky tty can't grow the call stack unboundedly. */
-const answer = (tty: Tty, options: string[] | undefined, commentAllowed: boolean): { answer: string; comment?: string } => {
+const answer = (tty: Tty, options: string[] | undefined, commentAllowed: boolean, reprompt = answerLines(options)): Reply => {
   for (;;) {
     if (!options || options.length === 0) {
       const reply = tty.readLine().trim();
@@ -84,8 +105,17 @@ const answer = (tty: Tty, options: string[] | undefined, commentAllowed: boolean
     const reply = tty.readLine();
     const matched = match(reply, options, commentAllowed);
     if (matched.ok) return { answer: matched.answer, ...(matched.comment === undefined ? {} : { comment: matched.comment }) };
-    tty.print([matched.reason, ...answerLines(options)]);
+    tty.print([matched.reason, ...reprompt]);
   }
+};
+
+/** A decide's reply: free text after an option is the comment only when that option carries one; else it is
+ * dropped here, and the person is told, rather than sent for the core to ignore. */
+const decideAnswer = (tty: Tty, p: Decide): Reply => {
+  const reply = answer(tty, p.options, true, decideAnswerLines(p));
+  if (reply.comment === undefined || carries(p.comments[reply.answer])) return reply;
+  tty.print([`comment ignored: "${reply.answer}" does not take a comment`]);
+  return { answer: reply.answer };
 };
 
 const OPS: Record<string, { print: (stdin: Stdin, payload: never) => string[]; interactive: boolean }> = {
@@ -105,8 +135,9 @@ const run = async (): Promise<unknown> => {
   try {
     tty.print(lines);
     if (!handler.interactive) return OK;
-    const payload = stdin.payload as Decide | AskPayload;
-    const { answer: text, comment } = answer(tty, payload.options, op === "decide");
+    const { answer: text, comment } = op === "decide"
+      ? decideAnswer(tty, stdin.payload as Decide)
+      : answer(tty, (stdin.payload as AskPayload).options, false);
     return { status: "ok", body: { answer: text, by: "person", ...(comment === undefined ? {} : { comment }) } };
   } finally {
     tty.close();

@@ -21,14 +21,14 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A real git repo with one commit on `main`, used as the main line every test worktrees off. */
-const gitRepo = async (): Promise<string> => {
+/** A real git repo with one commit on `main` (or `mainLine`), used as the main line every test worktrees off. */
+const gitRepo = async (mainLine = "main"): Promise<string> => {
   const dir = tempDir();
   const run = async (args: string[]): Promise<void> => {
     const proc = Bun.spawn(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
     await proc.exited;
   };
-  await run(["init", "-b", "main"]);
+  await run(["init", "-b", mainLine]);
   await run(["config", "user.email", "test@example.com"]);
   await run(["config", "user.name", "Test"]);
   writeFileSync(join(dir, "README.md"), "hello\n");
@@ -46,16 +46,16 @@ const branches = async (repo: string): Promise<string[]> => {
 
 const workItemFor = (key: string): WorkItem => ({ ...baseWorkItem, key });
 
-type Call = { op: string; payload: unknown };
+type Call = { op: string; payload: unknown; main?: string };
 type Out = { exitCode: number; stdout: unknown };
 
 /** Run `workspace/worktree.ts --main <main> --root <root> workspace <op>` with a Stdin envelope, as the Runner does. */
-const call = async (repo: string, root: string, delivery: string, { op, payload }: Call): Promise<Out> => {
+const call = async (repo: string, root: string, delivery: string, { op, payload, main = "main" }: Call): Promise<Out> => {
   const stdin: Stdin = {
     id: `${delivery}/workspace-1`, delivery, port: "workspace", op,
     workItem: workItemFor("PROJ-1"), workspace: null, payload, tools: [],
   };
-  const proc = Bun.spawn(["bun", ADAPTER, "--main", "main", "--root", root, "workspace", op], {
+  const proc = Bun.spawn(["bun", ADAPTER, "--main", main, "--root", root, "workspace", op], {
     cwd: repo,
     stdin: new Blob([JSON.stringify(stdin)]),
     stdout: "pipe",
@@ -69,7 +69,7 @@ const call = async (repo: string, root: string, delivery: string, { op, payload 
   return { exitCode, stdout };
 };
 
-const setup = (): Call => ({ op: "setup", payload: {} });
+const setup = (main?: string): Call => ({ op: "setup", payload: {}, ...(main === undefined ? {} : { main }) });
 const teardown = (path: string): Call => ({ op: "teardown", payload: { path } });
 const ok = (body: unknown) => ({ exitCode: 0, stdout: { status: "ok", body } });
 
@@ -80,9 +80,19 @@ describe("workspace/worktree adapter", () => {
     const delivery = "PROJ-1-1";
     const result = await call(repo, root, delivery, setup());
     const path = join(root, delivery);
-    expect(result).toEqual(ok({ path }));
+    expect(result).toEqual(ok({ path, base: "main" }));
     expect(existsSync(join(path, "README.md"))).toBe(true);
     expect(await branches(repo)).toContain("ship/PROJ-1-1");
+  });
+
+  test("setup reports the --main branch as base, fresh and on an idempotent re-setup (harlo-52)", async () => {
+    const repo = await gitRepo("dogfood");
+    const root = tempDir();
+    const delivery = "PROJ-1-1";
+    const path = join(root, delivery);
+    expect(await call(repo, root, delivery, setup("dogfood"))).toEqual(ok({ path, base: "dogfood" }));
+    expect(await call(repo, root, delivery, setup("dogfood"))).toEqual(ok({ path, base: "dogfood" }));
+    expect(await branches(repo)).not.toContain("main");
   });
 
   test("setup is idempotent: a second call for the same delivery returns ok", async () => {
@@ -90,8 +100,8 @@ describe("workspace/worktree adapter", () => {
     const root = tempDir();
     const delivery = "PROJ-1-1";
     const path = join(root, delivery);
-    expect(await call(repo, root, delivery, setup())).toEqual(ok({ path }));
-    expect(await call(repo, root, delivery, setup())).toEqual(ok({ path }));
+    expect(await call(repo, root, delivery, setup())).toEqual(ok({ path, base: "main" }));
+    expect(await call(repo, root, delivery, setup())).toEqual(ok({ path, base: "main" }));
   });
 
   test("teardown removes the worktree and its branch", async () => {

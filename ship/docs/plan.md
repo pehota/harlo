@@ -173,9 +173,9 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 
 | Port | payload | `ok` body |
 |---|---|---|
-| define | `{ feedback?: string; answer?: string }` | `{ criteria: string[]; runbook: string[] }` |
-| implement | `{ criteria; findings: Finding[]; feedback?; answer? }` | `{ changeset: string }` (opaque ref) |
-| check | `{ criteria; changeset; answer? }` | `{verdict:"pass"}` \| `{verdict:"fix"; findings}` \| `{verdict:"decide"; about:"scope"\|"advisory"; findings}` |
+| define | `{ base?: string; feedback?: string; answer?: string }` | `{ criteria: string[]; runbook: string[] }` |
+| implement | `{ base?; criteria; findings: Finding[]; feedback?; answer? }` | `{ changeset: string }` (opaque ref) |
+| check | `{ base?; criteria; changeset; answer? }` | `{verdict:"pass"}` \| `{verdict:"fix"; findings}` \| `{verdict:"decide"; about:"scope"\|"advisory"; findings}` |
 | integrate | `{ changeset; answer? }` | `{verdict:"landed"}` \| `{verdict:"fix"; findings}` (a conflict is `question{about:"conflict"}`) |
 | deploy | `{ changeset; answer? }` | `{verdict:"live"}` \| `{verdict:"not_live"; findings?}` |
 | verify | `{ runbook; answer? }` | `{verdict:"pass"}` \| `{verdict:"fail"; findings}` |
@@ -184,7 +184,7 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 
 | Port.op | Awaited? | payload | `ok` body |
 |---|---|---|---|
-| workspace.setup | yes | `{}` | `{ path: string }` |
+| workspace.setup | yes | `{}` | `{ path: string; base: string }` (base: the main-line branch; harlo-52) |
 | workspace.teardown | yes | `{ path }` | `{}` |
 | tracker.update | yes at Close, fire elsewhere | `{ status: string }` (opaque, from config) | `{}` |
 | tracker.comment | fire | `{ text }` | `{}` |
@@ -210,8 +210,26 @@ type GateEvidence = {
   workItem: WorkItem; criteria: string[] | null; runbook: string[] | null;
   changeset: string | null; findings: Finding[]; evidence: EvidenceItem[]; note?: string;
 };
-type Decide = { on: DecidePoint; options: string[]; min: PrincipalKind; evidence: GateEvidence };
+type CommentRoute = { goes: "feedback" | "reason" | "dropped"; to?: "implement" | "define" };  // to iff feedback
+type Decide = {
+  on: DecidePoint; options: string[]; comments: Record<string, CommentRoute>;  // one route per option
+  min: PrincipalKind; evidence: GateEvidence;
+};
 ```
+
+**Comment routes** (harlo-51). `COMMENT_ROUTES` in `src/core/gates.ts` is the one table of where a gate answer's
+comment goes. The core follows it and copies it into each decide's `comments`. `feedback`: the comment becomes
+`payload.feedback` of the step the answer runs. `reason`: it becomes `Snapshot.reason`, and so it is in the
+outcome's tracker comment and notify text. `dropped`: the answer is applied as if it had no comment, and the
+entry carries note `ignored_comment` (the comment stays on the journaled signal).
+
+| Point | feedback | reason | dropped |
+|---|---|---|---|
+| accept | `accept` → implement, `adjust` → define | | |
+| decision | `keep_going` → implement | `stop` | `accept` |
+| land | `rework` → implement, `rescope` → define | | `approve` |
+| failure | `fix_forward` → implement | `accept` | |
+| blocked | | `stop` | `retry` |
 
 **Gate options.** These are core constants, not config. The core branches on them.
 
@@ -394,9 +412,9 @@ Notation:
 
 | # | state | signal | → | commands | snapshot / entry |
 |---|---|---|---|---|---|
-| H1 | setup | ok `{path}` | define | run define `{}` | workspace = path |
+| H1 | setup | ok `{path, base}` | define | run define `{base}` | workspace = path, base = base |
 | H2 | define | ok `{criteria, runbook}` + evidence | accept | decide accept | criteria, runbook set; evidence appended |
-| H3 | accept | answer `accept` | implement | run implement `{criteria, findings: []}` | entry.by |
+| H3 | accept | answer `accept` [+ comment] | implement | run implement `{criteria, findings: [], feedback?}` | entry.by |
 | H3a | accept, policy `tracker.steps.implement = "in_progress"` | answer `accept` | implement | run implement, plus fire `tracker.update{status: "in_progress"}` | entry.by |
 | H3b | accept, no `tracker.steps.implement` | answer `accept` | implement | run implement only; no `tracker.update` issued | entry.by |
 | H4 | accept | answer `adjust` + comment | define | run define `{feedback: comment}` | |
@@ -416,8 +434,8 @@ Notation:
 | F1 | check, fixRounds < N | ok `{fix, findings}` | implement | run implement `{criteria, findings}` | fixRounds+1, findings set |
 | F2 | check, fixRounds = N | ok `{fix, findings}` | decision | decide decision, min = `decision.scope` | findings set |
 | F3 | check | ok `{decide, about, findings}` | decision | decide decision, min = `decision[about]` | |
-| F4 | decision | `keep_going` | implement | run implement `{criteria, findings}` | fixRounds = 0 |
-| F5 | decision | `accept` | land | decide land | |
+| F4 | decision | `keep_going` [+ comment] | implement | run implement `{criteria, findings, feedback?}` | fixRounds = 0 |
+| F5 | decision | `accept` | land | decide land | a comment is dropped: note `ignored_comment` |
 | F6 | decision | `stop` [+ comment] | abandoned | abandon(`abandoned`, comment ?? "stopped at decision") | no cancel (answer consumed) |
 | F7 | land | `rework` [+ comment] | implement | run implement `{criteria, findings, feedback}` | fixRounds unchanged |
 | F8 | land | `rescope` [+ comment] | define | run define `{feedback}` | fixRounds unchanged |
@@ -430,8 +448,8 @@ Notation:
 |---|---|---|---|---|---|
 | X1 | deploy | ok `{not_live, findings?}` | failure | decide failure | findings set |
 | X2 | verify | ok `{fail, findings}` | failure | decide failure | findings set |
-| X3 | failure | `fix_forward` | implement | run implement `{criteria, findings}` | fixRounds unchanged |
-| X4 | failure | `accept` | close | awaited `tracker.update {status: outcomes.accepted_with_failure.status}` (+ fire comment) | outcome = `accepted_with_failure` |
+| X3 | failure | `fix_forward` [+ comment] | implement | run implement `{criteria, findings, feedback?}` | fixRounds unchanged |
+| X4 | failure | `accept` [+ comment] | close | awaited `tracker.update {status: outcomes.accepted_with_failure.status}` (+ fire comment `accepted_with_failure[: comment]`) | outcome = `accepted_with_failure`; reason = comment ?? null |
 
 ### 4.5 Questions (step ports only)
 
@@ -806,7 +824,7 @@ Why first: M1 has no external accounts and can dogfood on harlo. Every adapter b
   - Test: with the fake agent, the adapter:
     - commits in the workspace and returns `ok{changeset: "ship/<d>@<sha>"}`
     - stores the session id in its own state file, keyed by Delivery
-    - resumes that session when payload has `findings`, `feedback` or `answer`
+    - resumes that session when payload has `findings`, `feedback` or `answer` and a session is stored; with none stored (Define-gate `accept` + comment, harlo-51) it starts fresh with the full task plus that delta
     - never returns `failed` after any commit
   - Done when green on the fake plus one real run.
 - [x] **M1.11 Agent adapter: Check.**

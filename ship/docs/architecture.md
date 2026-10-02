@@ -243,8 +243,9 @@ stateDiagram-v2
   free text for the journal and for people. The core never parses `reason`.
 - A failed deploy (`ok{verdict: not_live}`) goes to the Failure gate, not Blocked:
   the main line has already changed, so the Principal decides.
-- **Workspace:** `setup` runs first; `teardown` runs after Close. On Abandoned
-  the workspace is kept for inspection.
+- **Workspace:** `setup` runs first and returns the workspace `path` and the main-line
+  branch `base`, which the agent steps (Define, Implement, Check) diff against;
+  `teardown` runs after Close. On Abandoned the workspace is kept for inspection.
 - An Integrate conflict comes back as a `question` to the Principal.
 - **The WorkItem changed** (`workItem_changed` signal, detected by the environment,
   which calls `changed <delivery>`; the Runner re-reads the WorkItem from the Tracker):

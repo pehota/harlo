@@ -6,10 +6,15 @@
 // per the spike's auth-failure finding — and optionally commits in its cwd first, standing in for the real
 // agent's own commit(s) inside the workspace.
 //
+// A reply's `usage`, `total_cost_usd`, `duration_ms` and `num_turns` (harlo-56) are printed as given, in the real
+// CLI's own shape, and only when set — on any reply, `is_error` and commit-then-crash ones included.
+//
 // env FAKE_AGENT_REPLIES (required): a JSON file `{"replies": <reply> | <reply>[]}`. A list gives the nth
 // call the nth reply (src/adapters/fake.ts's own idea); a single reply answers every call.
 // env FAKE_AGENT_LOG (optional): every call's argv is appended here as one JSON line, so a test can assert
 // what the adapter passed — e.g. whether `--resume` was sent, and with which session id.
+// env FAKE_AGENT_CWD_LOG (optional): every call's cwd is appended here as one line, so a test can assert
+// which directory the adapter ran the agent in (harlo-53).
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,6 +25,12 @@ type Reply = {
   session_id?: string;
   exitCode?: number;
   commit?: boolean; // when true, `git commit --allow-empty` in cwd before printing the reply
+  commitIn?: string; // a repo OUTSIDE cwd to also commit in: a stray agent that cd'd elsewhere (harlo-53)
+  dirty?: string; // a tracked file to append to without committing (harlo-53)
+  usage?: Record<string, unknown>; // e.g. { input_tokens, output_tokens, cache_read_input_tokens, ... }
+  total_cost_usd?: unknown;
+  duration_ms?: unknown;
+  num_turns?: unknown;
 };
 type Script = { replies: Reply | Reply[] };
 
@@ -39,6 +50,8 @@ const claimTurn = (dir: string): number => {
 const args = process.argv.slice(2);
 const log = process.env.FAKE_AGENT_LOG;
 if (log) appendFileSync(log, `${JSON.stringify(args)}\n`);
+const cwdLog = process.env.FAKE_AGENT_CWD_LOG;
+if (cwdLog) appendFileSync(cwdLog, `${process.cwd()}\n`);
 
 const repliesFile = process.env.FAKE_AGENT_REPLIES;
 if (!repliesFile) {
@@ -48,17 +61,22 @@ if (!repliesFile) {
 const { replies } = JSON.parse(readFileSync(repliesFile, "utf8")) as Script;
 const reply = Array.isArray(replies) ? (replies[claimTurn(`${repliesFile}.calls`)] ?? replies.at(-1)!) : replies;
 
-if (reply.commit) {
-  const commit = Bun.spawnSync(["git", "commit", "--allow-empty", "-q", "-m", "fake agent commit"], {
+const commitAt = (dir: string): void => {
+  const commit = Bun.spawnSync(["git", "-C", dir, "commit", "--allow-empty", "-q", "-m", "fake agent commit"], {
     stdout: "pipe", stderr: "pipe",
   });
   if (commit.exitCode !== 0) {
     console.error(commit.stderr.toString());
     process.exit(commit.exitCode);
   }
-}
+};
+if (reply.commit) commitAt(process.cwd());
+if (reply.commitIn) commitAt(reply.commitIn);
+if (reply.dirty) appendFileSync(reply.dirty, "stray edit\n");
 
+// JSON.stringify drops undefined fields, so a reply with no usage fields prints exactly as before harlo-56.
 console.log(JSON.stringify({
   is_error: reply.is_error, result: reply.result, structured_output: reply.structured_output, session_id: reply.session_id,
+  usage: reply.usage, total_cost_usd: reply.total_cost_usd, duration_ms: reply.duration_ms, num_turns: reply.num_turns,
 }));
 process.exit(reply.exitCode ?? 0);

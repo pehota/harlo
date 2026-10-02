@@ -12,11 +12,21 @@ export type Port =
 
 export type WorkItem = { key: string; title: string; body: string; url?: string };
 export type Finding = { text: string; ref?: string };
-export type EvidenceItem = { label: string; text?: string; url?: string }; // P9: opaque, never read
+/** One agent call's cost (harlo-56), each figure non-negative and present only when the agent reported it. */
+export type Usage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  turns?: number;
+};
+export type EvidenceItem = { label: string; text?: string; url?: string; usage?: Usage }; // P9: opaque, never read
 
 export type Result<Body = unknown> =
   | { status: "ok"; body: Body; evidence?: EvidenceItem[] }
-  | { status: "failed"; info: string } // could not run, changed nothing
+  | { status: "failed"; info: string; evidence?: EvidenceItem[] } // could not run, changed nothing
   | { status: "question"; prompt: string; about: string; options?: string[]; evidence?: EvidenceItem[] };
 export type Stdout<Body = unknown> = Result<Body> | { status: "accepted" };
 
@@ -47,7 +57,12 @@ export type GateEvidence = {
   evidence: EvidenceItem[];
   note?: string;
 };
-export type Decide = { on: DecidePoint; options: string[]; min: PrincipalKind; evidence: GateEvidence };
+/** Where a gate answer's comment goes: Principal feedback to step `to`, the Delivery's reason, or nowhere. */
+export type CommentRoute = { goes: "feedback" | "reason" | "dropped"; to?: "implement" | "define" };
+/** `comments` has one route per option, so a Principal can say up front which answers carry a comment. */
+export type Decide = {
+  on: DecidePoint; options: string[]; comments: Record<string, CommentRoute>; min: PrincipalKind; evidence: GateEvidence;
+};
 
 // ── Schemas (ajv, one per type above; JSONSchemaType<T> keeps them in step with the types) ──
 
@@ -87,12 +102,27 @@ export const findingSchema: JSONSchemaType<Finding> = {
 };
 export const findingsSchema: JSONSchemaType<Finding[]> = { type: "array", items: findingSchema };
 
+// A figure the CLI left out is absent, never null: JSONSchemaType insists an optional property be `nullable`, so
+// these schemas leave it off and are cast once here (ajv then rejects null like any other non-number).
+const figure = { type: "number", minimum: 0 } as const;
+
+export const usageSchema = {
+  type: "object",
+  properties: {
+    inputTokens: figure, outputTokens: figure, cacheReadTokens: figure, cacheCreationTokens: figure,
+    costUsd: figure, durationMs: figure, turns: figure,
+  },
+  required: [],
+  additionalProperties: false,
+} as unknown as JSONSchemaType<Usage> & { nullable: true };
+
 export const evidenceItemSchema: JSONSchemaType<EvidenceItem> = {
   type: "object",
   properties: {
     label: { type: "string" },
     text: { type: "string", nullable: true },
     url: { type: "string", nullable: true },
+    usage: usageSchema, // not nullable: an item without usage omits the key
   },
   required: ["label"],
   additionalProperties: false,
@@ -114,15 +144,29 @@ export const gateEvidenceSchema: JSONSchemaType<GateEvidence> = {
   additionalProperties: false,
 };
 
+export const commentRouteSchema: JSONSchemaType<CommentRoute> = {
+  type: "object",
+  properties: {
+    goes: { type: "string", enum: ["feedback", "reason", "dropped"] },
+    to: { type: "string", enum: ["implement", "define"], nullable: true },
+  },
+  required: ["goes"],
+  additionalProperties: false,
+  if: { properties: { goes: { const: "feedback" } } },
+  then: { required: ["to"] },
+  else: { not: { required: ["to"] } },
+};
+
 export const decideSchema: JSONSchemaType<Decide> = {
   type: "object",
   properties: {
     on: { type: "string", enum: ["accept", "decision", "land", "failure", "blocked"] },
     options: stringsSchema,
+    comments: { type: "object", additionalProperties: commentRouteSchema, required: [] },
     min: principalKindSchema,
     evidence: gateEvidenceSchema,
   },
-  required: ["on", "options", "min", "evidence"],
+  required: ["on", "options", "comments", "min", "evidence"],
   additionalProperties: false,
 };
 
@@ -169,7 +213,9 @@ export const okSchema = <Body>(body: JSONSchemaType<Body>): JSONSchemaType<Ok<Bo
 
 export const failedSchema: JSONSchemaType<Failed> = {
   type: "object",
-  properties: { status: { type: "string", const: "failed" }, info: { type: "string" } },
+  properties: {
+    status: { type: "string", const: "failed" }, info: { type: "string" }, evidence: { ...evidenceSchema, nullable: true },
+  },
   required: ["status", "info"],
   additionalProperties: false,
 };

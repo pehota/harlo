@@ -1,9 +1,9 @@
 // transition(): apply one signal to a Delivery (plan §4). Dispatch is by position (Snapshot.at).
-import type { Finding, Question, Result } from "../contracts/common";
+import type { DecidePoint, Finding, Question, Result } from "../contracts/common";
 import type {
   AskBody, CheckBody, DecideBody, DefineBody, DeployBody, ImplementBody, IntegrateBody, SetupBody, VerifyBody,
 } from "../contracts/ports";
-import { enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
+import { commentRoute, enterAsk, enterBlocked, enterDecision, enterGate } from "./gates";
 import { type Move, abandon, andThen, cancelAwaited, enterClose, enterStep, present, reissue, withFire } from "./steps";
 import {
   isTerminal, type Awaiting, type Entry, type Node, type Note, type Policy, type Position, type Signal, type Snapshot,
@@ -40,7 +40,16 @@ const onVerdict = <B extends { verdict: string }>(s: Snapshot, body: B, cases: V
 const enterClosed = (s: Snapshot): Move =>
   withFire({ state: { ...s, at: "closed" }, commands: [] }, "principal", "notify", { text: `closed: ${present(s, "outcome")}` });
 
-const feedback = (b: DecideBody) => (b.comment === undefined ? {} : { feedback: b.comment });
+/** Run the step COMMENT_ROUTES sends answer `b` at `on` to, with its comment as `feedback`. */
+const forward = (p: Policy, s: Snapshot, on: DecidePoint, b: DecideBody): Move => {
+  const route = commentRoute(on, b.answer);
+  if (route?.goes !== "feedback" || route.to === undefined) throw new Error(`${on}.${b.answer} has no feedback route`);
+  return enterStep(p, s, route.to, b.comment === undefined ? {} : { feedback: b.comment });
+};
+
+/** Answer `b`'s comment when COMMENT_ROUTES makes it the reason at `on`. */
+const reasonOf = (on: DecidePoint, b: DecideBody): string | undefined =>
+  commentRoute(on, b.answer)?.goes === "reason" ? b.comment : undefined;
 
 /** A `fix` verdict from Check or Integrate: another fix round while rounds are left, else the Decision gate. */
 const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
@@ -50,7 +59,10 @@ const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
 
 /** ok results, by the position they arrive at. Gate answers are ok results of `principal.decide`. */
 const onOk: { [P in Position]?: OnOk } = {
-  setup: (p, s, body) => enterStep(p, { ...s, workspace: (body as SetupBody).path }, "define"),
+  setup: (p, s, body) => {
+    const { path, base } = body as SetupBody;
+    return enterStep(p, { ...s, workspace: path, base }, "define");
+  },
   define: (p, s, body) => {
     const { criteria, runbook } = body as DefineBody;
     return enterGate(p, { ...s, criteria, runbook }, "accept");
@@ -58,8 +70,8 @@ const onOk: { [P in Position]?: OnOk } = {
   accept: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      accept: () => enterStep(p, s, "implement"),
-      adjust: () => enterStep(p, s, "define", feedback(b)),
+      accept: () => forward(p, s, "accept", b),
+      adjust: () => forward(p, s, "accept", b),
     });
   },
   implement: (p, s, body) => enterStep(p, { ...s, changeset: (body as ImplementBody).changeset }, "check"),
@@ -71,17 +83,17 @@ const onOk: { [P in Position]?: OnOk } = {
   decision: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      keep_going: () => enterStep(p, { ...s, fixRounds: 0 }, "implement", feedback(b)),
+      keep_going: () => forward(p, { ...s, fixRounds: 0 }, "decision", b),
       accept: () => enterGate(p, s, "land"),
-      stop: () => abandon(p, s, "abandoned", b.comment ?? "stopped at decision"),
+      stop: () => abandon(p, s, "abandoned", reasonOf("decision", b) ?? "stopped at decision"),
     });
   },
   land: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
       approve: () => enterStep(p, s, "integrate"),
-      rework: () => enterStep(p, s, "implement", feedback(b)),
-      rescope: () => enterStep(p, s, "define", feedback(b)),
+      rework: () => forward(p, s, "land", b),
+      rescope: () => forward(p, s, "land", b),
     });
   },
   integrate: (p, s, body) => onVerdict(s, body as IntegrateBody, {
@@ -99,8 +111,8 @@ const onOk: { [P in Position]?: OnOk } = {
   failure: (p, s, body) => {
     const b = body as DecideBody;
     return branch(s, b.answer, {
-      fix_forward: () => enterStep(p, s, "implement", feedback(b)),
-      accept: () => enterClose(p, s, "accepted_with_failure"),
+      fix_forward: () => forward(p, s, "failure", b),
+      accept: () => enterClose(p, { ...s, reason: reasonOf("failure", b) ?? null }, "accepted_with_failure"),
     });
   },
   close: (p, s) => enterStep(p, s, "teardown"),
@@ -109,7 +121,7 @@ const onOk: { [P in Position]?: OnOk } = {
     const node = present(s, "blockedAt");
     return branch(s, b.answer, {
       retry: () => reissue({ ...s, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd")),
-      stop: () => abandon(p, s, "abandoned", b.comment ?? `stopped at blocked ${node}`),
+      stop: () => abandon(p, s, "abandoned", reasonOf("blocked", b) ?? `stopped at blocked ${node}`),
     });
   },
   teardown: (_, s) => enterClosed(s),
@@ -167,6 +179,15 @@ const onPosition = (p: Policy, s: Snapshot, body: unknown): Move => {
   return handler(p, s, body);
 };
 
+/** A gate answer whose comment COMMENT_ROUTES drops: applied as if it had none, and journaled as ignored. */
+const onDecided = (p: Policy, s: Snapshot, awaiting: Awaiting, b: DecideBody): Applied => {
+  if (b.comment === undefined || commentRoute(awaiting.node as DecidePoint, b.answer)?.goes !== "dropped") {
+    return onPosition(p, s, b);
+  }
+  const { comment: _ignored, ...bare } = b;
+  return { ...onPosition(p, s, bare), note: "ignored_comment" };
+};
+
 /** A Principal's answer (decide or ask ok); one outside the allowed options is re-asked (Q6, B5, B7). */
 const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Applied => {
   const value = (body as AskBody).answer;
@@ -174,7 +195,7 @@ const onAnswer = (p: Policy, s: Snapshot, awaiting: Awaiting, body: unknown): Ap
     return { ...reissue(s, awaiting), note: "invalid_answer" };
   }
   if (awaiting.kind === "ask") return onAsk(p, s, awaiting, value);
-  return onPosition(p, s, body);
+  return onDecided(p, s, awaiting, body as DecideBody);
 };
 
 /** The awaited command's Result, applied to the state that no longer awaits it. */

@@ -42,6 +42,7 @@ export type Snapshot = {
   retries: number; // consecutive `failed` on the current node
   fixRounds: number;
   workspace: string | null;
+  base?: string; // main-line branch from workspace.setup; absent before Setup, and on a Delivery that predates it
   criteria: string[] | null;
   runbook: string[] | null;
   changeset: string | null;
@@ -59,7 +60,7 @@ export type Signal =
 
 export type Note =
   | "ignored_stale" | "ignored_terminal" | "invalid_answer" | "rejected_start"
-  | "workitem_changed_late" | "workitem_unchanged" | "ignored_not_blocked";
+  | "workitem_changed_late" | "workitem_unchanged" | "ignored_not_blocked" | "ignored_comment";
 
 // Runner-written entries (never produced by the core): from = to = Snapshot.at, issued = []
 export type RunnerSignal =

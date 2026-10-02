@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { start } from "./start";
 import { transition } from "./transition";
-import { policy } from "./fixtures/builders.fixture";
+import type { Command, Snapshot } from "./types";
+import { awaited, changeset, criteria, policy, runbook, snapshotAt, workItem } from "./fixtures/builders.fixture";
 import { applyTransition, ignoredRows, transitionRows } from "./fixtures/rows.fixture";
 
 describe("transition (§4)", () => {
@@ -49,5 +51,59 @@ describe("Blocked recovery signal (B8)", () => {
     const again = transition(policy, first.state, { kind: "blocked_recovery", action: "stop" });
     expect(again.state).toEqual(first.state);
     expect(again.commands).toEqual([]);
+  });
+});
+
+describe("the main-line base flows from workspace.setup into every agent step (harlo-52)", () => {
+  type Out = { state: Snapshot; commands: Command[] };
+  const run = (out: Out): Command => out.commands.find((c) => c.await)!;
+  const reply = (out: Out, body: unknown): Out =>
+    transition(policy, out.state, { kind: "result", id: out.state.awaiting!.id, result: { status: "ok", body } });
+  const asked = (out: Out): Out => transition(policy, out.state, {
+    kind: "result", id: out.state.awaiting!.id, result: { status: "question", prompt: "which?", about: "clarify" },
+  });
+  const decided = (out: Out, value: string, comment?: string): Out =>
+    reply(out, { answer: value, by: "person", ...(comment === undefined ? {} : { comment }) });
+
+  test("fresh runs and feedback/answer/findings re-runs all carry base", () => {
+    const created = start(policy, workItem, []);
+    if (created.kind !== "created") throw new Error("not created");
+    const defined1 = reply(created, { path: "/ws/k-1", base: "dogfood" });
+    expect(defined1.state.base).toBe("dogfood");
+    expect(run(defined1)).toMatchObject({ port: "define", payload: { base: "dogfood" } });
+
+    const answeredDefine = decided(asked(defined1), "hi"); // a question's answer re-runs Define
+    expect(run(answeredDefine)).toMatchObject({ port: "define", payload: { base: "dogfood", answer: "hi" } });
+
+    const accept = reply(answeredDefine, { criteria, runbook });
+    const implement1 = decided(accept, "accept", "keep it short"); // Define-gate comment → Implement feedback
+    expect(run(implement1)).toMatchObject({ port: "implement", payload: { base: "dogfood", feedback: "keep it short" } });
+
+    const answeredImplement = decided(asked(implement1), "yes");
+    expect(run(answeredImplement)).toMatchObject({ port: "implement", payload: { base: "dogfood", answer: "yes" } });
+
+    const check1 = reply(answeredImplement, { changeset });
+    expect(run(check1)).toMatchObject({ port: "check", payload: { base: "dogfood", changeset } });
+
+    const findings = [{ text: "missing test" }];
+    const implement2 = reply(check1, { verdict: "fix", findings }); // a fix round
+    expect(run(implement2)).toMatchObject({ port: "implement", payload: { base: "dogfood", findings } });
+
+    const answeredCheck = decided(asked(reply(implement2, { changeset })), "ok");
+    expect(run(answeredCheck)).toMatchObject({ port: "check", payload: { base: "dogfood", answer: "ok" } });
+
+    const land = reply(answeredCheck, { verdict: "pass" });
+    const rescoped = decided(land, "rescope", "narrower"); // Land rescope → Define with feedback
+    expect(run(rescoped)).toMatchObject({ port: "define", payload: { base: "dogfood", feedback: "narrower" } });
+  });
+
+  test("a Delivery persisted before harlo-52 has no base: its payloads omit it and nothing throws", () => {
+    const implement1 = awaited("implement-1", "implement", "run", { criteria, findings: [] }, "implement", "run");
+    const legacy = snapshotAt("implement", implement1);
+    expect("base" in legacy).toBe(false);
+    const check1 = reply({ state: legacy, commands: [] }, { changeset });
+    expect(run(check1).payload).toEqual({ criteria, changeset });
+    const implement2 = reply(check1, { verdict: "fix", findings: [{ text: "f" }] });
+    expect(run(implement2).payload).toEqual({ criteria, findings: [{ text: "f" }] });
   });
 });

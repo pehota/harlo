@@ -11,7 +11,7 @@ import { FakeSpawn, FakeState, type Script } from "./fixtures/fakes.fixture";
 const TIME = "2026-09-28T12:00:00.000Z";
 const HOST = "test-host";
 
-const setupOk: Script = { reply: { kind: "result", result: { status: "ok", body: { path: "/ws/k-1" } } } };
+const setupOk: Script = { reply: { kind: "result", result: { status: "ok", body: { path: "/ws/k-1", base: "trunk" } } } };
 const defineOk: Script = { reply: { kind: "result", result: { status: "ok", body: { criteria, runbook } } } };
 const crash: Script = { reply: { kind: "crash", reason: "exit 1", stderr: "…the stderr tail" } };
 
@@ -59,7 +59,7 @@ describe("apply loop", () => {
     const report = await apply(deps, startK);
     expect(report.exit).toBe(3);
     expect(report.output.unapplied).toEqual([
-      { kind: "result", id: id("setup-1"), result: { status: "ok", body: { path: "/ws/k-1" } } },
+      { kind: "result", id: id("setup-1"), result: { status: "ok", body: { path: "/ws/k-1", base: "trunk" } } },
     ]);
     expect(state.saves.filter((s) => s.entries.some((e) => e.signal.kind === "result"))).toHaveLength(5);
     expect(state.top(D)?.state.at).toBe("setup");
@@ -74,7 +74,7 @@ describe("apply loop", () => {
       exit: 3,
       output: {
         delivery: D, issued: [id("setup-1")],
-        unapplied: [{ kind: "result", id: id("setup-1"), result: { status: "ok", body: { path: "/ws/k-1" } } }],
+        unapplied: [{ kind: "result", id: id("setup-1"), result: { status: "ok", body: { path: "/ws/k-1", base: "trunk" } } }],
       },
     });
     expect(state.saves.filter((s) => s.entries.every(isJournal))).toHaveLength(5);

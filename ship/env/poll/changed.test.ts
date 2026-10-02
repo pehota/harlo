@@ -33,7 +33,7 @@ describe("poll/changed", () => {
     const p = project({
       // Every start reads its own key's WorkItem; the poller's `ship changed` re-reads it (unchanged: W1).
       "tracker.read": [wi("k1"), wi("k2"), wi("k1"), wi("k2")],
-      "workspace.setup": ok({ path: "/ws/k-1" }),
+      "workspace.setup": ok({ path: "/ws/k-1", base: "trunk" }),
       "define.run": ok({ criteria: ["c"], runbook: ["r"] }), // one reply answers every call (both Deliveries)
     });
 

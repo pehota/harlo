@@ -2,7 +2,7 @@
 import type { Finding } from "../../contracts/common";
 import {
   type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok,
-  runbook, snapshotAt,
+  policy, runbook, snapshotAt, withTracker,
 } from "./builders.fixture";
 
 const findings: Finding[] = [{ text: "greeting page returns 500", ref: "https://example.test/runs/7" }];
@@ -87,8 +87,31 @@ export const failureRows: TransitionRow[] = [
     expect: {
       at: "close",
       commands: [cmd(close1), fire("comment-1", "tracker", "comment", { text: "accepted_with_failure" })],
-      state: { outcome: "accepted_with_failure", awaiting: close1, lastRun: close1 },
+      state: { outcome: "accepted_with_failure", reason: null, awaiting: close1, lastRun: close1 },
       entry: { from: "failure", to: "close", issued: [close1.id, id("comment-1")], by: "person" },
+    },
+  },
+  {
+    id: "X4", name: "failure accept + comment → close with the comment as reason, in the tracker comment",
+    state: snapshotAt("failure", failure(), { findings }),
+    signal: answer(failure(), "accept", "person", "known flake, tracked in OPS-12"),
+    expect: {
+      at: "close",
+      commands: [cmd(close1), fire("comment-1", "tracker", "comment", { text: "accepted_with_failure: known flake, tracked in OPS-12" })],
+      state: { outcome: "accepted_with_failure", reason: "known flake, tracked in OPS-12", awaiting: close1 },
+      entry: { from: "failure", to: "close", issued: [close1.id, id("comment-1")], by: "person" },
+    },
+  },
+  {
+    id: "X4", name: "failure accept + comment with the outcome comment off → reason still set, no tracker comment",
+    policy: withTracker({ outcomes: { ...policy.tracker.outcomes, accepted_with_failure: { status: "done" } } }),
+    state: snapshotAt("failure", failure(), { findings }),
+    signal: answer(failure(), "accept", "person", "known flake"),
+    expect: {
+      at: "close",
+      commands: [cmd(close1)],
+      state: { outcome: "accepted_with_failure", reason: "known flake", awaiting: close1 },
+      entry: { from: "failure", to: "close", issued: [close1.id], by: "person" },
     },
   },
 ];
