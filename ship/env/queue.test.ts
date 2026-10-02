@@ -68,6 +68,27 @@ const gatekeeper = (p: Project, decide: Decide = () => "answer") => {
   return { halt: async () => { running = false; await loop; } };
 };
 
+/**
+ * The queue spawned directly (no bash in between), so a signal reaches the queue process itself. Resolves
+ * once its first progress line for `delivery` is out: it is then parked at that Delivery's first gate.
+ */
+const spawnParked = async (p: Project, delivery: string) => {
+  const proc = Bun.spawn(
+    ["bun", QUEUE, "--ship", BIN, "--interval", "20", "--state", ...p.stateArgv],
+    { cwd: p.dir, env: { PATH: process.env.PATH ?? "", HOME: p.dir, SHIP_MACHINE_CONFIG: join(p.dir, "machine.json") },
+      stdout: "pipe", stderr: "pipe" },
+  );
+  const reader = proc.stdout.getReader();
+  let seen = "";
+  while (!seen.includes(`${delivery} at=`)) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error(`queue exited before ${delivery}'s first pass:\n${seen}`);
+    seen += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  return proc;
+};
+
 const trackerFile = (p: Project, key: string) => readFileSync(join(p.trackerDir, `${key}.md`), "utf8");
 const doneLines = (stdout: string) => stdout.split("\n").filter((l) => l.includes(": done at="));
 const atOf = async (p: Project, d: string) => ((await p.ship("status", d)).out as Open).deliveries[0]?.at;
@@ -126,6 +147,19 @@ describe("queue", () => {
     expect(done.exit).toBe(0);
     expect(readFileSync(lock, "utf8")).toBe("another run's token");
   }, 60_000);
+
+  test.each([
+    { signal: "SIGTERM", exit: 143 }, { signal: "SIGINT", exit: 130 }, { signal: "SIGHUP", exit: 129 },
+  ] as const)("$signal while parked at a gate: exit $exit, the lock released", async ({ signal, exit }) => {
+    const p = project({ a: "ready" });
+    const proc = await spawnParked(p, "a-1");
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(true);
+
+    proc.kill(signal);
+
+    expect(await proc.exited).toBe(exit);
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+  }, 30_000);
 
   test("an already-open Delivery is driven first, then `ship next`", async () => {
     const p = project({ a: "ready", b: "ready" });

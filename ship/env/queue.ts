@@ -14,8 +14,9 @@
 // its outcome mapping sets no status) would be picked again forever. A key picked a second time in one run gets
 // its new Delivery stopped as `abandoned` with that reason, and the queue exits 3.
 //
-// One queue per State: an exclusive lockfile (atomic create) guards the run; it is removed on every exit path,
-// but only while it still holds this run's token (pid + random id) — a lock another run took since is kept.
+// One queue per State: an exclusive lockfile (atomic create) guards the run. It is removed on drain, on error
+// and on SIGINT/SIGTERM/SIGHUP — never on SIGKILL, which leaves it stale — and only while it still holds this
+// run's token (pid + random id): a lock another run took since is kept.
 // A stale one (from a killed process) is left for a person to delete — the queue never guesses.
 //
 // ponytail: no --concurrency flag — one Delivery at a time, deliberately. Parallel Deliveries are the open
@@ -85,6 +86,7 @@ const acquireLock = (lock: string): boolean => {
   process.on("exit", () => releaseLock(lock, token));
   process.on("SIGINT", () => process.exit(130));
   process.on("SIGTERM", () => process.exit(143));
+  process.on("SIGHUP", () => process.exit(129)); // the terminal closed
   return true;
 };
 

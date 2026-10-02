@@ -63,7 +63,7 @@ after its progress lines.
 
 One queue per project. On start the queue creates the lockfile atomically
 (fails if it exists) and writes a per-run token into it: its pid plus a random
-id. It removes it on every exit path (drained, error, SIGINT, SIGTERM), but only
+id. It removes it on drain, on error and on SIGINT, SIGTERM or SIGHUP, but only
 if the file still holds that token: a lock another queue took after this one's
 was deleted as stale is left alone.
 
