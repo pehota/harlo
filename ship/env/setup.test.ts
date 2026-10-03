@@ -186,6 +186,107 @@ describe("env/setup.ts", () => {
     expect(workspace[workspace.indexOf("--main") + 1]).toBe("dev");
   });
 
+  test("--main never prompts: menu words and new without a name are usage errors that write nothing", () => {
+    for (const value of ["new", "new:", "choose existing", "choose", "current (main)"]) {
+      const f = repo();
+      const ran = setupWithInput(f, "", [...allFlagsBut(f, "--main"), "--main", value]);
+      expect({ value, exit: ran.exit }).toEqual({ value, exit: 1 });
+      expect(ran.stderr).toContain("new:<name>");
+      expect(ran.stderr).not.toContain("[");
+      expect(existsSync(join(f.root, "ship.config.json"))).toBe(false);
+    }
+  });
+
+  test("--main <menu word> picks an existing local branch of that name", () => {
+    const f = repo();
+    git(f.root, "branch", "new");
+    expect(setup(f, "--yes", "--main", "new").exit).toBe(0);
+    const workspace: string[] = project(f).adapters.workspace;
+    expect(workspace[workspace.indexOf("--main") + 1]).toBe("new");
+  });
+
+  /** A repo whose `origin` (or `name`) is a real local bare repo. */
+  const repoWithRemote = (name = "origin"): Fixture & { remote: string } => {
+    const f = repo();
+    const remote = tempDir("ship-setup-remote-");
+    git(remote, "init", "-q", "--bare");
+    git(f.root, "remote", "add", name, remote);
+    return { ...f, remote };
+  };
+  const remoteHas = (remote: string, branch: string): boolean =>
+    Bun.spawnSync(["git", "-C", remote, "rev-parse", "--verify", "-q", `refs/heads/${branch}`]).exitCode === 0;
+  const upstreamOf = (f: Fixture, branch: string): string => git(f.root, "rev-parse", "--abbrev-ref", `${branch}@{upstream}`);
+
+  test("--main new:<name> --push-main pushes the new main line with upstream", () => {
+    const f = repoWithRemote();
+    const ran = setup(f, "--yes", "--push-main", "--main", "new:rel");
+    expect({ exit: ran.exit, stderr: ran.stderr }).toEqual({ exit: 0, stderr: "" });
+    expect(remoteHas(f.remote, "rel")).toBe(true);
+    expect(upstreamOf(f, "rel")).toBe("origin/rel");
+  });
+
+  test("--main new:<name> under --yes does not push, and prints the push command", () => {
+    const f = repoWithRemote();
+    const ran = setup(f, "--yes", "--main", "new:rel");
+    expect(ran.exit).toBe(0);
+    expect(remoteHas(f.remote, "rel")).toBe(false);
+    expect(ran.stderr).toContain("git push -u origin rel");
+    expect(ran.stderr).toContain("Integrate");
+  });
+
+  test("all flags, no --push-main: no push question, no push", () => {
+    const f = repoWithRemote();
+    const ran = setupWithInput(f, "", [...allFlagsBut(f, "--main"), "--main", "new:rel"]);
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).not.toContain("[y/N]");
+    expect(remoteHas(f.remote, "rel")).toBe(false);
+  });
+
+  test("answering no to the push question pushes nothing and prints the command", () => {
+    const f = repoWithRemote();
+    const ran = setupWithInput(f, "\nn\n", [...allFlagsBut(f, "--main", "--project-id"), "--main", "new:rel"]);
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain("Push rel to origin with upstream? [y/N]: ");
+    expect(ran.stderr).toContain("git push -u origin rel");
+    expect(remoteHas(f.remote, "rel")).toBe(false);
+  });
+
+  test("without origin the first remote is used", () => {
+    const f = repoWithRemote("upstream");
+    expect(setup(f, "--yes", "--push-main", "--main", "new:rel").exit).toBe(0);
+    expect(upstreamOf(f, "rel")).toBe("upstream/rel");
+  });
+
+  test("a failed push is not fatal: configs written, exit 0, the command on stderr", () => {
+    const f = repo({ origin: join(tempDir("ship-setup-gone-"), "missing.git") });
+    const ran = setup(f, "--yes", "--push-main", "--main", "new:rel");
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain("git push -u origin rel");
+    expect(ran.stderr).toContain("Integrate");
+    expect(shipStatus(f)).toMatchObject({ exit: 0 });
+  });
+
+  test("no remote: no push question and nothing about pushing", () => {
+    const f = repo();
+    const ran = setupWithInput(f, "", [...allFlagsBut(f, "--main"), "--main", "new:rel"]);
+    expect({ exit: ran.exit, stderr: ran.stderr }).toEqual({ exit: 0, stderr: "" });
+  });
+
+  test("flags of an unchosen tracker or own-path adapter: one warning naming each ignored flag", () => {
+    const f = repo();
+    const ran = setup(f, "--yes", "--tracker", "md", "--repo", "a/b", "--project", "3", "--state", `path:bun ${adapter("state/files.ts")} --dir ${join(f.home, "s")}`, "--state-dir", "/x");
+    expect(ran.exit).toBe(0);
+    const warnings = ran.stderr.split("\n").filter((line) => line.startsWith("warning:"));
+    expect(warnings).toEqual([expect.stringContaining("--repo")]);
+    for (const flag of ["--repo", "--project", "--state-dir"]) expect(warnings[0]).toContain(flag);
+    expect(warnings[0]).not.toContain("--tracker-dir");
+
+    const g = repo({ origin: "git@github.com:acme/widget.git" });
+    const gh = setup(g, "--yes", "--tracker-dir", "/t");
+    expect(gh.stderr).toContain("warning:");
+    expect(gh.stderr).toContain("--tracker-dir");
+  });
+
   /** The written integrate `--root`, and the branch checked out there. */
   const integrateRoot = (f: Fixture): { root: string; head: string } => {
     const integrate: string[] = project(f).adapters.integrate;
@@ -343,5 +444,20 @@ describe("env/setup.ts", () => {
     expect(config.adapters.tracker[1]).toBe(adapter("tracker/md.ts"));
     expect(config.adapters.workspace).toContain("feature-x");
     expect(shipStatus(f)).toMatchObject({ exit: 0, stdout: '{"deliveries":[]}' });
+  }, 30_000);
+
+  test("interactive: yes to the push question pushes the new main line with upstream", async () => {
+    const f = repoWithRemote();
+    const ran = await runPty(["sh", "-c", 'exec bun "$0" "$@" < /dev/tty', SETUP, ...allFlagsBut(f, "--main")], "", {
+      cwd: f.root,
+      env: env(f.home),
+      turns: [
+        { wait: "Main line [", send: "3\n" }, { wait: "New main-line branch [", send: "rel\n" },
+        { wait: "Push rel to origin with upstream? [y/N]", send: "y\n" },
+      ],
+    });
+    expect(ran.exit).toBe(0);
+    expect(remoteHas(f.remote, "rel")).toBe(true);
+    expect(upstreamOf(f, "rel")).toBe("origin/rel");
   }, 30_000);
 });

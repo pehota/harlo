@@ -6,6 +6,12 @@
 // Interactive by default: each prompt shows its default, [enter] accepts it. Prompts are written to stderr and
 // answers read from stdin line by line. A value given as a flag is never asked; `--yes` takes the default for
 // every value not given, so `--yes` (or a flag for every value) runs without prompts.
+// A NEW main line (`new:<name>`) on a repo with a remote (`origin`, else the first) is pushed with upstream when
+// `--push-main` is given or the push question is answered y; it is asked only in a run that already prompted.
+// Not pushed, or the push failed: the `git push -u` command goes to stderr (Integrate's push fails until it is run),
+// and the exit code is unchanged: the push is not part of the configs.
+// Flags the chosen adapters do not use (another tracker's, --main/--worktrees/--state-dir with an own-path
+// workspace/state) are ignored, named in one `warning:` line on stderr.
 // Never imports src/core or src/runner (environment code); the configs are checked against src/contracts schemas,
 // then loaded by `bin/ship` itself, so the cross-field policy rules are the Runner's own.
 //
@@ -45,7 +51,7 @@ const VALUE_FLAGS = [
   "--tracker-dir", "--main", "--worktrees", "--state-dir", ...PORT_FLAGS.map((port) => `--${port}`),
 ];
 
-const USAGE = `usage: setup.ts [--yes] [--force] [--help] [--project-id <id>]
+const USAGE = `usage: setup.ts [--yes] [--force] [--help] [--push-main] [--project-id <id>]
   [--tracker ${ADAPTERS.tracker.map((a) => a.name).join("|")}|path:<argv>] [--repo <owner/name>] [--project <n>] [--project-owner <owner>]
   [--ready-label <name>] [--status-labels <a,b,...>] [--tracker-dir <dir>]
   [--main current|<existing branch>|new:<name>] [--worktrees <dir>] [--state-dir <dir>]
@@ -53,9 +59,9 @@ const USAGE = `usage: setup.ts [--yes] [--force] [--help] [--project-id <id>]
 
 class SetupError extends Error {}
 
-const parseArgs = (args: string[]): { values: Map<string, string>; yes: boolean; force: boolean; help: boolean } => {
+const parseArgs = (args: string[]) => {
   const values = new Map<string, string>();
-  const bools = { yes: false, force: false, help: false };
+  const bools = { yes: false, force: false, help: false, "push-main": false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i] ?? "";
     const bool = arg.slice(2) as keyof typeof bools;
@@ -71,7 +77,7 @@ const git = (root: string, args: string[]): { code: number; out: string; err: st
   return { code: proc.exitCode ?? 1, out: proc.stdout.toString().trim(), err: proc.stderr.toString().trim() };
 };
 
-/** What the repo tells us: root, current branch, local branches, GitHub `owner/name` of `origin` if any. */
+/** What the repo tells us: root, current branch, local branches, GitHub `owner/name` of `origin`, the remote to push to. */
 const detect = () => {
   const top = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0) throw new SetupError(`not inside a git repo (${process.cwd()}): run setup from the target repo`);
@@ -81,7 +87,9 @@ const detect = () => {
   const branches = git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out.split("\n").filter(Boolean);
   const origin = git(root, ["remote", "get-url", "origin"]);
   const github = origin.code === 0 ? /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(origin.out)?.[1] : undefined;
-  return { root, current: branch.out, branches, github, checkedOut: checkedOut(root) };
+  const remotes = git(root, ["remote"]).out.split("\n").filter(Boolean);
+  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  return { root, current: branch.out, branches, github, remote, checkedOut: checkedOut(root) };
 };
 
 /** Branch → path of the worktree it is checked out in, for every worktree of the repo. */
@@ -102,6 +110,10 @@ type Ask = {
   text: (q: { flag: string; label: string; fallback: string }) => string;
   /** One of `options`: the flag if given (checked by the caller), else the default, else a numbered prompt. */
   choose: (q: { flag: string; label: string; options: string[]; fallback: number }) => string;
+  /** Yes/no, default no: `given` (a boolean flag) is yes; under --yes, or in a run that has not prompted yet, no. */
+  confirm: (q: { given: boolean; label: string }) => boolean;
+  /** The value of a value flag, if given. */
+  given: (flag: string) => string | undefined;
 };
 
 /** One stdin line, read byte by byte and blocking (Bun's line readers drop empty lines on a tty). */
@@ -115,28 +127,41 @@ const readLine = (prompt: string): string => {
   return Buffer.from(bytes).toString("utf8").trim();
 };
 
-const asker = (values: Map<string, string>, yes: boolean): Ask => ({
-  text: ({ flag, label, fallback }) => {
-    const given = values.get(flag);
-    if (given !== undefined) return given;
-    if (yes) return fallback;
-    return readLine(`${label} [${fallback}]: `) || fallback;
-  },
-  choose: ({ flag, label, options, fallback }) => {
-    const given = values.get(flag);
-    if (given !== undefined) return given;
-    const defaultOption = options[fallback] ?? "";
-    if (yes) return defaultOption;
-    process.stderr.write(`${label}:\n${options.map((o, i) => `  ${i + 1}) ${o}${i === fallback ? " (default)" : ""}`).join("\n")}\n`);
-    for (;;) {
-      const answer = readLine(`${label} [${fallback + 1}]: `);
-      if (answer === "") return defaultOption;
-      const picked = options[Number(answer) - 1];
-      if (/^\d+$/.test(answer) && picked !== undefined) return picked;
-      process.stderr.write(`pick 1-${options.length}\n`);
-    }
-  },
-});
+const asker = (values: Map<string, string>, yes: boolean): Ask => {
+  let prompted = false;
+  const prompt = (text: string): string => {
+    prompted = true;
+    return readLine(text);
+  };
+  return {
+    text: ({ flag, label, fallback }) => {
+      const given = values.get(flag);
+      if (given !== undefined) return given;
+      if (yes) return fallback;
+      return prompt(`${label} [${fallback}]: `) || fallback;
+    },
+    choose: ({ flag, label, options, fallback }) => {
+      const given = values.get(flag);
+      if (given !== undefined) return given;
+      const defaultOption = options[fallback] ?? "";
+      if (yes) return defaultOption;
+      process.stderr.write(`${label}:\n${options.map((o, i) => `  ${i + 1}) ${o}${i === fallback ? " (default)" : ""}`).join("\n")}\n`);
+      for (;;) {
+        const answer = prompt(`${label} [${fallback + 1}]: `);
+        if (answer === "") return defaultOption;
+        const picked = options[Number(answer) - 1];
+        if (/^\d+$/.test(answer) && picked !== undefined) return picked;
+        process.stderr.write(`pick 1-${options.length}\n`);
+      }
+    },
+    confirm: ({ given, label }) => {
+      if (given) return true;
+      if (yes || !prompted) return false;
+      return /^y(es)?$/i.test(prompt(`${label} [y/N]: `));
+    },
+    given: (flag) => values.get(flag),
+  };
+};
 
 // --- choices ------------------------------------------------------------------------------------------------
 
@@ -157,23 +182,31 @@ const pickAdapter = (ask: Ask, port: Port, fallback = 0): { name: string; argv: 
 
 type Repo = ReturnType<typeof detect>;
 
-/** The main line: the current branch, an existing local branch, or `new:<name>` (created later, from HEAD). */
-const pickMain = (ask: Ask, repo: Repo): { branch: string; create: boolean } => {
+/** The main-line menu's answer: `current`, an existing local branch, or `new:<name>`. */
+const mainMenu = (ask: Ask, repo: Repo): string => {
   const options = [`current (${repo.current})`, "choose existing", "new"];
-  const answer = ask.choose({ flag: "--main", label: "Main line", options, fallback: 0 });
-  const chosen = answer === options[0] ? "current"
-    : answer === "choose existing" ? ask.choose({ flag: "", label: "Existing branch", options: repo.branches, fallback: Math.max(0, repo.branches.indexOf(repo.current)) })
-    : answer === "new" ? `new:${ask.text({ flag: "", label: "New main-line branch", fallback: "" })}`
-    : answer;
+  const answer = ask.choose({ flag: "", label: "Main line", options, fallback: 0 });
+  if (answer === options[0]) return "current";
+  if (answer === "new") return `new:${ask.text({ flag: "", label: "New main-line branch", fallback: "" })}`;
+  return ask.choose({ flag: "", label: "Existing branch", options: repo.branches, fallback: Math.max(0, repo.branches.indexOf(repo.current)) });
+};
+
+/**
+ * The main line: the current branch, an existing local branch, or `new:<name>` (created later, from HEAD).
+ * `--main` never prompts: `current`, `new:<name>`, or a local branch's name (so a branch named like a menu word,
+ * e.g. `new`, is picked by its name); anything else is a usage error.
+ */
+const pickMain = (ask: Ask, repo: Repo): { branch: string; create: boolean } => {
+  const chosen = ask.given("--main") ?? mainMenu(ask, repo);
   if (chosen === "current") return { branch: repo.current, create: false };
-  if (chosen.startsWith("new:")) {
-    const branch = chosen.slice(4);
-    if (git(repo.root, ["check-ref-format", "--branch", branch]).code !== 0) throw new SetupError(`not a valid branch name: ${JSON.stringify(branch)}`);
-    if (repo.branches.includes(branch)) throw new SetupError(`branch ${branch} already exists: pass --main ${branch}`);
-    return { branch, create: true };
+  if (repo.branches.includes(chosen)) return { branch: chosen, create: false };
+  if (!chosen.startsWith("new:") || chosen === "new:") {
+    throw new SetupError(`--main ${JSON.stringify(chosen)}: no local branch of that name; use current, an existing branch, or new:<name> for a new one`);
   }
-  if (!repo.branches.includes(chosen)) throw new SetupError(`--main: no local branch ${chosen} (current, an existing branch, or new:<name>)`);
-  return { branch: chosen, create: false };
+  const branch = chosen.slice(4);
+  if (git(repo.root, ["check-ref-format", "--branch", branch]).code !== 0) throw new SetupError(`not a valid branch name: ${JSON.stringify(branch)}`);
+  if (repo.branches.includes(branch)) throw new SetupError(`branch ${branch} already exists: pass --main ${branch}`);
+  return { branch, create: true };
 };
 
 type Statuses = { ready: string; working: string; done: string };
@@ -196,7 +229,7 @@ const pickTracker = (ask: Ask, ctx: { repo: Repo; projectId: string }) => {
   const tracker = pickAdapter(ask, "tracker", ADAPTERS.tracker.findIndex((a) => a.name === (ctx.repo.github ? "github" : "md")));
   if (tracker.name === "md") {
     const dir = dirPath(ask.text({ flag: "--tracker-dir", label: "Tracker dir", fallback: join(HOME, ".local", "state", "ship", ctx.projectId, "tracker") }));
-    return { argv: [...tracker.argv, "--dir", dir], statuses: LABEL_STATUSES, dirs: [dir] };
+    return { name: tracker.name, argv: [...tracker.argv, "--dir", dir], statuses: LABEL_STATUSES, dirs: [dir] };
   }
   if (tracker.name === "github") {
     const repoName = ask.text({ flag: "--repo", label: "GitHub repo (owner/name)", fallback: ctx.repo.github ?? "" });
@@ -215,9 +248,9 @@ const pickTracker = (ask: Ask, ctx: { repo: Repo; projectId: string }) => {
       ...tracker.argv, ...(repoName ? ["--repo", repoName] : []), ...(project ? ["--project", project] : []),
       ...(owner ? ["--project-owner", owner] : []), "--ready-label", ready, ...(project ? [] : ["--status-labels", listed]),
     ];
-    return { argv, statuses, dirs: [] };
+    return { name: tracker.name, argv, statuses, dirs: [] };
   }
-  return { argv: tracker.argv, statuses: LABEL_STATUSES, dirs: [] }; // own path: label-style statuses
+  return { name: tracker.name, argv: tracker.argv, statuses: LABEL_STATUSES, dirs: [] }; // own path: label-style statuses
 };
 
 /** Every stop outcome comments; delivered/accepted_with_failure set the done status (Close awaits it). */
@@ -261,7 +294,16 @@ type Plan = {
   repo: Repo; project: ProjectConfig; machine: MachineConfig; files: { project: string; machine: string };
   main: { branch: string; create: boolean } | undefined; worktrees: string | undefined; dirs: string[];
   mainLine: { path: string; add: boolean } | undefined;
+  push: { remote: string; branch: string; accepted: boolean } | undefined;
 };
+
+const GITHUB_FLAGS = ["--repo", "--project", "--project-owner", "--ready-label", "--status-labels"];
+
+/** The value flags given that the chosen adapters do not use. */
+const ignoredFlags = (ask: Ask, chosen: { tracker: string; worktree: boolean; files: boolean }): string[] => [
+  ...(chosen.tracker === "github" ? [] : GITHUB_FLAGS), ...(chosen.tracker === "md" ? [] : ["--tracker-dir"]),
+  ...(chosen.worktree ? [] : ["--main", "--worktrees"]), ...(chosen.files ? [] : ["--state-dir"]),
+].filter((flag) => ask.given(flag) !== undefined);
 
 /**
  * Where Integrate lands: integrate/local merges into the branch checked out at its --root, so --root must have
@@ -278,7 +320,7 @@ const mainLineAt = (repo: Repo, branch: string): { path: string; add: boolean } 
 };
 
 /** Every answer, flag or default, turned into both configs; nothing on disk changes here. */
-const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean }): Plan => {
+const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean; pushMain: boolean }): Plan => {
   const { repo } = ctx;
   const projectId = ask.text({ flag: "--project-id", label: "Project id", fallback: basename(repo.root) });
   const machineFile = join(HOME, ".config", "ship", `${projectId}.json`);
@@ -320,7 +362,12 @@ const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean }
   const invalid = check(projectConfigSchema, project) ?? check(machineConfigSchema, machine);
   if (invalid) throw new SetupError(`invalid config: ${invalid}`);
   const dirs = [...tracker.dirs, ...(stateDir ? [stateDir] : [])];
-  return { repo, project, machine, files: { project: ctx.projectFile, machine: machineFile }, main, worktrees, dirs, mainLine };
+  const push = main?.create && repo.remote
+    ? { remote: repo.remote, branch: main.branch, accepted: ask.confirm({ given: ctx.pushMain, label: `Push ${main.branch} to ${repo.remote} with upstream?` }) }
+    : undefined;
+  const ignored = ignoredFlags(ask, { tracker: tracker.name, worktree: main !== undefined, files: stateDir !== undefined });
+  if (ignored.length > 0) console.error(`warning: ignored, not used by the chosen adapters: ${ignored.join(", ")}`);
+  return { repo, project, machine, files: { project: ctx.projectFile, machine: machineFile }, main, worktrees, dirs, mainLine, push };
 };
 
 /** The only step that changes anything: branch, directories, the exclude line, both files. */
@@ -339,6 +386,23 @@ const apply = (p: Plan): void => {
   writeJson(p.files.machine, p.machine);
 };
 
+/**
+ * Push a new main line with upstream when accepted; true once pushed. Otherwise (declined, or the push failed)
+ * print the command on stderr: Integrate's bare `git push` fails until the branch has an upstream.
+ */
+const pushMainLine = (p: Plan): boolean => {
+  if (!p.push) return false;
+  const args = ["push", "-u", p.push.remote, p.push.branch];
+  const command = ["git", ...args].map(quote).join(" ");
+  if (p.push.accepted) {
+    const pushed = git(p.repo.root, args);
+    if (pushed.code === 0) return true;
+    console.error(`${command} failed: ${pushed.err}`);
+  }
+  console.error(`${p.push.branch} is not pushed: run \`${command}\` from ${p.repo.root}; Integrate's push fails until then`);
+  return false;
+};
+
 /** Load both files the way ship does: `ship status` from the git root with this machine config. */
 const shipStatus = (p: Plan) => {
   const status = Bun.spawnSync([join(SHIP, "bin", "ship"), "status"], {
@@ -353,14 +417,15 @@ const visibleInRepo = (root: string, dir: string): boolean => {
   return !rel.startsWith("..") && !rel.split("/").some((segment) => segment.startsWith("."));
 };
 
-const report = (p: Plan, loaded: string): string[] => {
+const report = (p: Plan, done: { loaded: string; pushed: boolean }): string[] => {
   const queue = ["bun", join(SHIP, "env", "queue.ts"), "--ship", join(SHIP, "bin", "ship"), "--interval", "30000", "--state", ...p.machine.state];
   const { root } = p.repo;
   return [
     `wrote ${p.files.project}`,
     `wrote ${p.files.machine}`,
-    `\`ship status\` loads both: ${loaded}`,
+    `\`ship status\` loads both: ${done.loaded}`,
     ...(p.main?.create ? [`created branch ${p.main.branch} from HEAD`] : []),
+    ...(done.pushed && p.push ? [`pushed ${p.push.branch} to ${p.push.remote}, upstream set`] : []),
     ...(p.mainLine && p.mainLine.path !== root
       ? [`Integrate lands on ${p.main?.branch} in its worktree ${p.mainLine.path}${p.mainLine.add ? " (added)" : ""}`]
       : []),
@@ -384,14 +449,15 @@ const run = (args: string[]): number => {
   const projectFile = join(repo.root, "ship.config.json");
   refuseExisting([projectFile], options.force);
 
-  const planned = plan(asker(options.values, options.yes), { repo, projectFile, force: options.force });
+  const planned = plan(asker(options.values, options.yes), { repo, projectFile, force: options.force, pushMain: options["push-main"] });
   apply(planned);
+  const pushed = pushMainLine(planned);
   const status = shipStatus(planned);
   if (status.exitCode !== 0) {
     console.error(`written, but \`ship status\` rejected them (exit ${status.exitCode}):\n${status.stderr}`);
     return 2;
   }
-  console.log(report(planned, status.stdout).join("\n"));
+  console.log(report(planned, { loaded: status.stdout, pushed }).join("\n"));
   return 0;
 };
 

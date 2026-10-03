@@ -92,6 +92,7 @@ bun /abs/path/harlo/ship/env/setup.ts --yes     # every default, no prompts
 | md: tracker dir | `~/.local/state/ship/<projectId>/tracker` (created) |
 | Workspace, Define, Implement, Check, Integrate, Deploy, Verify, Principal, State | the one fully implemented adapter; or own path |
 | Main line | the current branch; or an existing local branch; or a new one (created from HEAD) |
+| Push `<branch>` to `<remote>` with upstream? `[y/N]` | no. Only for a new Main line on a repo with a remote (`origin`, else the first), and only in a run that already asked something |
 | Worktrees root | `<git root>/.ship/worktrees` (hidden: `bun test` skips it; a non-hidden root inside the repo gets a warning) |
 | State dir | `~/.local/state/ship/<projectId>/state` (created) |
 
@@ -112,17 +113,26 @@ with `ship status` (exit 2 if ship rejects them).
 |---|---|
 | `--yes` | the default for every value not given as a flag |
 | `--force` | overwrite existing config files |
+| `--push-main` | push a new Main line: `git push -u <remote> <branch>` (never pushed without it under `--yes` or with every value given) |
 | `--project-id <id>` | Project id |
 | `--tracker github\|md\|path:<argv>` | Tracker |
 | `--repo`, `--project`, `--project-owner`, `--ready-label`, `--status-labels` | the GitHub tracker's flags of the same name. `--status-labels`: at least two; the first is the policy's in-progress status, the last its done status (project mode: the Status field's options, not passed to the adapter) |
 | `--tracker-dir <dir>` | md tracker dir |
-| `--main current\|<existing>\|new:<name>` | Main line (workspace `--main`) |
+| `--main current\|<existing>\|new:<name>` | Main line (workspace `--main`). Never asks: anything else (`new` without `:<name>`, a menu word) is a usage error (exit 1, nothing written) saying to use `new:<name>`. A local branch named like a menu word (e.g. `new`) is picked by its name |
 | `--worktrees <dir>` | Worktrees root (workspace `--root`) |
 | `--state-dir <dir>` | State dir |
 | `--<port> <adapter>\|path:<argv>` | any other port, e.g. `--define 'path:my-agent --fast'` |
 | `--help` | usage |
 
-A value given as a flag is never asked. Last, it prints the queue command to run from the git root:
+A value given as a flag is never asked. A flag the chosen adapters do not use (another tracker's; `--main`,
+`--worktrees` with an own-path workspace; `--state-dir` with an own-path state) is ignored, all of them named in one
+`warning:` line on stderr.
+
+A new Main line not pushed (declined, `--yes` without `--push-main`, or the push failed) gets the exact
+`git push -u <remote> <branch>` on stderr: Integrate's push fails until it is run. A failed push is not fatal:
+the configs are written and the exit code is unchanged.
+
+Last, it prints the queue command to run from the git root:
 
 ```bash
 bun <ship>/env/queue.ts --ship <ship>/bin/ship --interval 30000 --state bun <ship>/src/adapters/state/files.ts --dir <state dir>
