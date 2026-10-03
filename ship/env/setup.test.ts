@@ -133,6 +133,37 @@ describe("env/setup.ts", () => {
     expect(shipStatus(f)).toMatchObject({ exit: 0, stdout: '{"deliveries":[]}' });
   });
 
+  test("github label mode: policy statuses come from --status-labels (first in progress, last done)", () => {
+    const f = repo({ origin: "git@github.com:acme/widget.git" });
+    expect(setup(f, "--yes", "--status-labels", "doing,review,shipped").exit).toBe(0);
+    const { policy, adapters } = project(f);
+    const tracker: string[] = adapters.tracker;
+    const accepted = [...(tracker[tracker.indexOf("--status-labels") + 1] ?? "").split(","), tracker[tracker.indexOf("--ready-label") + 1]];
+    expect(policy.tracker.steps).toEqual({ define: "doing", implement: "doing" });
+    expect(policy.tracker.outcomes.delivered.status).toBe("shipped");
+    const written = [
+      ...Object.values(policy.tracker.steps as Record<string, string>),
+      ...Object.values(policy.tracker.outcomes as Record<string, { status?: string }>).flatMap((o) => (o.status ? [o.status] : [])),
+    ];
+    for (const status of written) expect(accepted).toContain(status);
+  });
+
+  test("github label mode: fewer than two status labels is refused, nothing written", () => {
+    const f = repo({ origin: "git@github.com:acme/widget.git" });
+    const ran = setup(f, "--yes", "--status-labels", "done");
+    expect(ran.exit).toBe(1);
+    expect(ran.stderr).toContain("--status-labels");
+    expect(existsSync(join(f.root, "ship.config.json"))).toBe(false);
+  });
+
+  test("github project mode: --status-labels names the in-progress and done options", () => {
+    const f = repo({ origin: "git@github.com:acme/widget.git" });
+    expect(setup(f, "--yes", "--project", "3", "--status-labels", "Doing,Shipped").exit).toBe(0);
+    const { policy } = project(f);
+    expect(policy.tracker.steps.define).toBe("Doing");
+    expect(policy.tracker.outcomes.delivered.status).toBe("Shipped");
+  });
+
   test("--main new:<name> creates the branch from HEAD and uses it as the main line", () => {
     const f = repo();
     const ran = setup(f, "--yes", "--main", "new:release");
@@ -251,6 +282,45 @@ describe("env/setup.ts", () => {
     const ran = setup(f, "--help");
     expect(ran.exit).toBe(0);
     expect(ran.stdout).toContain("usage: setup.ts");
+  });
+
+  /** Every flag but the ones in `omit`, so setup asks exactly the prompts those leave open. */
+  const allFlagsBut = (f: Fixture, ...omit: string[]): string[] => {
+    const flags: Record<string, string> = {
+      "--tracker": "md", "--tracker-dir": join(f.home, "t"), "--workspace": "worktree", "--main": "current",
+      "--worktrees": join(f.home, "wt"), "--define": "claude", "--implement": "claude", "--check": "claude",
+      "--integrate": "local", "--deploy": "principal", "--verify": "principal", "--principal": "tty", "--state": "files",
+      "--state-dir": join(f.home, "s"), "--project-id": f.id,
+    };
+    return Object.entries(flags).filter(([flag]) => !omit.includes(flag)).flat();
+  };
+  const setupWithInput = (f: Fixture, input: string, args: string[]) => {
+    const proc = Bun.spawnSync(["bun", SETUP, ...args], { cwd: f.root, env: env(f.home), stdin: Buffer.from(input), stdout: "pipe", stderr: "pipe" });
+    return { exit: proc.exitCode, stderr: proc.stderr.toString() };
+  };
+
+  test("the tracker menu lists exactly the fully implemented trackers plus own path (no jira)", () => {
+    const f = repo();
+    const ran = setupWithInput(f, "\n", allFlagsBut(f, "--tracker"));
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain("Tracker:\n  1) github\n  2) md (default)\n  3) own path…\nTracker [2]: ");
+  });
+
+  test("a single-implementation port lists its one adapter plus own path", () => {
+    const f = repo();
+    const ran = setupWithInput(f, "\n", allFlagsBut(f, "--workspace"));
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain("Workspace:\n  1) worktree (default)\n  2) own path…\nWorkspace [1]: ");
+  });
+
+  test("own path: --define 'path:<argv>' and the interactive own-path option write that argv", () => {
+    const f = repo();
+    const ran = setupWithInput(f, "2\nmy-ws --fast\n", [...allFlagsBut(f, "--workspace", "--define"), "--define", "path:bun /x/agent.ts --quick"]);
+    expect({ exit: ran.exit, stderr: ran.stderr }).toMatchObject({ exit: 0 });
+    expect(ran.stderr).toContain("Workspace adapter argv [");
+    const { adapters } = project(f);
+    expect(adapters.define).toEqual(["bun", "/x/agent.ts", "--quick"]);
+    expect(adapters.workspace).toEqual(["my-ws", "--fast"]);
   });
 
   test("interactive: [enter] accepts each default, one non-default pick (a new main line)", async () => {

@@ -180,6 +180,17 @@ type Statuses = { ready: string; working: string; done: string };
 const PROJECT_STATUSES: Statuses = { ready: "Todo", working: "In Progress", done: "Done" }; // GitHub Project's default Status field
 const LABEL_STATUSES: Statuses = { ready: "ready", working: "in_progress", done: "done" }; // md's `ready`, github's default ready label
 
+/** The policy's statuses from a status list: its first entry is in progress, its last is done. */
+const statusesOf = (listed: string, ready: string): Statuses => {
+  const names = listed.split(",").map((name) => name.trim()).filter(Boolean);
+  const working = names[0];
+  const done = names.at(-1);
+  if (names.length < 2 || working === undefined || done === undefined) {
+    throw new SetupError(`--status-labels: give at least two (first = in progress, last = done), got ${JSON.stringify(listed)}`);
+  }
+  return { ready, working, done };
+};
+
 /** Tracker argv (github by default when `origin` is on GitHub, else md), the statuses the policy maps to, dirs to create. */
 const pickTracker = (ask: Ask, ctx: { repo: Repo; projectId: string }) => {
   const tracker = pickAdapter(ask, "tracker", ADAPTERS.tracker.findIndex((a) => a.name === (ctx.repo.github ? "github" : "md")));
@@ -191,14 +202,18 @@ const pickTracker = (ask: Ask, ctx: { repo: Repo; projectId: string }) => {
     const repoName = ask.text({ flag: "--repo", label: "GitHub repo (owner/name)", fallback: ctx.repo.github ?? "" });
     const project = ask.text({ flag: "--project", label: "GitHub project number (empty = label mode)", fallback: "" });
     const owner = project ? ask.text({ flag: "--project-owner", label: "Project owner (empty = the repo owner)", fallback: "" }) : "";
-    const statuses = project ? PROJECT_STATUSES : LABEL_STATUSES;
-    const ready = ask.text({ flag: "--ready-label", label: "Ready status", fallback: statuses.ready });
-    const labels = project
-      ? ask.text({ flag: "--status-labels", label: "Status labels (unused in project mode)", fallback: "" })
-      : ask.text({ flag: "--status-labels", label: "Status labels", fallback: `${statuses.working},${statuses.done}` });
+    const defaults = project ? PROJECT_STATUSES : LABEL_STATUSES;
+    const ready = ask.text({ flag: "--ready-label", label: "Ready status", fallback: defaults.ready });
+    const listed = ask.text({
+      flag: "--status-labels",
+      label: project ? "Status options (first = in progress, last = done)" : "Status labels (first = in progress, last = done)",
+      fallback: `${defaults.working},${defaults.done}`,
+    });
+    const statuses = statusesOf(listed, ready);
+    // Project mode reads the Project's single-select options; the adapter ignores --status-labels there.
     const argv = [
       ...tracker.argv, ...(repoName ? ["--repo", repoName] : []), ...(project ? ["--project", project] : []),
-      ...(owner ? ["--project-owner", owner] : []), "--ready-label", ready, ...(labels ? ["--status-labels", labels] : []),
+      ...(owner ? ["--project-owner", owner] : []), "--ready-label", ready, ...(project ? [] : ["--status-labels", listed]),
     ];
     return { argv, statuses, dirs: [] };
   }

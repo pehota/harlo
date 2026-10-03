@@ -88,7 +88,7 @@ bun /abs/path/harlo/ship/env/setup.ts --yes     # every default, no prompts
 |---|---|
 | Project id | the repo's directory name |
 | Tracker | `github` if `origin` is on GitHub, else `md`; or own path |
-| GitHub: repo, project number, project owner, ready status, status labels | `origin`'s `owner/name`; no project (label mode); repo owner; `Todo` (project) / `ready` (labels); `in_progress,done` (labels) |
+| GitHub: repo, project number, project owner, ready status, status labels | `origin`'s `owner/name`; no project (label mode); repo owner; `Todo` (project) / `ready` (labels); `In Progress,Done` (project options) / `in_progress,done` (labels) |
 | md: tracker dir | `~/.local/state/ship/<projectId>/tracker` (created) |
 | Workspace, Define, Implement, Check, Integrate, Deploy, Verify, Principal, State | the one fully implemented adapter; or own path |
 | Main line | the current branch; or an existing local branch; or a new one (created from HEAD) |
@@ -114,7 +114,7 @@ with `ship status` (exit 2 if ship rejects them).
 | `--force` | overwrite existing config files |
 | `--project-id <id>` | Project id |
 | `--tracker github\|md\|path:<argv>` | Tracker |
-| `--repo`, `--project`, `--project-owner`, `--ready-label`, `--status-labels` | the GitHub tracker's flags of the same name |
+| `--repo`, `--project`, `--project-owner`, `--ready-label`, `--status-labels` | the GitHub tracker's flags of the same name. `--status-labels`: at least two; the first is the policy's in-progress status, the last its done status (project mode: the Status field's options, not passed to the adapter) |
 | `--tracker-dir <dir>` | md tracker dir |
 | `--main current\|<existing>\|new:<name>` | Main line (workspace `--main`) |
 | `--worktrees <dir>` | Worktrees root (workspace `--root`) |
