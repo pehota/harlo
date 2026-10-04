@@ -133,11 +133,15 @@ A new Main line not pushed (declined, `--yes` without `--push-main`, or the push
 `git push -u <remote> <branch>` on stderr: Integrate's push may fail until it is run. A failed push is not fatal:
 the configs are written and the exit code is unchanged.
 
-Last, it prints the queue command to run from the git root:
+Last, it prints the two commands to run from anywhere in the repo:
 
 ```bash
-bun <ship>/env/queue.ts --ship <ship>/bin/ship --interval 30000 --state bun <ship>/src/adapters/state/files.ts --dir <state dir>
+bun <ship>/env/queue.ts --interval 30000   # drain the tracker
+bun <ship>/env/judge.ts                    # list the repo's Deliveries; add <delivery> to render one's journal
 ```
+
+Both find the configs as `ship` does: the repo's `ship.config.json`, then `$SHIP_MACHINE_CONFIG`, else
+`~/.config/ship/<projectId>.json`. From outside the repo, add `--repo <path>`.
 
 The tty Principal reads `/dev/tty`: run the queue in a real terminal.
 

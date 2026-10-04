@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // Setup (environment code): writes a git repo's `ship.config.json` (at the git root) and its machine config
 // `~/.config/ship/<projectId>.json`, then proves both load in the real `bin/ship` (`ship status`) and prints the
-// command that starts the queue (`env/queue.ts`). Run from anywhere inside the target repo:
+// short commands that start the queue (`env/queue.ts`) and list/render Deliveries (`env/judge.ts`). Run from
+// anywhere inside the target repo:
 //   bun <harlo>/ship/env/setup.ts [flags]
 // Interactive by default: each prompt shows its default, [enter] accepts it. Prompts are written to stderr and
 // answers read from stdin line by line. A value given as a flag is never asked; `--yes` takes the default for
@@ -425,7 +426,10 @@ const visibleInRepo = (root: string, dir: string): boolean => {
 };
 
 const report = (p: Plan, done: { loaded: string; pushed: boolean }): string[] => {
-  const queue = ["bun", join(SHIP, "env", "queue.ts"), "--ship", join(SHIP, "bin", "ship"), "--interval", "30000", "--state", ...p.machine.state];
+  // Short forms: queue.ts/judge.ts find both configs from the repo as ship does (env/repo-config.ts); the machine
+  // config is always written to its default path, so no --state/--ship is needed.
+  const queue = ["bun", join(SHIP, "env", "queue.ts"), "--interval", "30000"];
+  const judge = ["bun", join(SHIP, "env", "judge.ts")];
   const { root } = p.repo;
   return [
     `wrote ${p.files.project}`,
@@ -440,6 +444,9 @@ const report = (p: Plan, done: { loaded: string; pushed: boolean }): string[] =>
     `Start the queue, from ${root}:`,
     `  ${queue.map(quote).join(" ")}`,
     "The tty Principal answers gates on /dev/tty: run the queue in a real terminal.",
+    "",
+    "List its Deliveries, or render one's journal (add <delivery>), from the repo:",
+    `  ${judge.map(quote).join(" ")}`,
   ];
 };
 

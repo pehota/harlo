@@ -95,11 +95,17 @@ describe("env/setup.ts", () => {
       },
     });
     expect(excludeLines(f)).toEqual([".ship/"]);
-    expect(ran.stdout).toContain(
-      `bun ${join(SHIP, "env", "queue.ts")} --ship ${BIN} --interval 30000 --state bun ${adapter("state/files.ts")} --dir ${stateDir}`,
-    );
+    // The short commands: no plumbing flags, the configs are found from the repo as ship finds them.
+    const queueLine = `bun ${join(SHIP, "env", "queue.ts")} --interval 30000`;
+    expect(ran.stdout).toContain(`\n  ${queueLine}\n`);
+    expect(ran.stdout).toContain(`\n  bun ${join(SHIP, "env", "judge.ts")}\n`);
+    expect(ran.stdout).not.toContain("--state");
     expect(ran.stdout).toContain("real terminal");
     expect(shipStatus(f)).toMatchObject({ exit: 0, stdout: '{"deliveries":[]}' });
+
+    // The printed queue command, run as printed from the repo root: the tracker is empty, so it drains at once.
+    const queue = Bun.spawnSync(["bash", "-c", queueLine], { cwd: f.root, env: env(f.home), stdout: "pipe", stderr: "pipe" });
+    expect({ exit: queue.exitCode, stderr: queue.stderr.toString() }).toEqual({ exit: 0, stderr: "" });
   });
 
   test("a GitHub origin defaults to the github tracker in label mode", () => {
