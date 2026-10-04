@@ -287,6 +287,32 @@ describe("env/setup.ts", () => {
     expect(gh.stderr).toContain("--tracker-dir");
   });
 
+  test("--project-owner without --project on the github tracker is named in the ignored-flag warning", () => {
+    const f = repo({ origin: "git@github.com:acme/widget.git" });
+    const ran = setup(f, "--yes", "--project-owner", "acme-org");
+    expect(ran.exit).toBe(0);
+    const warnings = ran.stderr.split("\n").filter((line) => line.startsWith("warning:"));
+    expect(warnings).toEqual([expect.stringContaining("--project-owner")]);
+    expect(project(f).adapters.tracker).not.toContain("--project-owner");
+  });
+
+  test("--main and --worktrees with an own-path workspace are named in the warning", () => {
+    const f = repo();
+    const ran = setup(f, "--yes", "--workspace", `path:bun ${adapter("workspace/worktree.ts")} --main main --root ${join(f.home, "w")}`, "--main", "dev", "--worktrees", "/x");
+    expect(ran.exit).toBe(0);
+    const warnings = ran.stderr.split("\n").filter((line) => line.startsWith("warning:"));
+    expect(warnings).toEqual([expect.stringContaining("--main")]);
+    expect(warnings[0]).toContain("--worktrees");
+  });
+
+  test("every warning goes to stderr; stdout stays the report", () => {
+    const f = repo();
+    const ran = setup(f, "--yes", "--worktrees", join(f.root, "wt"));
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain(`warning: ${join(f.root, "wt")} is inside the repo`);
+    expect(ran.stdout).not.toContain("warning:");
+  });
+
   /** The written integrate `--root`, and the branch checked out there. */
   const integrateRoot = (f: Fixture): { root: string; head: string } => {
     const integrate: string[] = project(f).adapters.integrate;
@@ -459,5 +485,24 @@ describe("env/setup.ts", () => {
     expect(ran.exit).toBe(0);
     expect(remoteHas(f.remote, "rel")).toBe(true);
     expect(upstreamOf(f, "rel")).toBe("origin/rel");
+  }, 30_000);
+});
+
+describe("env/setup.ts interactive new main line", () => {
+  test("an empty name for 3) new is an error that names no flag, exit 1, nothing written", async () => {
+    const f = repo();
+    const ran = await runPty(["sh", "-c", 'exec bun "$0" "$@" < /dev/tty', SETUP, "--tracker", "md", "--tracker-dir", join(f.home, "t")], "", {
+      cwd: f.root,
+      env: env(f.home),
+      turns: [
+        { wait: "Project id [", send: "\n" }, { wait: "Workspace [", send: "\n" },
+        { wait: "Main line [", send: "3\n" }, { wait: "New main-line branch [", send: "\n" },
+      ],
+    });
+    expect(ran.exit).toBe(1);
+    expect(ran.ptyOutput).toContain("a new main-line branch needs a name");
+    expect(ran.ptyOutput).not.toContain("--main");
+    expect(existsSync(join(f.root, "ship.config.json"))).toBe(false);
+    expect(existsSync(machinePath(f))).toBe(false);
   }, 30_000);
 });

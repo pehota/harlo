@@ -8,7 +8,7 @@
 // every value not given, so `--yes` (or a flag for every value) runs without prompts.
 // A NEW main line (`new:<name>`) on a repo with a remote (`origin`, else the first) is pushed with upstream when
 // `--push-main` is given or the push question is answered y; it is asked only in a run that already prompted.
-// Not pushed, or the push failed: the `git push -u` command goes to stderr (Integrate's push fails until it is run),
+// Not pushed, or the push failed: the `git push -u` command goes to stderr (Integrate's push may fail until it is run),
 // and the exit code is unchanged: the push is not part of the configs.
 // Flags the chosen adapters do not use (another tracker's, --main/--worktrees/--state-dir with an own-path
 // workspace/state) are ignored, named in one `warning:` line on stderr.
@@ -187,7 +187,11 @@ const mainMenu = (ask: Ask, repo: Repo): string => {
   const options = [`current (${repo.current})`, "choose existing", "new"];
   const answer = ask.choose({ flag: "", label: "Main line", options, fallback: 0 });
   if (answer === options[0]) return "current";
-  if (answer === "new") return `new:${ask.text({ flag: "", label: "New main-line branch", fallback: "" })}`;
+  if (answer === "new") {
+    const name = ask.text({ flag: "", label: "New main-line branch", fallback: "" });
+    if (name === "") throw new SetupError("a new main-line branch needs a name");
+    return `new:${name}`;
+  }
   return ask.choose({ flag: "", label: "Existing branch", options: repo.branches, fallback: Math.max(0, repo.branches.indexOf(repo.current)) });
 };
 
@@ -300,8 +304,8 @@ type Plan = {
 const GITHUB_FLAGS = ["--repo", "--project", "--project-owner", "--ready-label", "--status-labels"];
 
 /** The value flags given that the chosen adapters do not use. */
-const ignoredFlags = (ask: Ask, chosen: { tracker: string; worktree: boolean; files: boolean }): string[] => [
-  ...(chosen.tracker === "github" ? [] : GITHUB_FLAGS), ...(chosen.tracker === "md" ? [] : ["--tracker-dir"]),
+const ignoredFlags = (ask: Ask, chosen: { tracker: string; projectMode: boolean; worktree: boolean; files: boolean }): string[] => [
+  ...(chosen.tracker === "github" ? (chosen.projectMode ? [] : ["--project-owner"]) : GITHUB_FLAGS), ...(chosen.tracker === "md" ? [] : ["--tracker-dir"]),
   ...(chosen.worktree ? [] : ["--main", "--worktrees"]), ...(chosen.files ? [] : ["--state-dir"]),
 ].filter((flag) => ask.given(flag) !== undefined);
 
@@ -365,8 +369,11 @@ const plan = (ask: Ask, ctx: { repo: Repo; projectFile: string; force: boolean; 
   const push = main?.create && repo.remote
     ? { remote: repo.remote, branch: main.branch, accepted: ask.confirm({ given: ctx.pushMain, label: `Push ${main.branch} to ${repo.remote} with upstream?` }) }
     : undefined;
-  const ignored = ignoredFlags(ask, { tracker: tracker.name, worktree: main !== undefined, files: stateDir !== undefined });
+  const ignored = ignoredFlags(ask, { tracker: tracker.name, projectMode: tracker.argv.includes("--project"), worktree: main !== undefined, files: stateDir !== undefined });
   if (ignored.length > 0) console.error(`warning: ignored, not used by the chosen adapters: ${ignored.join(", ")}`);
+  if (worktrees && visibleInRepo(repo.root, worktrees)) {
+    console.error(`warning: ${worktrees} is inside the repo and not hidden: bun test and other tools will pick up the Deliveries' files`);
+  }
   return { repo, project, machine, files: { project: ctx.projectFile, machine: machineFile }, main, worktrees, dirs, mainLine, push };
 };
 
@@ -388,7 +395,7 @@ const apply = (p: Plan): void => {
 
 /**
  * Push a new main line with upstream when accepted; true once pushed. Otherwise (declined, or the push failed)
- * print the command on stderr: Integrate's bare `git push` fails until the branch has an upstream.
+ * print the command on stderr: Integrate's bare `git push` may fail until the branch has an upstream (not with push.autoSetupRemote).
  */
 const pushMainLine = (p: Plan): boolean => {
   if (!p.push) return false;
@@ -399,7 +406,7 @@ const pushMainLine = (p: Plan): boolean => {
     if (pushed.code === 0) return true;
     console.error(`${command} failed: ${pushed.err}`);
   }
-  console.error(`${p.push.branch} is not pushed: run \`${command}\` from ${p.repo.root}; Integrate's push fails until then`);
+  console.error(`${p.push.branch} is not pushed: run \`${command}\` from ${p.repo.root}; Integrate's push may fail until then`);
   return false;
 };
 
@@ -428,9 +435,6 @@ const report = (p: Plan, done: { loaded: string; pushed: boolean }): string[] =>
     ...(done.pushed && p.push ? [`pushed ${p.push.branch} to ${p.push.remote}, upstream set`] : []),
     ...(p.mainLine && p.mainLine.path !== root
       ? [`Integrate lands on ${p.main?.branch} in its worktree ${p.mainLine.path}${p.mainLine.add ? " (added)" : ""}`]
-      : []),
-    ...(p.worktrees && visibleInRepo(root, p.worktrees)
-      ? [`warning: ${p.worktrees} is inside the repo and not hidden: bun test and other tools will pick up the Deliveries' files`]
       : []),
     "",
     `Start the queue, from ${root}:`,

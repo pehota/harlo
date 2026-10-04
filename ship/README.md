@@ -126,10 +126,10 @@ with `ship status` (exit 2 if ship rejects them).
 
 A value given as a flag is never asked. A flag the chosen adapters do not use (another tracker's; `--main`,
 `--worktrees` with an own-path workspace; `--state-dir` with an own-path state) is ignored, all of them named in one
-`warning:` line on stderr.
+`warning:` line on stderr (`--project-owner` without `--project` too). Every `warning:` goes to stderr; stdout is the report.
 
 A new Main line not pushed (declined, `--yes` without `--push-main`, or the push failed) gets the exact
-`git push -u <remote> <branch>` on stderr: Integrate's push fails until it is run. A failed push is not fatal:
+`git push -u <remote> <branch>` on stderr: Integrate's push may fail until it is run. A failed push is not fatal:
 the configs are written and the exit code is unchanged.
 
 Last, it prints the queue command to run from the git root:
