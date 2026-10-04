@@ -42,7 +42,7 @@ const ADAPTERS: Record<Port, Adapter[]> = {
   integrate: [{ name: "local", path: "integrate/local.ts" }],
   deploy: [{ name: "principal", path: "ask/principal/index.ts" }],
   verify: [{ name: "principal", path: "ask/principal/index.ts" }],
-  principal: [{ name: "tty", path: "principal/tty.ts" }],
+  principal: [{ name: "tty", path: "principal/tty.ts" }, { name: "claude", path: "principal/claude.ts" }],
   state: [{ name: "files", path: "state/files.ts" }],
 };
 const PORT_FLAGS: Exclude<Port, "tracker">[] = ["workspace", "define", "implement", "check", "integrate", "deploy", "verify", "principal", "state"];

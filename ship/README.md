@@ -71,6 +71,7 @@ a profile `env` value:
 |---|---|---|
 | `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
 | `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
+| `src/adapters/principal/claude.ts` | principal | `--agent-bin <path>` (defaults to `claude` on PATH) |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
 ## Set up ship in another repo
