@@ -23,34 +23,55 @@
 // ponytail: no --concurrency flag — one Delivery at a time, deliberately. Parallel Deliveries are the open
 // discovery issue pehota/harlo#50; add it only once that settles what may safely run side by side.
 //
-// argv: --ship <path to bin/ship> [--interval <ms>] [--grace <ms>] [--max-runtime <ms>] [--lock <path>]
-//       --state <state-adapter argv…>
-//   Same conventions as drive.ts: `--state` takes the rest of argv; `--grace`/`--max-runtime` are forwarded to
-//   `poll/stalled.ts` only when given; `--interval` defaults to 5000ms. `--lock` defaults to `.ship-queue.lock`
-//   in the working directory (where `ship.config.json` is).
-// exit: 0 queue drained · 1 a `ship` call failed (or bad usage) · 2 lock already held · 3 re-pick guard fired
+// argv: [--repo <path>] [--interval <ms>] [--grace <ms>] [--max-runtime <ms>] [--lock <path>]
+//       [--ship <path to bin/ship>] [--state <state-adapter argv…>]
+//   The repo is `--repo`'s git root (default: the cwd's). `ship` and the pollers run with the repo root as their
+//   cwd, since `ship` reads `ship.config.json` from its working directory. `--ship` defaults to this checkout's
+//   `bin/ship`; `--state` defaults to the repo's machine config's `state` argv, found as `ship` finds it
+//   (env/repo-config.ts). Both are overrides: given both and no `--repo`, nothing is resolved and every call
+//   inherits this process's cwd, as before. `--state` takes the rest of argv; `--grace`/`--max-runtime` are
+//   forwarded to `poll/stalled.ts` only when given; `--interval` defaults to 5000ms. `--lock` defaults to
+//   `.ship-queue.lock` in the repo root (in the cwd under the bare override).
+// exit: 0 queue drained · 1 a `ship` call failed, or the repo/config cannot be resolved · 2 lock already held ·
+//   3 re-pick guard fired
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { DeliveryId } from "../src/contracts/common";
 import { type StatusBody, driveDelivery, runShip } from "./drive-loop";
+import { RepoConfigError, SHIP_BIN, gitRoot, repoConfig } from "./repo-config";
 
 const DEFAULT_INTERVAL_MS = 5000;
 const DEFAULT_LOCK = ".ship-queue.lock";
 
 type Options = {
   ship: string; interval: number; grace: string | undefined; maxRuntime: string | undefined;
-  lock: string; state: string[];
+  lock: string; state: string[]; cwd: string | undefined;
 };
 
-const parseArgs = (args: string[]): Omit<Options, "ship"> & { ship: string | undefined } => {
+const parseArgs = (args: string[]) => {
   const stateAt = args.indexOf("--state");
   const head = stateAt === -1 ? args : args.slice(0, stateAt);
   const state = stateAt === -1 ? [] : args.slice(stateAt + 1);
   const flag = (name: string) => { const at = head.indexOf(name); return at === -1 ? undefined : head[at + 1]; };
   const interval = flag("--interval");
   return {
-    ship: flag("--ship"), interval: interval === undefined ? DEFAULT_INTERVAL_MS : Number(interval),
-    grace: flag("--grace"), maxRuntime: flag("--max-runtime"), lock: flag("--lock") ?? DEFAULT_LOCK, state,
+    repo: flag("--repo"), ship: flag("--ship"), interval: interval === undefined ? DEFAULT_INTERVAL_MS : Number(interval),
+    grace: flag("--grace"), maxRuntime: flag("--max-runtime"), lock: flag("--lock"), state,
+  };
+};
+
+/** The repo root (the calls' cwd), `bin/ship`, the State argv and the lock: flags first, the repo's config otherwise. */
+const resolveOptions = (args: ReturnType<typeof parseArgs>): Options => {
+  const { repo, ship, lock, state, ...rest } = args;
+  const bareOverride = repo === undefined && ship !== undefined && state.length > 0;
+  const root = bareOverride ? undefined : gitRoot(repo ?? process.cwd());
+  return {
+    ...rest,
+    cwd: root,
+    ship: ship === undefined ? SHIP_BIN : ship.includes("/") ? resolve(ship) : ship, // a relative path, from here
+    state: state.length > 0 ? state : repoConfig(root!).state,
+    lock: lock ?? (root === undefined ? DEFAULT_LOCK : join(root, DEFAULT_LOCK)),
   };
 };
 
@@ -68,8 +89,8 @@ const deliveryIn = (stdout: string): string | undefined => {
 };
 
 /** One `ship <args…>` call whose JSON stdout line is returned; a nonzero exit is a ShipCallError. */
-const shipJson = async <T>(ship: string, args: string[]): Promise<T> => {
-  const ran = await runShip(ship, args);
+const shipJson = async <T>(options: Options, args: string[]): Promise<T> => {
+  const ran = await runShip(options.ship, args, options.cwd);
   if (ran.exitCode !== 0) {
     const delivery = deliveryIn(ran.stdout); // e.g. exit 5: the Delivery was created, then an adapter crashed
     const named = delivery === undefined ? "" : ` (Delivery ${delivery})`;
@@ -110,7 +131,7 @@ const keyOf = (delivery: DeliveryId): string => delivery.replace(/-\d+$/, "");
 
 /** Orphans first, then `ship next` until empty. Returns the exit code. */
 const drain = async (options: Options): Promise<number> => {
-  const { ship } = options;
+  const { ship, cwd } = options;
   const handled = new Set<string>();
   const driveToEnd = async (delivery: DeliveryId): Promise<void> => {
     const at = await driveDelivery({ ...options, delivery });
@@ -118,17 +139,17 @@ const drain = async (options: Options): Promise<number> => {
     console.log(`${delivery}: done at=${at}`);
   };
 
-  const orphans = await shipJson<StatusBody>(ship, ["status"]);
+  const orphans = await shipJson<StatusBody>(options, ["status"]);
   for (const { delivery } of orphans.deliveries) await driveToEnd(delivery);
 
   for (;;) {
-    const { delivery } = await shipJson<{ delivery: DeliveryId | null }>(ship, ["next"]);
+    const { delivery } = await shipJson<{ delivery: DeliveryId | null }>(options, ["next"]);
     if (delivery === null) return 0;
     const key = keyOf(delivery);
     if (handled.has(key)) {
       const reason = `${key} still ready after its Delivery ended: check policy.tracker.steps/outcomes`;
       console.error(`${delivery}: ${reason}`);
-      const stopped = await runShip(ship, ["stop", delivery, "abandoned", reason]);
+      const stopped = await runShip(ship, ["stop", delivery, "abandoned", reason], cwd);
       if (stopped.exitCode === 0) return 3;
       console.error(`ship stop ${delivery}: exit ${stopped.exitCode}; ${delivery} stays open\n${stopped.stderr}`);
       return 1;
@@ -138,20 +159,20 @@ const drain = async (options: Options): Promise<number> => {
 };
 
 const main = async (): Promise<number> => {
-  const { ship, ...rest } = parseArgs(process.argv.slice(2));
-  if (!ship || rest.state.length === 0) {
-    console.error(
-      "usage: queue.ts --ship <path to bin/ship> [--interval <ms>] [--grace <ms>] [--max-runtime <ms>] " +
-        "[--lock <path>] --state <state-adapter argv…>",
-    );
+  let options: Options;
+  try {
+    options = resolveOptions(parseArgs(process.argv.slice(2)));
+  } catch (error) {
+    if (!(error instanceof RepoConfigError)) throw error;
+    console.error(error.message);
     return 1;
   }
-  if (!acquireLock(rest.lock)) {
-    console.error(`lock ${rest.lock} exists: another queue holds it; delete it if stale`);
+  if (!acquireLock(options.lock)) {
+    console.error(`lock ${options.lock} exists: another queue holds it; delete it if stale`);
     return 2;
   }
   try {
-    return await drain({ ship, ...rest });
+    return await drain(options);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;

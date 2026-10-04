@@ -3,7 +3,8 @@
 // drives env/drive.ts. The test plays the human at the gates (`ship signal` / `ship stop`) from a background
 // gatekeeper loop; the queue itself never answers a gate.
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { answer, defined, implemented, lifecycle, ok, verdict } from "../test/fixtures/lifecycle.fixture";
 
@@ -13,8 +14,10 @@ const QUEUE = join(import.meta.dir, "queue.ts");
 
 type Project = ReturnType<typeof lifecycle>;
 const projects: Project[] = [];
+const dirs: string[] = [];
 afterAll(() => {
   for (const p of projects.splice(0)) p.cleanup();
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** Every step succeeds on every call (single replies, not lists), so any number of Deliveries run through. */
@@ -216,4 +219,70 @@ describe("queue", () => {
     expect(trackerFile(p, "k")).toContain("abandoned: k still ready after its Delivery ended");
     expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
   }, 60_000);
+});
+
+describe("queue from a set-up repo (no plumbing flags)", () => {
+  const elsewhere = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "ship-queue-cwd-"));
+    dirs.push(dir);
+    return dir;
+  };
+  /**
+   * `bun queue.ts <args…>` from `cwd`. The machine config is found via $SHIP_MACHINE_CONFIG ("env", the
+   * default), at its ~/.config/ship/e2e.json default ("home"), or not at all ("none").
+   */
+  const queueFrom = async (p: Project, opts: { args: string[]; cwd: string; machine?: "env" | "home" | "none" }) => {
+    const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: p.dir };
+    if (opts.machine === "home") {
+      mkdirSync(join(p.dir, ".config", "ship"), { recursive: true });
+      copyFileSync(join(p.dir, "machine.json"), join(p.dir, ".config", "ship", "e2e.json"));
+    } else if (opts.machine !== "none") {
+      env.SHIP_MACHINE_CONFIG = join(p.dir, "machine.json");
+    }
+    const proc = Bun.spawn(["bun", QUEUE, ...opts.args], { cwd: opts.cwd, env, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    return { stdout, stderr, exit };
+  };
+  const gitInit = (dir: string) => Bun.spawnSync(["git", "init", "-q", dir]);
+
+  test("only --repo, run from another dir: drains, ship runs in the repo, the lock is the repo's", async () => {
+    const p = project({ a: "ready" });
+    gitInit(p.dir);
+    const cwd = elsewhere();
+    const human = gatekeeper(p);
+    const ran = await queueFrom(p, { args: ["--repo", p.dir, "--interval", "20"], cwd });
+    await human.halt();
+
+    expect(ran.stderr).toBe("");
+    expect(ran.exit).toBe(0);
+    expect(doneLines(ran.stdout)).toEqual(["a-1: done at=closed"]);
+    expect(trackerFile(p, "a")).toContain("status: done");
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+    expect(readdirSync(cwd)).toEqual([]); // no lock (or anything else) left where it was run from
+  }, 60_000);
+
+  test("no flags at all from inside the repo, machine config at its ~/.config default: empty queue, exit 0", async () => {
+    const p = project({});
+    gitInit(p.dir);
+    const sub = join(p.dir, "tracker"); // a subdir: the git root is still found
+    const ran = await queueFrom(p, { args: ["--interval", "20"], cwd: sub, machine: "home" });
+
+    expect(ran.stderr).toBe("");
+    expect(ran.exit).toBe(0);
+    expect(doneLines(ran.stdout)).toEqual([]);
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+  }, 30_000);
+
+  test("a repo with no machine config: exit 1, the error names the file and suggests setup.ts", async () => {
+    const p = project({ a: "ready" });
+    gitInit(p.dir);
+    const ran = await queueFrom(p, { args: ["--repo", p.dir], cwd: elsewhere(), machine: "none" });
+
+    expect(ran.exit).toBe(1);
+    expect(ran.stderr).toContain(`machine config ${join(p.dir, ".config", "ship", "e2e.json")}`);
+    expect(ran.stderr).toContain("env/setup.ts");
+    expect(trackerFile(p, "a")).toContain("status: ready");
+  }, 30_000);
 });

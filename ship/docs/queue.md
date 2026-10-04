@@ -23,29 +23,35 @@ one, until the tracker has nothing left.
 
 ## Base command
 
-Run it from the project directory (where `ship.config.json` is):
+Run it from anywhere inside a set-up repo (one `env/setup.ts` wrote):
 
 ```bash
-bun env/queue.ts --ship <path to bin/ship> [--interval <ms>] [--grace <ms>] \
-  [--max-runtime <ms>] [--lock <path>] --state <state-adapter argv…>
+bun env/queue.ts [--repo <path>] [--interval <ms>] [--grace <ms>] \
+  [--max-runtime <ms>] [--lock <path>]
 ```
 
-- `--ship <path>` — the `bin/ship` to call. Required.
-- `--state <state-adapter argv…>` — the state adapter's own spawn argv, passed
-  to `poll/stalled.ts`. Required. It takes **the rest of argv**, so every other
-  flag must come before it (same gotcha as [`judge.md`](judge.md)).
+- `--repo <path>` — the repo. Default: the cwd's git root. `ship` and the
+  pollers run with the repo root as their working directory (`ship` reads
+  `ship.config.json` from there), so the queue works from anywhere.
 - `--interval <ms>` — sleep between passes while a Delivery runs. Default 5000.
 - `--grace <ms>`, `--max-runtime <ms>` — forwarded to `poll/stalled.ts` only
   when given.
-- `--lock <path>` — the lockfile. Default `.ship-queue.lock` in the working
-  directory.
+- `--lock <path>` — the lockfile. Default `.ship-queue.lock` in the repo root.
 
-Example, against the dogfood state:
+The State adapter is the one ship uses: `<repo>/ship.config.json` →
+`projectId` → `$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json`
+→ `state`. A missing or invalid file exits 1, naming the file and suggesting
+`bun <ship>/env/setup.ts`. `bin/ship` is this checkout's.
 
-```bash
-bun env/queue.ts --ship bin/ship \
-  --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
-```
+### Overrides (optional)
+
+- `--ship <path>` — another `bin/ship`.
+- `--state <state-adapter argv…>` — another State adapter's spawn argv. It
+  takes **the rest of argv**, so every other flag must come before it (same
+  gotcha as [`judge.md`](judge.md)).
+
+Given both and no `--repo`, nothing is resolved: every call runs in the
+working directory and the lock defaults to `.ship-queue.lock` there.
 
 Each finished Delivery prints one line, `<delivery>: done at=<closed|abandoned>`,
 after its progress lines.
@@ -55,7 +61,7 @@ after its progress lines.
 | Exit | Meaning |
 |---|---|
 | 0 | drained: `ship next` returned `delivery: null` |
-| 1 | a `ship next` / `ship status` call failed (stderr has ship's stderr, and names the Delivery when `ship` printed one, e.g. on exit 5), the re-pick guard's own `ship stop` failed, or bad usage |
+| 1 | a `ship next` / `ship status` call failed (stderr has ship's stderr, and names the Delivery when `ship` printed one, e.g. on exit 5), the re-pick guard's own `ship stop` failed, or the repo/config cannot be resolved |
 | 2 | the lockfile already exists: another queue holds it |
 | 3 | re-pick guard fired (see below) |
 
