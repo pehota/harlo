@@ -17,32 +17,49 @@ populates it (REASONING).
 
 ## Base command
 
+Run it from anywhere inside a set-up repo (one `env/setup.ts` wrote):
+
 ```bash
-bun env/judge.ts --delivery <id> --state <state-adapter argv…> [--root <main-line repo>] [--step <name>]
+bun env/judge.ts [--repo <path>] [<delivery>] [--step <name>] [--root <main-line repo>]
 ```
 
-- `--delivery <id>` — the Delivery whose journal to walk. Required.
-- `--state <state-adapter argv…>` — the state adapter to read the journal
-  from, e.g. `bun src/adapters/state/files.ts --dir <state dir>`. Required.
-  `--state` takes **the rest of argv** — see the gotcha below.
-- `--root <main-line repo>` — optional. The main-line repo sharing an object
-  store with the Delivery's worktree. When given, Implement's changeset is
-  also shown as `git show <sha>` (best-effort: a torn-down worktree/branch's
-  commit may be unreachable, in which case judge prints
+- No `<delivery>` — lists every Delivery the repo's State holds, closed and
+  abandoned included, most recent first, one line each: id, position (`at`),
+  outcome when set, and `last` (the time of its latest journal entry). An
+  empty State prints `no Deliveries`. Exit 0.
+- `<delivery>` — the Delivery whose journal to render (`--delivery <id>`
+  still works).
+- `--repo <path>` — the repo. Default: the cwd's git root. Its State adapter
+  is the one ship uses: `<repo>/ship.config.json` → `projectId` →
+  `$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json` → `state`.
+  A missing or invalid file exits 1, naming the file and suggesting
+  `bun <ship>/env/setup.ts`.
+- `--root <main-line repo>` — the main-line repo sharing an object store with
+  the Delivery's worktree. Default: the repo's git root. Implement's
+  changeset is also shown as `git show <sha>` (best-effort: a torn-down
+  worktree/branch's commit may be unreachable, in which case judge prints
   `commit not reachable (worktree/branch likely torn down)` instead).
 - `--step <name>` — optional. Filter to one step's calls (e.g. `define`,
   `implement`, `check`). Omitted shows the whole journal, in chronological
   order.
 
-Example, against the dogfood delivery `freetext-signal-1`:
+Example, from the repo of the dogfood delivery `freetext-signal-1`:
 
 ```bash
-bun env/judge.ts \
-  --delivery freetext-signal-1 \
-  --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
+bun env/judge.ts                      # which Deliveries are there?
+bun env/judge.ts freetext-signal-1    # render one
 ```
 
-## The `--state` gotcha
+## Override: `--state`
+
+`--state <state-adapter argv…>` reads that State adapter instead of the
+repo's config: no config lookup, and no default `--root` unless `--repo` is
+given. Optional; for a State that no repo config names.
+
+```bash
+bun env/judge.ts freetext-signal-1 \
+  --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
+```
 
 `--state` takes **the rest of argv** (same convention as `env/poll/stalled.ts`).
 Any other flag — `--root`, `--step` — must come **before** `--state`. Put it
@@ -53,7 +70,7 @@ instead of judge's, and the state adapter rejects it.
 and fails:
 
 ```bash
-bun env/judge.ts --delivery freetext-signal-1 \
+bun env/judge.ts freetext-signal-1 \
   --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state \
   --step define
 # error: state journal freetext-signal-1: unsupported: --step define
@@ -62,7 +79,7 @@ bun env/judge.ts --delivery freetext-signal-1 \
 **Right** — `--step` before `--state`:
 
 ```bash
-bun env/judge.ts --delivery freetext-signal-1 --step define \
+bun env/judge.ts freetext-signal-1 --step define \
   --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
 ```
 
@@ -73,8 +90,7 @@ both `define-1` and `define-2` after a fix-round rerun. Omitted, judge shows
 the whole journal.
 
 ```bash
-bun env/judge.ts --delivery freetext-signal-1 --step define \
-  --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
+bun env/judge.ts freetext-signal-1 --step define
 ```
 
 On `freetext-signal-1` this prints every `define-N` block in order:

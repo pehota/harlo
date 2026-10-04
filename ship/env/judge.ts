@@ -7,13 +7,21 @@
 // call cost (USAGE: tokens, USD, duration, turns), then one usage total for the Delivery. Purely a read/render
 // tool: no gating, no verdict of its own.
 //
-// argv: --delivery <id> --state <state-adapter argv…> [--root <main-line-repo>] [--step <name>]
-//   `--state` takes the rest of argv (same convention as `poll/stalled.ts`): spawns `state journal <delivery>`
-//   directly against the configured adapter. `--root` names the main-line repo sharing an object store with a
-//   Delivery's worktree (`src/adapters/workspace/worktree.ts`); when given, Implement's changeset is also shown
-//   as `git show <sha>` (best-effort: a torn-down worktree/branch's commit may be unreachable). `--step` filters
-//   to one step's calls (all sequences, e.g. both `define-1` and `define-2` after a fix-round rerun); omitted
-//   shows every step-call in the journal, in the order the journal already keeps them (chronological).
+// argv: [--repo <path>] [<delivery> | --delivery <id>] [--root <main-line-repo>] [--step <name>]
+//       [--state <state-adapter argv…>]
+//   The State adapter is the one the repo's machine config names, found as `ship` finds it (env/repo-config.ts):
+//   `--repo` (default: the cwd's git root) → `ship.config.json` → `$SHIP_MACHINE_CONFIG`, else
+//   `~/.config/ship/<projectId>.json` → its `state` argv. `--state` overrides that and skips the config lookup;
+//   it takes the rest of argv (same convention as `poll/stalled.ts`). No delivery → one line per Delivery the
+//   State holds (closed/abandoned included): id, `at`, outcome when set, and the time of its latest journal entry,
+//   most recent first. With a delivery, its journal is rendered via `state journal <delivery>`. `--root` names the
+//   main-line repo sharing an object store with a Delivery's worktree (`src/adapters/workspace/worktree.ts`) and
+//   defaults to the repo's git root (none under a bare `--state` override without `--repo`): Implement's changeset
+//   is also shown as `git show <sha>` (best-effort: a torn-down worktree/branch's commit may be unreachable).
+//   `--step` filters to one step's calls (all sequences, e.g. both `define-1` and `define-2` after a fix-round
+//   rerun); omitted shows every step-call in the journal, in the order the journal already keeps them.
+// exit: 0 rendered/listed · 1 bad usage, or the repo/config cannot be resolved (message only) · other: a State
+//   adapter failure (thrown)
 //
 // A CommandId is `<delivery>/<name>-<n>` (`src/core/ids.ts`); this is environment code (it must not import
 // `src/core`), so the `<name>-<n>` split is re-derived locally, matching how `env/drive.ts` re-checks
@@ -26,36 +34,85 @@ import type { CommandId, DeliveryId, EvidenceItem, Finding, RunnerStdin, Usage }
 import { schemaFor } from "../src/contracts/ports";
 import type { TimedEntry } from "../src/contracts/snapshot";
 import { check } from "../src/contracts/validate";
+import { RepoConfigError, gitRoot, repoConfig } from "./repo-config";
 
-const parseArgs = (
-  args: string[],
-): { delivery: string | undefined; root: string | undefined; step: string | undefined; state: string[] } => {
+/** Bad argv: the message (with usage) is printed, exit 1. */
+class UsageError extends Error {}
+
+const VALUE_FLAGS = ["--repo", "--delivery", "--root", "--step"];
+
+type Args = {
+  repo: string | undefined; delivery: string | undefined; root: string | undefined; step: string | undefined;
+  state: string[];
+};
+
+/** Flags take the next arg; the one bare arg is the delivery; `--state` takes the rest. */
+const parseArgs = (args: string[]): Args => {
   const stateAt = args.indexOf("--state");
   const head = stateAt === -1 ? args : args.slice(0, stateAt);
   const state = stateAt === -1 ? [] : args.slice(stateAt + 1);
-  const flag = (name: string) => { const at = head.indexOf(name); return at === -1 ? undefined : head[at + 1]; };
-  return { delivery: flag("--delivery"), root: flag("--root"), step: flag("--step"), state };
+  const flags = new Map<string, string>();
+  const bare: string[] = [];
+  for (let i = 0; i < head.length; i++) {
+    const arg = head[i]!;
+    if (VALUE_FLAGS.includes(arg) && i + 1 < head.length) flags.set(arg, head[++i]!);
+    else if (arg.startsWith("--") || bare.length > 0) throw new UsageError(`unknown or extra argument: ${arg}\n${USAGE}`);
+    else bare.push(arg);
+  }
+  return {
+    repo: flags.get("--repo"), delivery: flags.get("--delivery") ?? bare[0], root: flags.get("--root"),
+    step: flags.get("--step"), state,
+  };
 };
 
-/** `state journal {delivery}` on the configured adapter, spawned exactly as the Runner spawns it
- *  (mirrors `env/poll/stalled.ts`'s own `journal()` helper). */
-const journal = async (stateArgv: string[], delivery: DeliveryId): Promise<TimedEntry[]> => {
+const USAGE = "usage: judge.ts [--repo <path>] [<delivery>] [--root <main-line-repo>] [--step <name>] "
+  + "[--state <state-adapter argv…>]";
+
+/** One Runner-only `state <op>` call on the configured adapter, spawned exactly as the Runner spawns it
+ *  (mirrors `env/poll/stalled.ts`'s own `journal()` helper), its stdout checked against the op's contract. */
+const stateOp = async <Body>(stateArgv: string[], op: string, payload: { delivery?: DeliveryId }): Promise<Body> => {
+  const delivery = payload.delivery ?? null;
+  const what = `state ${op}${delivery === null ? "" : ` ${delivery}`}`;
   const stdin: RunnerStdin = {
-    id: null, delivery, port: "state", op: "journal", workItem: null, workspace: null, payload: { delivery }, tools: [],
+    id: null, delivery, port: "state", op, workItem: null, workspace: null, payload, tools: [],
   };
-  const proc = Bun.spawn([...stateArgv, "state", "journal"], {
+  const proc = Bun.spawn([...stateArgv, "state", op], {
     stdin: new Blob([JSON.stringify(stdin)]), stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
   ]);
-  if (exitCode !== 0) throw new Error(`state journal ${delivery}: exit ${exitCode}\n${stderr}`);
-  const reply = JSON.parse(stdout) as { status: string; body?: { entries: TimedEntry[] }; info?: string };
-  const contract = schemaFor("state", "journal");
+  if (exitCode !== 0) throw new Error(`${what}: exit ${exitCode}\n${stderr}`);
+  const reply = JSON.parse(stdout) as { status: string; body?: Body; info?: string };
+  const contract = schemaFor("state", op);
   const invalid = contract && check(contract.stdout, reply);
-  if (invalid) throw new Error(`state journal ${delivery}: stdout fails the contract: ${invalid}`);
-  if (reply.status !== "ok") throw new Error(`state journal ${delivery}: ${reply.info ?? reply.status}`);
-  return reply.body!.entries;
+  if (invalid) throw new Error(`${what}: stdout fails the contract: ${invalid}`);
+  if (reply.status !== "ok") throw new Error(`${what}: ${reply.info ?? reply.status}`);
+  return reply.body!;
+};
+
+const journal = async (stateArgv: string[], delivery: DeliveryId): Promise<TimedEntry[]> =>
+  (await stateOp<{ entries: TimedEntry[] }>(stateArgv, "journal", { delivery })).entries;
+
+// ── LIST (no delivery given) ──
+type Listed = { delivery: DeliveryId; at: string; outcome: string | null; last: string };
+
+/** Every Delivery the State holds, with its position, outcome and latest journal time; most recent first. */
+const listDeliveries = async (stateArgv: string[]): Promise<Listed[]> => {
+  const { deliveries } = await stateOp<{ deliveries: DeliveryId[] }>(stateArgv, "list", {});
+  const listed = await Promise.all(deliveries.map(async (delivery): Promise<Listed> => {
+    const { state } = await stateOp<{ state: { at: string; outcome: string | null } | null }>(stateArgv, "load", { delivery });
+    const entries = await journal(stateArgv, delivery);
+    return { delivery, at: state?.at ?? "-", outcome: state?.outcome ?? null, last: entries.at(-1)?.time ?? "-" };
+  }));
+  return listed.sort((a, b) => b.last.localeCompare(a.last));
+};
+
+const listLines = (listed: Listed[]): string[] => {
+  if (listed.length === 0) return ["no Deliveries"];
+  const width = Math.max(...listed.map((l) => l.delivery.length));
+  return listed.map((l) =>
+    [l.delivery.padEnd(width), `at=${l.at}`, ...(l.outcome === null ? [] : [`outcome=${l.outcome}`]), `last=${l.last}`].join("  "));
 };
 
 // `<name>-<n>` (the local half of a CommandId), matching `src/core/ids.ts`'s COMMAND_ID_RE without importing it.
@@ -211,10 +268,20 @@ const render = (call: StepCall, root: string | undefined): string[] => {
   return lines;
 };
 
+/** The State argv and default `--root`: `--state` as given, else the repo's machine config (env/repo-config.ts). */
+const resolveSource = (args: Args): { state: string[]; root: string | undefined } => {
+  const repoRoot = args.repo !== undefined || args.state.length === 0 ? gitRoot(args.repo ?? process.cwd()) : undefined;
+  const state = args.state.length > 0 ? args.state : repoConfig(repoRoot!).state;
+  return { state, root: args.root ?? repoRoot };
+};
+
 const main = async (): Promise<void> => {
-  const { delivery, root, step, state } = parseArgs(process.argv.slice(2));
-  if (!delivery || state.length === 0) {
-    throw new Error("usage: judge.ts --delivery <id> --state <state-adapter argv…> [--root <main-line-repo>] [--step <name>]");
+  const args = parseArgs(process.argv.slice(2));
+  const { state, root } = resolveSource(args);
+  const { delivery, step } = args;
+  if (delivery === undefined) {
+    console.log(listLines(await listDeliveries(state)).join("\n"));
+    return;
   }
 
   const entries = await journal(state, delivery);
@@ -223,4 +290,10 @@ const main = async (): Promise<void> => {
   console.log(totalLines(delivery, calls).join("\n"));
 };
 
-await main();
+try {
+  await main();
+} catch (error) {
+  if (!(error instanceof RepoConfigError || error instanceof UsageError)) throw error;
+  console.error(error.message);
+  process.exit(1);
+}

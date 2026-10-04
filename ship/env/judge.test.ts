@@ -279,3 +279,91 @@ describe("env/judge", () => {
     }, 30_000);
   });
 });
+
+describe("env/judge from a set-up repo (no plumbing flags)", () => {
+  /** `bun judge.ts <args…>` from `cwd`, the machine config found as ship finds it. */
+  const judge = async (p: Project, args: string[], cwd: string) => {
+    const proc = Bun.spawn(["bun", JUDGE, ...args], {
+      cwd, env: { PATH: process.env.PATH ?? "", HOME: p.dir, SHIP_MACHINE_CONFIG: join(p.dir, "machine.json") },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    return { exitCode, stdout, stderr };
+  };
+  /** The lifecycle project made a git repo with one commit; returns that commit's sha. */
+  const gitInit = (p: Project): string => {
+    const git = (...cmdArgs: string[]) =>
+      Bun.spawnSync(["git", "-C", p.dir, ...cmdArgs], { stdout: "pipe", stderr: "pipe" }).stdout.toString().trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+    writeFileSync(join(p.dir, "README.md"), "hello repo\n");
+    git("add", "README.md");
+    git("commit", "-q", "-m", "commit in the repo itself");
+    return git("rev-parse", "HEAD");
+  };
+  const elsewhere = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "ship-judge-cwd-"));
+    dirs.push(dir);
+    return dir;
+  };
+
+  test("no delivery: lists every Delivery, closed/abandoned included, most recent first, exit 0", async () => {
+    const defined = { status: "ok", body: { criteria: ["c"], runbook: ["r"] } };
+    const p = project({ ...HAPPY_NO_USAGE, "define.run": [defined, defined] }); // one Define per Delivery
+    gitInit(p);
+    await p.ship("start", "k"); // k-1, parked at accept-1
+    await p.ship("stop", "k-1", "abandoned", "not wanted");
+    expect((await p.ship("start", "k")).out).toMatchObject({ delivery: "k-2" });
+
+    const ran = await judge(p, [], p.dir);
+    expect(ran.stderr).toBe("");
+    expect(ran.exitCode).toBe(0);
+    const lines = ran.stdout.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const TIME = "\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z";
+    expect(lines[0]).toMatch(new RegExp(`^k-2 +at=accept +last=${TIME}$`));
+    expect(lines[1]).toMatch(new RegExp(`^k-1 +at=abandoned +outcome=abandoned +last=${TIME}$`));
+
+    // the same list through the --state override, from outside any repo
+    const viaState = await judge(p, ["--state", ...p.stateArgv], elsewhere());
+    expect(viaState.exitCode).toBe(0);
+    expect(viaState.stdout).toBe(ran.stdout);
+  }, 30_000);
+
+  test("no Deliveries yet: one clear line, exit 0", async () => {
+    const p = project(HAPPY_NO_USAGE);
+    gitInit(p);
+    const ran = await judge(p, ["--repo", p.dir], elsewhere());
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout.trim()).toBe("no Deliveries");
+  }, 30_000);
+
+  test("a positional delivery with --repo from elsewhere; --root defaults to the repo, so `git show` runs", async () => {
+    const p = project({ ...HAPPY_NO_USAGE, "implement.run": [{ status: "ok", body: { changeset: "pending" } }] });
+    const sha = gitInit(p);
+    p.rescript({ "implement.run": [{ status: "ok", body: { changeset: `ship/${D}@${sha}` } }] });
+    await p.ship("start", "k");
+    await p.ship("signal", D, `${D}/accept-1`, answer("accept"));
+
+    const ran = await judge(p, ["--repo", p.dir, D, "--step", "implement"], elsewhere());
+    expect(ran.stderr).toBe("");
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout).toContain(`=== ${D}/implement-1 ===`);
+    expect(ran.stdout).toContain("commit in the repo itself"); // the real `git show`, no --root given
+    expect(ran.stdout).not.toContain(`=== ${D}/define-1 ===`);
+  }, 30_000);
+
+  test("a repo with no ship.config.json: exit 1, the error names the file and suggests setup.ts", async () => {
+    const p = project(HAPPY_NO_USAGE);
+    const bare = elsewhere();
+    Bun.spawnSync(["git", "init", "-q", bare]);
+    const ran = await judge(p, ["--repo", bare], p.dir);
+    expect(ran.exitCode).toBe(1);
+    expect(ran.stderr).toContain("ship.config.json");
+    expect(ran.stderr).toContain("env/setup.ts");
+    expect(ran.stderr).not.toContain("    at "); // a message, not a stack trace
+  }, 30_000);
+});
