@@ -285,4 +285,32 @@ describe("queue from a set-up repo (no plumbing flags)", () => {
     expect(ran.stderr).toContain("env/setup.ts");
     expect(trackerFile(p, "a")).toContain("status: ready");
   }, 30_000);
+
+  test("a relative --state path means the caller's cwd, not the repo root", async () => {
+    const p = project({ a: "ready" });
+    gitInit(p.dir);
+    const human = gatekeeper(p);
+    const ran = await queueFrom(p, { // run from the ship checkout: `src/adapters/…` exists there, not in the repo
+      args: ["--repo", p.dir, "--interval", "20", "--state", "bun", "src/adapters/state/files.ts", "--dir", p.stateArgv[3]!],
+      cwd: ROOT,
+    });
+    await human.halt();
+
+    expect(ran.stderr).toBe(""); // the stall poller ran: no "poll/stalled.ts: exit" line
+    expect(ran.exit).toBe(0);
+  }, 60_000);
+
+  test("a failing stall poller is reported on stderr, not swallowed; the queue still drains", async () => {
+    const p = project({ a: "ready" });
+    gitInit(p.dir);
+    const human = gatekeeper(p);
+    const ran = await queueFrom(p, {
+      args: ["--repo", p.dir, "--interval", "20", "--state", "bun", join(p.dir, "no-such-adapter.ts")], cwd: elsewhere(),
+    });
+    await human.halt();
+
+    expect(ran.exit).toBe(0);
+    expect(ran.stderr).toContain("poll/stalled.ts: exit");
+    expect(ran.stderr).toContain("no-such-adapter.ts");
+  }, 60_000);
 });

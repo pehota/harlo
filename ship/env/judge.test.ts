@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { D, lifecycle } from "../test/fixtures/lifecycle.fixture";
 
 const JUDGE = join(import.meta.dir, "judge.ts");
+const STATE = join(import.meta.dir, "..", "src", "adapters", "state", "files.ts");
 const AGENT = join(import.meta.dir, "..", "src", "adapters", "agent", "claude", "index.ts");
 const FAKE_CLI = join(import.meta.dir, "..", "src", "adapters", "agent", "claude", "fake.ts");
 
@@ -282,9 +283,9 @@ describe("env/judge", () => {
 
 describe("env/judge from a set-up repo (no plumbing flags)", () => {
   /** `bun judge.ts <args…>` from `cwd`, the machine config found as ship finds it. */
-  const judge = async (p: Project, args: string[], cwd: string) => {
+  const judge = async (p: Project, args: string[], cwd: string, machine = join(p.dir, "machine.json")) => {
     const proc = Bun.spawn(["bun", JUDGE, ...args], {
-      cwd, env: { PATH: process.env.PATH ?? "", HOME: p.dir, SHIP_MACHINE_CONFIG: join(p.dir, "machine.json") },
+      cwd, env: { PATH: process.env.PATH ?? "", HOME: p.dir, SHIP_MACHINE_CONFIG: machine },
       stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([
@@ -365,5 +366,26 @@ describe("env/judge from a set-up repo (no plumbing flags)", () => {
     expect(ran.stderr).toContain("ship.config.json");
     expect(ran.stderr).toContain("env/setup.ts");
     expect(ran.stderr).not.toContain("    at "); // a message, not a stack trace
+  }, 30_000);
+
+  test("a relative state argv in the machine config runs from the repo root, as ship runs it", async () => {
+    const p = project(HAPPY_NO_USAGE);
+    gitInit(p);
+    await p.ship("start", "k"); // k-1 in <repo>/state
+    const machine = join(p.dir, "relative-machine.json");
+    writeFileSync(machine, JSON.stringify({ principal: ["true"], state: ["bun", STATE, "--dir", "state"] }));
+
+    const ran = await judge(p, ["--repo", p.dir], elsewhere(), machine); // the cwd has no `state` dir
+    expect(ran.stderr).toBe("");
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout).toContain("k-1");
+  }, 30_000);
+
+  test.each(["--repo", "--delivery", "--root", "--step"])("a trailing %s with no value says it needs one", async (flag) => {
+    const p = project(HAPPY_NO_USAGE);
+    const ran = await judge(p, [flag], p.dir);
+    expect(ran.exitCode).toBe(1);
+    expect(ran.stderr).toContain(`${flag} needs a value`);
+    expect(ran.stderr).not.toContain("unknown or extra");
   }, 30_000);
 });

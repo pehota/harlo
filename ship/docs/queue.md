@@ -26,7 +26,7 @@ one, until the tracker has nothing left.
 Run it from anywhere inside a set-up repo (one `env/setup.ts` wrote):
 
 ```bash
-bun env/queue.ts [--repo <path>] [--interval <ms>] [--grace <ms>] \
+bun <ship>/env/queue.ts [--repo <path>] [--interval <ms>] [--grace <ms>] \
   [--max-runtime <ms>] [--lock <path>]
 ```
 

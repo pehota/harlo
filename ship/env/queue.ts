@@ -29,13 +29,14 @@
 //   cwd, since `ship` reads `ship.config.json` from its working directory. `--ship` defaults to this checkout's
 //   `bin/ship`; `--state` defaults to the repo's machine config's `state` argv, found as `ship` finds it
 //   (env/repo-config.ts). Both are overrides: given both and no `--repo`, nothing is resolved and every call
-//   inherits this process's cwd, as before. `--state` takes the rest of argv; `--grace`/`--max-runtime` are
+//   inherits this process's cwd, as before. `--state` takes the rest of argv (its relative paths mean the caller's
+//   cwd: they are made absolute before the pollers run from the repo root); `--grace`/`--max-runtime` are
 //   forwarded to `poll/stalled.ts` only when given; `--interval` defaults to 5000ms. `--lock` defaults to
 //   `.ship-queue.lock` in the repo root (in the cwd under the bare override).
 // exit: 0 queue drained · 1 a `ship` call failed, or the repo/config cannot be resolved · 2 lock already held ·
 //   3 re-pick guard fired
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { DeliveryId } from "../src/contracts/common";
 import { type StatusBody, driveDelivery, runShip } from "./drive-loop";
@@ -61,6 +62,14 @@ const parseArgs = (args: string[]) => {
   };
 };
 
+/** A `--state` override argv as the caller meant it: an element (after the command) that exists relative to the
+ *  caller's cwd becomes absolute, since the pollers run from the repo root instead. A command with a "/" likewise. */
+const fromCallerCwd = (argv: string[]): string[] =>
+  argv.map((arg, at) => {
+    const pathLike = at === 0 ? arg.includes("/") : !arg.startsWith("-");
+    return pathLike && existsSync(resolve(arg)) ? resolve(arg) : arg;
+  });
+
 /** The repo root (the calls' cwd), `bin/ship`, the State argv and the lock: flags first, the repo's config otherwise. */
 const resolveOptions = (args: ReturnType<typeof parseArgs>): Options => {
   const { repo, ship, lock, state, ...rest } = args;
@@ -70,7 +79,7 @@ const resolveOptions = (args: ReturnType<typeof parseArgs>): Options => {
     ...rest,
     cwd: root,
     ship: ship === undefined ? SHIP_BIN : ship.includes("/") ? resolve(ship) : ship, // a relative path, from here
-    state: state.length > 0 ? state : repoConfig(root!).state,
+    state: state.length > 0 ? fromCallerCwd(state) : repoConfig(root!).state,
     lock: lock ?? (root === undefined ? DEFAULT_LOCK : join(root, DEFAULT_LOCK)),
   };
 };

@@ -53,6 +53,9 @@ export const driveDelivery = async (options: DriveOptions): Promise<string> => {
 
     const stalled = await runBun(stalledArgs, cwd);
     if (stalled.stdout) process.stdout.write(stalled.stdout); // stall flags: for a human watching
+    if (stalled.exitCode !== 0) { // never lose stall detection silently
+      console.error(`poll/stalled.ts: exit ${stalled.exitCode}: ${stalled.stderr.trim().replace(/\s*\n\s*/g, " | ")}`);
+    }
 
     const status = await runShip(ship, ["status", delivery], cwd);
     if (status.exitCode !== 0) throw new Error(`ship status ${delivery}: exit ${status.exitCode}\n${status.stderr}`);

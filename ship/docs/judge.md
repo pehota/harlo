@@ -20,7 +20,7 @@ populates it (REASONING).
 Run it from anywhere inside a set-up repo (one `env/setup.ts` wrote):
 
 ```bash
-bun env/judge.ts [--repo <path>] [<delivery>] [--step <name>] [--root <main-line repo>]
+bun <ship>/env/judge.ts [--repo <path>] [<delivery>] [--step <name>] [--root <main-line repo>]
 ```
 
 - No `<delivery>` — lists every Delivery the repo's State holds, closed and
@@ -46,8 +46,8 @@ bun env/judge.ts [--repo <path>] [<delivery>] [--step <name>] [--root <main-line
 Example, from the repo of the dogfood delivery `freetext-signal-1`:
 
 ```bash
-bun env/judge.ts                      # which Deliveries are there?
-bun env/judge.ts freetext-signal-1    # render one
+bun <ship>/env/judge.ts                      # which Deliveries are there?
+bun <ship>/env/judge.ts freetext-signal-1    # render one
 ```
 
 ## Override: `--state`
@@ -57,7 +57,7 @@ repo's config: no config lookup, and no default `--root` unless `--repo` is
 given. Optional; for a State that no repo config names.
 
 ```bash
-bun env/judge.ts freetext-signal-1 \
+bun <ship>/env/judge.ts freetext-signal-1 \
   --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
 ```
 
@@ -70,7 +70,7 @@ instead of judge's, and the state adapter rejects it.
 and fails:
 
 ```bash
-bun env/judge.ts freetext-signal-1 \
+bun <ship>/env/judge.ts freetext-signal-1 \
   --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state \
   --step define
 # error: state journal freetext-signal-1: unsupported: --step define
@@ -79,7 +79,7 @@ bun env/judge.ts freetext-signal-1 \
 **Right** — `--step` before `--state`:
 
 ```bash
-bun env/judge.ts freetext-signal-1 --step define \
+bun <ship>/env/judge.ts freetext-signal-1 --step define \
   --state bun src/adapters/state/files.ts --dir ~/.local/state/ship/dogfood/state
 ```
 
@@ -90,7 +90,7 @@ both `define-1` and `define-2` after a fix-round rerun. Omitted, judge shows
 the whole journal.
 
 ```bash
-bun env/judge.ts freetext-signal-1 --step define
+bun <ship>/env/judge.ts freetext-signal-1 --step define
 ```
 
 On `freetext-signal-1` this prints every `define-N` block in order:

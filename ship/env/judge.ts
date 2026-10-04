@@ -55,7 +55,10 @@ const parseArgs = (args: string[]): Args => {
   const bare: string[] = [];
   for (let i = 0; i < head.length; i++) {
     const arg = head[i]!;
-    if (VALUE_FLAGS.includes(arg) && i + 1 < head.length) flags.set(arg, head[++i]!);
+    if (VALUE_FLAGS.includes(arg)) {
+      if (i + 1 >= head.length) throw new UsageError(`${arg} needs a value\n${USAGE}`);
+      flags.set(arg, head[++i]!);
+    }
     else if (arg.startsWith("--") || bare.length > 0) throw new UsageError(`unknown or extra argument: ${arg}\n${USAGE}`);
     else bare.push(arg);
   }
@@ -68,16 +71,19 @@ const parseArgs = (args: string[]): Args => {
 const USAGE = "usage: judge.ts [--repo <path>] [<delivery>] [--root <main-line-repo>] [--step <name>] "
   + "[--state <state-adapter argv…>]";
 
+/** The State adapter's spawn argv, and the cwd it runs in: the repo root, as `ship` runs it (none: inherit ours). */
+type StateSource = { argv: string[]; cwd: string | undefined };
+
 /** One Runner-only `state <op>` call on the configured adapter, spawned exactly as the Runner spawns it
  *  (mirrors `env/poll/stalled.ts`'s own `journal()` helper), its stdout checked against the op's contract. */
-const stateOp = async <Body>(stateArgv: string[], op: string, payload: { delivery?: DeliveryId }): Promise<Body> => {
+const stateOp = async <Body>(state: StateSource, op: string, payload: { delivery?: DeliveryId }): Promise<Body> => {
   const delivery = payload.delivery ?? null;
   const what = `state ${op}${delivery === null ? "" : ` ${delivery}`}`;
   const stdin: RunnerStdin = {
     id: null, delivery, port: "state", op, workItem: null, workspace: null, payload, tools: [],
   };
-  const proc = Bun.spawn([...stateArgv, "state", op], {
-    stdin: new Blob([JSON.stringify(stdin)]), stdout: "pipe", stderr: "pipe",
+  const proc = Bun.spawn([...state.argv, "state", op], {
+    cwd: state.cwd, stdin: new Blob([JSON.stringify(stdin)]), stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
@@ -91,18 +97,18 @@ const stateOp = async <Body>(stateArgv: string[], op: string, payload: { deliver
   return reply.body!;
 };
 
-const journal = async (stateArgv: string[], delivery: DeliveryId): Promise<TimedEntry[]> =>
-  (await stateOp<{ entries: TimedEntry[] }>(stateArgv, "journal", { delivery })).entries;
+const journal = async (state: StateSource, delivery: DeliveryId): Promise<TimedEntry[]> =>
+  (await stateOp<{ entries: TimedEntry[] }>(state, "journal", { delivery })).entries;
 
 // ── LIST (no delivery given) ──
 type Listed = { delivery: DeliveryId; at: string; outcome: string | null; last: string };
 
 /** Every Delivery the State holds, with its position, outcome and latest journal time; most recent first. */
-const listDeliveries = async (stateArgv: string[]): Promise<Listed[]> => {
-  const { deliveries } = await stateOp<{ deliveries: DeliveryId[] }>(stateArgv, "list", {});
+const listDeliveries = async (source: StateSource): Promise<Listed[]> => {
+  const { deliveries } = await stateOp<{ deliveries: DeliveryId[] }>(source, "list", {});
   const listed = await Promise.all(deliveries.map(async (delivery): Promise<Listed> => {
-    const { state } = await stateOp<{ state: { at: string; outcome: string | null } | null }>(stateArgv, "load", { delivery });
-    const entries = await journal(stateArgv, delivery);
+    const { state } = await stateOp<{ state: { at: string; outcome: string | null } | null }>(source, "load", { delivery });
+    const entries = await journal(source, delivery);
     return { delivery, at: state?.at ?? "-", outcome: state?.outcome ?? null, last: entries.at(-1)?.time ?? "-" };
   }));
   return listed.sort((a, b) => b.last.localeCompare(a.last));
@@ -269,9 +275,10 @@ const render = (call: StepCall, root: string | undefined): string[] => {
 };
 
 /** The State argv and default `--root`: `--state` as given, else the repo's machine config (env/repo-config.ts). */
-const resolveSource = (args: Args): { state: string[]; root: string | undefined } => {
+const resolveSource = (args: Args): { state: StateSource; root: string | undefined } => {
   const repoRoot = args.repo !== undefined || args.state.length === 0 ? gitRoot(args.repo ?? process.cwd()) : undefined;
-  const state = args.state.length > 0 ? args.state : repoConfig(repoRoot!).state;
+  const argv = args.state.length > 0 ? args.state : repoConfig(repoRoot!).state;
+  const state = { argv, cwd: repoRoot };
   return { state, root: args.root ?? repoRoot };
 };
 
