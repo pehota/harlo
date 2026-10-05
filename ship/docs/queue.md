@@ -90,6 +90,26 @@ drives every already-open Delivery to terminal — e.g. one left by an earlier,
 interrupted run. Only then does it pick new work, so it never runs a second
 Delivery alongside an open one.
 
+## Stall recovery
+
+Each pass also runs `poll/stalled.ts` (the same check `env/drive.ts` prints
+for a human). If it flags the current Delivery's awaited step **"dead"**
+(its process is gone and no `result`/`accepted`/`adapter_error` entry was
+ever journaled for it), the queue stops that Delivery as abandoned right
+away:
+
+```bash
+ship stop <delivery> abandoned "<awaiting id>: dead (stalled, no outcome entry)"
+```
+
+then moves on to the next one, the same as any other `closed`/`abandoned`
+Delivery. Unlike the re-pick guard, this is not an error: the queue exits 0
+normally once the tracker drains.
+
+Other stall flags ("never sent", "hung?", "unknown host") only print, as
+before — they are not an unambiguous crash, so the queue leaves them for a
+human to judge (`env/drive.ts`, or reading the printed flag).
+
 ## The re-pick guard
 
 A WorkItem whose status never leaves `ready` would be picked forever. That

@@ -36,17 +36,32 @@ const runBun = (args: string[], cwd: string | undefined): Promise<Ran> => run(["
 export type DriveOptions = {
   ship: string; delivery: DeliveryId; interval: number;
   grace: string | undefined; maxRuntime: string | undefined; state: string[]; cwd?: string;
+  onStalled?: "stop"; // unattended callers (env/queue.ts) only; env/drive.ts leaves this unset (a human is watching)
 };
 
-/** Drive one known Delivery until its `at` is closed/abandoned; returns that final position. */
+/** `<delivery> <id>: dead` lines from `poll/stalled.ts`, naming this Delivery's own awaited id. */
+const deadFor = (stdout: string, delivery: DeliveryId, awaiting: string | null): boolean =>
+  awaiting !== null && stdout.split("\n").includes(`${delivery} ${awaiting}: dead`);
+
+/** Drive one known Delivery until its `at` is closed/abandoned; returns that final position.
+ *  `onStalled: "stop"`: a confirmed-dead awaited step (its process gone, no outcome ever journaled) stops the
+ *  Delivery as abandoned instead of polling forever — the unattended queue has no human to notice.
+ *
+ *  Debounced over two consecutive passes: `sent` is always journaled before the Runner awaits the adapter's
+ *  exit (src/runner/apply.ts's `execute`), so a fast adapter can legitimately exit cleanly — its outcome
+ *  (`accepted`/`result`) still mid-write — in the instant a poll lands; that single snapshot is indistinguishable
+ *  from a real crash. The outcome write finishes in milliseconds, well inside one `interval`, so a real "dead"
+ *  still flags on the very next pass while a false one clears — stopping only once the SAME awaiting id reads
+ *  "dead" on back-to-back passes rules out the race without weakening real detection. */
 export const driveDelivery = async (options: DriveOptions): Promise<string> => {
-  const { ship, delivery, interval, grace, maxRuntime, state, cwd } = options;
+  const { ship, delivery, interval, grace, maxRuntime, state, cwd, onStalled } = options;
   const stalledArgs = [
     STALLED, "--ship", ship,
     ...(grace !== undefined ? ["--grace", grace] : []),
     ...(maxRuntime !== undefined ? ["--max-runtime", maxRuntime] : []),
     "--state", ...state,
   ];
+  let deadLastPass: string | null = null; // the awaiting id flagged "dead" on the previous pass, or null
 
   for (;;) {
     await runBun([CHANGED, "--ship", ship], cwd); // covers every open Delivery, not just this one
@@ -65,6 +80,16 @@ export const driveDelivery = async (options: DriveOptions): Promise<string> => {
 
     console.log(`${current.delivery} at=${current.at} awaiting=${current.awaiting}`);
     if (TERMINAL_POSITIONS.has(current.at)) return current.at;
+
+    const dead = onStalled === "stop" && deadFor(stalled.stdout, delivery, current.awaiting);
+    if (dead && deadLastPass === current.awaiting) {
+      const reason = `${current.awaiting}: dead (stalled, no outcome entry)`;
+      const stopped = await runShip(ship, ["stop", delivery, "abandoned", reason], cwd);
+      if (stopped.exitCode !== 0) throw new Error(`ship stop ${delivery}: exit ${stopped.exitCode}\n${stopped.stderr}`);
+      return "abandoned";
+    }
+    deadLastPass = dead ? current.awaiting : null;
+
     await Bun.sleep(interval);
   }
 };

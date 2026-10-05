@@ -15,6 +15,11 @@
 // its new Delivery stopped as `abandoned` with that reason, and the queue exits 3 (1 if that stop fails: the
 // Delivery then stays open).
 //
+// Stall recovery: unlike drive.ts (a human watches), the queue passes `onStalled: "stop"` to driveDelivery, so
+// a confirmed-dead awaited step (poll/stalled.ts's "dead" flag: the process is gone and no outcome was ever
+// journaled) stops the Delivery as abandoned right away instead of polling forever. Other flags ("never sent",
+// "hung?", "unknown host") still only print, since they are not an unambiguous crash.
+//
 // One queue per State: an exclusive lockfile (atomic create) guards the run. It is removed on every exit (drain,
 // errors, exit 3, SIGINT/SIGTERM/SIGHUP) except SIGKILL, which leaves it stale — and only while it still holds this
 // run's token (pid + random id): a lock another run took since is kept.
@@ -143,7 +148,7 @@ const drain = async (options: Options): Promise<number> => {
   const { ship, cwd } = options;
   const handled = new Set<string>();
   const driveToEnd = async (delivery: DeliveryId): Promise<void> => {
-    const at = await driveDelivery({ ...options, delivery });
+    const at = await driveDelivery({ ...options, delivery, onStalled: "stop" });
     handled.add(keyOf(delivery));
     console.log(`${delivery}: done at=${at}`);
   };
