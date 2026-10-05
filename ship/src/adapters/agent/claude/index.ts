@@ -70,8 +70,10 @@ const expandHome = (dir: string): string =>
   dir === "~" ? homedir() : dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir;
 
 // ── Session state, per port, keyed by Delivery. `check` never calls these (P8). ──
-/** A Delivery's session, and the CLI's cumulative `total_cost_usd` for it as of its last reply (harlo-56). */
-type Session = { session: string; costUsd?: number };
+/** A Delivery's session, and the CLI's cumulative `total_cost_usd` for it as of its last reply (harlo-56).
+ *  `lastQuestion` (define only): the `clarify` question text asked on the most recent `question` reply, so a
+ *  repeat of the same text on the next resumed call can be caught instead of asked again forever. */
+type Session = { session: string; costUsd?: number; lastQuestion?: string };
 
 const stateFile = (port: "define" | "implement"): string =>
   join(expandHome("~/.local/state/ship/agent-claude"), `${port}.json`);
@@ -83,13 +85,16 @@ const readState = (port: "define" | "implement"): Record<string, Session> => {
   return Object.fromEntries(Object.entries(raw).map(([d, v]) => [d, typeof v === "string" ? { session: v } : v]));
 };
 
-/** Records this reply's session and its session-total cost, so the next resumed call can take the difference. */
-const saveSession = (port: "define" | "implement", state: Record<string, Session>, delivery: string, reply: AgentReply): void => {
+/** Records this reply's session and its session-total cost, so the next resumed call can take the difference.
+ *  `lastQuestion` (define only) overwrites the prior one, or is dropped once the reply carries no question. */
+const saveSession = (
+  port: "define" | "implement", state: Record<string, Session>, delivery: string, reply: AgentReply, lastQuestion?: string,
+): void => {
   if (!reply.session_id) return;
   const total = figureOf(reply.total_cost_usd);
   const file = stateFile(port);
   mkdirSync(dirname(file), { recursive: true });
-  const session: Session = { session: reply.session_id, ...(total === undefined ? {} : { costUsd: total }) };
+  const session: Session = { session: reply.session_id, ...(total === undefined ? {} : { costUsd: total }), ...(lastQuestion === undefined ? {} : { lastQuestion }) };
   writeFileSync(file, JSON.stringify({ ...state, [delivery]: session }));
 };
 
@@ -277,13 +282,20 @@ const defineSchema = {
  *  re-enter its confirm-first loop indefinitely instead of proceeding. */
 type DefinePromptArgs = {
   workItem: WorkItem; payload: DefinePayload; resume: boolean; workspace: string; mainLine: string | undefined;
-  delivery: string;
+  delivery: string; priorQuestion?: string;
 };
 
-const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery }: DefinePromptArgs): string => {
+const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery, priorQuestion }: DefinePromptArgs): string => {
   const delta: string[] = [];
   if (payload.feedback !== undefined) delta.push(`Feedback from a prior review: ${payload.feedback}`);
-  if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
+  if (payload.answer !== undefined) {
+    delta.push(
+      priorQuestion !== undefined
+        ? `Answer to your previous question ("${priorQuestion}"): ${payload.answer}. Do not repeat this or any `
+          + "earlier question — it is answered. Proceed to a criteria/runbook verdict."
+        : `Answer to your previous question: ${payload.answer}`,
+    );
+  }
   // harlo-53: Implement and Check follow the runbook literally, so a hard-coded path sends them out of the workspace.
   const rule = [
     ...workspaceRule(workspace, mainLine, delivery, payload.base),
@@ -315,14 +327,28 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const state = readState("define");
   const session = delta ? state[stdin.delivery] : undefined;
   const resume = session !== undefined;
+  const priorQuestion = session?.lastQuestion;
   const reply = await callAgent({
-    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery }), schema: defineSchema,
+    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery, priorQuestion }), schema: defineSchema,
     resume: session, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
   });
-  saveSession("define", state, stdin.delivery, reply);
-  if (reply.is_error) return failed(ctx, reply.result);
+  if (reply.is_error) {
+    saveSession("define", state, stdin.delivery, reply);
+    return failed(ctx, reply.result);
+  }
   const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
-  if (out?.question) return { status: "question", about: "clarify", prompt: out.question, ...usageEvidence(ctx) };
+  if (out?.question) {
+    // The agent was just told its previous question was answered, yet asked the identical one again: it is
+    // stuck in a confirm-first loop (M1.12's original failure mode, recurring). Fail instead of re-asking
+    // forever — a human/principal already answered this once and the answer did not register.
+    if (payload.answer !== undefined && out.question === priorQuestion) {
+      saveSession("define", state, stdin.delivery, reply, out.question);
+      return failed(ctx, `define repeated its question after being answered: ${out.question}`);
+    }
+    saveSession("define", state, stdin.delivery, reply, out.question);
+    return { status: "question", about: "clarify", prompt: out.question, ...usageEvidence(ctx) };
+  }
+  saveSession("define", state, stdin.delivery, reply);
   if (!out?.criteria || !out?.runbook) throw new Error(`agent reply missing criteria/runbook: ${reply.result}`);
   return { status: "ok", body: { criteria: out.criteria, runbook: out.runbook }, ...evidenceOf(ctx, reply) };
 };

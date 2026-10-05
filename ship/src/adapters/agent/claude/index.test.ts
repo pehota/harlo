@@ -204,6 +204,38 @@ describe("agent-claude adapter: define", () => {
     expect(readLog(log)[0]).toContain("--safe-mode");
   });
 
+  test("fails instead of looping when the agent repeats the same question after being answered", async () => {
+    // Recurrence of M1.12's original confirm-first loop: a resumed call told its previous question is
+    // answered still echoed it back verbatim. The adapter must stop, not resume again forever.
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", session_id: "sess-def-loop", structured_output: { question: "Is X done?" } },
+      { is_error: false, result: "r2", session_id: "sess-def-loop", structured_output: { question: "Is X done?" } },
+    ]);
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies });
+    const { exitCode, stdout } = await call({
+      port: "define", op: "run", payload: { answer: "yes" } satisfies DefinePayload, home, agentReplies,
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain("Is X done?");
+  });
+
+  test("a different follow-up question after an answer is still passed through, not treated as a repeat", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", session_id: "sess-def-followup", structured_output: { question: "Is X done?" } },
+      { is_error: false, result: "r2", session_id: "sess-def-followup", structured_output: { question: "Is Y done too?" } },
+    ]);
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies });
+    const { stdout } = await call({
+      port: "define", op: "run", payload: { answer: "yes" } satisfies DefinePayload, home, agentReplies,
+    });
+    expect(stdout).toEqual({ status: "question", about: "clarify", prompt: "Is Y done too?" });
+  });
+
   test("always passes --permission-mode bypassPermissions, unconditionally", async () => {
     // Unattended calls have no person at a terminal to approve anything, so the loosest mode is always
     // correct — this is not conditional on the op the way --disallowedTools is.
