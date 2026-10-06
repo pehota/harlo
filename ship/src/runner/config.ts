@@ -25,6 +25,7 @@ type Env = Record<string, string | undefined>;
 const DEFAULT_POLICY = {
   fixRounds: 2,
   retryCap: { default: 1 }, // plan §3.5 example; the plan names no other default
+  maxBlockedRetries: 3, // enough slack for a transient failure, far short of looping unboundedly
   minimum: {
     accept: "person", land: "person", failure: "person", blocked: "person",
     decision: { scope: "person", advisory: "model" }, // architecture: Gates table, v1 defaults
@@ -50,6 +51,7 @@ const buildPolicy = (written: PolicyConfig): Policy => {
   return {
     fixRounds: written.fixRounds ?? DEFAULT_POLICY.fixRounds,
     retryCap: { ...DEFAULT_POLICY.retryCap, ...written.retryCap },
+    maxBlockedRetries: written.maxBlockedRetries ?? DEFAULT_POLICY.maxBlockedRetries,
     minimum: {
       ...DEFAULT_POLICY.minimum,
       ...minimum,

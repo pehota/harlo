@@ -18,6 +18,7 @@ export type TrackerOutcome = { status?: string; comment?: boolean };
 export type PolicyConfig = {
   fixRounds?: number;
   retryCap?: { default?: number } & Partial<Record<Node, number>>;
+  maxBlockedRetries?: number;
   minimum?: {
     accept?: PrincipalKind;
     land?: PrincipalKind;
@@ -63,6 +64,7 @@ const policySchema: JSONSchemaType<PolicyConfig> = {
       additionalProperties: false,
       nullable: true,
     },
+    maxBlockedRetries: count,
     minimum: {
       type: "object",
       properties: {

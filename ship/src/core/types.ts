@@ -40,6 +40,7 @@ export type Snapshot = {
   blockedCmd: Awaiting | null; // the failed command; re-issued on Blocked → retry (B3)
   seq: Record<string, number>; // per id name, never reset
   retries: number; // consecutive `failed` on the current node
+  blockedCount: number; // consecutive times blocked at the current node (0 once it succeeds elsewhere)
   fixRounds: number;
   workspace: string | null;
   base?: string; // main-line branch from workspace.setup; absent before Setup, and on a Delivery that predates it
@@ -82,6 +83,7 @@ export type Entry = {
 export type Policy = {
   fixRounds: number;
   retryCap: { default: number } & Partial<Record<Node, number>>;
+  maxBlockedRetries: number; // blockedCount past this: auto-abandon instead of asking the Principal again
   minimum: {
     accept: PrincipalKind;
     land: PrincipalKind;

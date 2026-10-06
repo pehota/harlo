@@ -56,6 +56,7 @@ const load = (projectJson: Json | string, machineJson: Json | string, env: Recor
 const defaultPolicy: Policy = {
   fixRounds: 2,
   retryCap: { default: 1 },
+  maxBlockedRetries: 3,
   minimum: {
     accept: "person", land: "person", failure: "person", blocked: "person",
     decision: { scope: "person", advisory: "model" },
@@ -85,6 +86,7 @@ describe("valid", () => {
     full.policy = {
       fixRounds: 3,
       retryCap: { default: 1, deploy: 0 },
+      maxBlockedRetries: 3,
       minimum: {
         accept: "person", land: "person", failure: "person", blocked: "model",
         decision: { scope: "person", advisory: "model" },

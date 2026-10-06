@@ -3,7 +3,7 @@
 // with no human interaction — the whole point of an unattended queue.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommentRoute, Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
@@ -39,8 +39,12 @@ const repliesFile = (dir: string, replies: Reply | Reply[]): string => {
   return file;
 };
 
-/** Run `principal/claude.ts --agent-bin <fake> principal <op>` with a Stdin envelope, as the Runner does. */
-const call = async (op: string, payload: unknown, reply: Reply | Reply[]): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
+/** Run `principal/claude.ts --agent-bin <fake> principal <op>` with a Stdin envelope, as the Runner does.
+ *  `log`, when given, is where the fake CLI's own argv (the real `-p <prompt>` text included) is captured —
+ *  for a test asserting what the adapter put in the prompt, not just what it returned. */
+const call = async (
+  op: string, payload: unknown, reply: Reply | Reply[], log?: string,
+): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
   const dir = tempDir("ship-principal-claude-");
   const stdin: Stdin = { id: "k-1/land-1", delivery: "k-1", port: "principal", op, workItem, workspace: "/ws/k-1", payload, tools: [] };
   const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, "principal", op], {
@@ -48,7 +52,7 @@ const call = async (op: string, payload: unknown, reply: Reply | Reply[]): Promi
     cwd: dir,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, FAKE_AGENT_REPLIES: repliesFile(dir, reply) },
+    env: { ...process.env, FAKE_AGENT_REPLIES: repliesFile(dir, reply), ...(log ? { FAKE_AGENT_LOG: log } : {}) },
   });
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   const exitCode = await proc.exited;
@@ -93,6 +97,15 @@ describe("principal/claude", () => {
       is_error: false, result: "", structured_output: { answer: "not-an-option" },
     });
     expect((stdout as { status: string }).status).toBe("failed");
+  });
+
+  test("decide: the evidence's note (e.g. a blocked-retry attempt count) reaches the CLI's prompt verbatim", async () => {
+    const dir = tempDir("ship-principal-claude-log-");
+    const log = join(dir, "log.jsonl");
+    const payload: Decide = { ...land(["approve", "rework"]), evidence: { ...evidence, note: "This is retry attempt 3 at this gate." } };
+    await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "rework" } }, log);
+    const [prompt] = (JSON.parse(readFileSync(log, "utf8").trim()) as string[]).slice(1, 2);
+    expect(prompt).toContain("Note: This is retry attempt 3 at this gate.");
   });
 
   test("decide: an is_error CLI reply fails, never crashes (nothing has changed yet)", async () => {

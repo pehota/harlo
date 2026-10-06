@@ -1,7 +1,7 @@
 // Gates (plan §3.2, §4 "decide G"), step questions routed to the Principal (§4.5), and the evidence bundle (P9).
 import type { CommentRoute, Decide, DecidePoint, GateEvidence, PrincipalKind, Question } from "../contracts/common";
 import type { AskPayload } from "../contracts/ports";
-import { type Move, awaitOn } from "./steps";
+import { type Move, abandon, awaitOn } from "./steps";
 import type { Awaiting, Gate, Node, Policy, Snapshot } from "./types";
 
 /** Core constants, not config: the core branches on them. */
@@ -38,10 +38,13 @@ export const commentRoute = (on: DecidePoint, answer: string): CommentRoute | un
 /** An Integrate conflict's answers: the core owns them, whatever the adapter offered (Q2). */
 export const CONFLICT_OPTIONS = ["resolved", "rework"] as const;
 
-/** What the Principal sees: the core passes it through and never reads `evidence` (P9). */
+/** What the Principal sees: the core passes it through and never reads `evidence` (P9). At Blocked, a repeat
+ *  visit to the same node also carries how many times already (the Principal otherwise has no memory of its
+ *  own prior answers at this gate), so it can reason about escalating instead of retrying forever. */
 export const evidenceBundle = (s: Snapshot): GateEvidence => ({
   workItem: s.workItem, criteria: s.criteria, runbook: s.runbook, changeset: s.changeset,
   findings: s.findings, evidence: s.evidence,
+  ...(s.at === "blocked" && s.blockedCount > 1 ? { note: `This is retry attempt ${s.blockedCount} at this gate.` } : {}),
 });
 
 /** Await `principal.decide` at a decide point with its constant options (`decide G`). */
@@ -53,15 +56,26 @@ const awaitDecide = (s: Snapshot, on: DecidePoint, min: PrincipalKind): Move => 
 
 /** Enter a gate whose Minimum Principal is one policy value: reset retries and await `principal.decide`. */
 export const enterGate = (p: Policy, s: Snapshot, gate: Exclude<Gate, "decision">): Move =>
-  awaitDecide({ ...s, at: gate, retries: 0 }, gate, p.minimum[gate]);
+  awaitDecide({ ...s, at: gate, retries: 0, blockedCount: 0 }, gate, p.minimum[gate]);
 
 /** Enter the Decision gate; the kind of decision picks the Minimum Principal (N rounds used → scope). */
 export const enterDecision = (p: Policy, s: Snapshot, about: keyof Policy["minimum"]["decision"]): Move =>
-  awaitDecide({ ...s, at: "decision", retries: 0 }, "decision", p.minimum.decision[about]);
+  awaitDecide({ ...s, at: "decision", retries: 0, blockedCount: 0 }, "decision", p.minimum.decision[about]);
 
-/** Enter Blocked: `node` stayed failed past its cap; keep the failed command for `retry` (B2, B3). */
-export const enterBlocked = (p: Policy, s: Snapshot, node: Node, failed: Awaiting): Move =>
-  awaitDecide({ ...s, at: "blocked", blockedAt: node, blockedCmd: failed }, "blocked", p.minimum.blocked);
+/**
+ * Enter Blocked: `node` stayed failed past its cap; keep the failed command for `retry` (B2, B3).
+ * `blockedCount` counts consecutive visits to Blocked without `node` ever succeeding — it survives the
+ * `blockedAt: null` a `retry` answer sets (B8), unlike `retries`, which does reset there. Past
+ * `p.maxBlockedRetries` the Principal is no longer asked at all: auto-abandon, a hard backstop independent
+ * of whatever the Principal would answer (a live incident looped ~450 times before the model noticed itself).
+ */
+export const enterBlocked = (p: Policy, s: Snapshot, node: Node, failed: Awaiting): Move => {
+  const blockedCount = s.blockedCount + 1;
+  if (blockedCount > p.maxBlockedRetries) {
+    return abandon(p, s, "abandoned", `${node} blocked ${blockedCount} times in a row (maxBlockedRetries ${p.maxBlockedRetries})`);
+  }
+  return awaitDecide({ ...s, at: "blocked", blockedAt: node, blockedCmd: failed, blockedCount }, "blocked", p.minimum.blocked);
+};
 
 /** Minimum Principal for a question's `about`; an unknown category gets the strictest, person. */
 const questionMinimum = (p: Policy, about: string): PrincipalKind =>

@@ -47,6 +47,7 @@ export const snapshotSchema: JSONSchemaType<Snapshot> = {
     blockedCmd: maybeAwaiting,
     seq: { type: "object", additionalProperties: { type: "integer" }, required: [] },
     retries: { type: "integer" },
+    blockedCount: { type: "integer" },
     fixRounds: { type: "integer" },
     workspace: { anyOf: [{ type: "string" }, nullSchema] },
     base: { type: "string", nullable: true }, // optional: absent on a Delivery persisted before harlo-52
@@ -60,7 +61,8 @@ export const snapshotSchema: JSONSchemaType<Snapshot> = {
   },
   required: [
     "v", "delivery", "workItem", "at", "blockedAt", "awaiting", "lastRun", "blockedCmd", "seq", "retries",
-    "fixRounds", "workspace", "criteria", "runbook", "changeset", "findings", "evidence", "outcome", "reason",
+    "blockedCount", "fixRounds", "workspace", "criteria", "runbook", "changeset", "findings", "evidence",
+    "outcome", "reason",
   ],
   additionalProperties: false,
 };

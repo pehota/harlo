@@ -205,7 +205,7 @@ describe("Snapshot", () => {
   const snapshot = {
     v: 1, delivery: "PROJ-1-1", workItem, at: "setup", blockedAt: null,
     awaiting: { id: "PROJ-1-1/setup-1", port: "workspace", op: "setup", await: true, payload: {}, node: "setup", kind: "run" },
-    lastRun: null, blockedCmd: null, seq: { setup: 1 }, retries: 0, fixRounds: 0, workspace: null,
+    lastRun: null, blockedCmd: null, seq: { setup: 1 }, retries: 0, blockedCount: 0, fixRounds: 0, workspace: null,
     criteria: null, runbook: null, changeset: null, findings: [], evidence: [], outcome: null, reason: null,
   };
   test.each([

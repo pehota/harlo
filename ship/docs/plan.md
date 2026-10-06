@@ -273,6 +273,7 @@ type Snapshot = {
   blockedCmd: Awaiting | null;                 // the failed command; re-issued on Blocked → retry (B3)
   seq: Record<string, number>;                 // per id name, never reset
   retries: number;                             // consecutive `failed` on the current node
+  blockedCount: number;                        // consecutive visits to Blocked without `node` ever succeeding
   fixRounds: number;
   workspace: string | null;
   criteria: string[] | null; runbook: string[] | null; changeset: string | null;
@@ -306,6 +307,7 @@ type Entry = {                                 // Runner adds `time` (core has n
 type Policy = {
   fixRounds: number;                                            // default 2
   retryCap: { default: number } & Partial<Record<Node, number>>;
+  maxBlockedRetries: number;                                    // blockedCount past this: auto-abandon instead of asking the Principal again (default 3)
   minimum: {
     accept: PrincipalKind; land: PrincipalKind; failure: PrincipalKind; blocked: PrincipalKind;
     decision: { scope: PrincipalKind; advisory: PrincipalKind };
@@ -466,16 +468,25 @@ Notation:
 | # | state | signal | → | commands | snapshot / entry |
 |---|---|---|---|---|---|
 | B1 | node (step, gate or ask), retries < C | failed | same | re-issue the awaited command, new id | retries+1 |
-| B2 | node, retries = C | failed | blocked | decide blocked `[retry, stop]`, min blocked | blockedAt = node; blockedCmd = the failed command (lastRun kept) |
-| B3 | blocked | `retry` | blockedAt | re-issue blockedCmd, new id | retries = 0; blockedAt = null; blockedCmd = null |
+| B2 | node, retries = C | failed | blocked | decide blocked `[retry, stop]`, min blocked | blockedAt = node; blockedCmd = the failed command (lastRun kept); blockedCount += 1 |
+| B3 | blocked | `retry` | blockedAt | re-issue blockedCmd, new id | retries = 0; blockedAt = null; blockedCmd = null; blockedCount unchanged |
 | B4 | blocked | `stop` [+ comment] | abandoned | abandon(`abandoned`, comment ?? "stopped at blocked <node>") | |
 | B5 | blocked | answer ∉ options | blocked | re-issue decide blocked, new id | `invalid_answer` |
 | B6 | blocked, awaiting decide | failed | blocked | none | awaiting = null (the environment alerts) |
 | B7 | gate | answer ∉ options | same | re-issue decide, new id | `invalid_answer`; retries unchanged |
+| B9 | node, retries = C, blockedCount already > maxBlockedRetries − 1 | failed | abandoned | abandon(`abandoned`, "<node> blocked <blockedCount+1> times in a row (maxBlockedRetries <C>)") | the Principal is not asked this time |
 
 Notes:
 - The ask in B1 and B2 uses the cap of the asking step.
 - An invalid answer (B5, B7) is an answer, not a failure. It does not count toward `C` (ADR 0004).
+- `blockedCount` (B2) counts consecutive visits to Blocked without `node` ever succeeding: it survives a `retry`
+  answer's reset of `blockedAt`/`blockedCmd` (B3), unlike `retries`, and only resets to 0 once a step or gate is
+  entered fresh for real progress. The current `blockedCount` (once above 1) is also surfaced to the Principal
+  in the decide evidence's `note`, so an automated Principal can see it is looping and choose to stop. Past
+  `policy.maxBlockedRetries` (B9) the Principal is no longer asked at all: a runaway retry loop otherwise has
+  no ceiling, since B3's retry always resets `retries` to 0 and lets the node fail up to `C` times again before
+  blocking once more — a live incident looped ~450 times in ~8 minutes before an automated Principal happened
+  to notice the pattern itself.
 
 ### 4.7 Delivery signals
 

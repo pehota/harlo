@@ -87,11 +87,11 @@ const STEP_CALL: Record<Step, (p: Policy, s: Snapshot) => Call> = {
 };
 
 /**
- * Enter a step (`run X`): reset retries, issue its awaited command with `extra` merged into the payload,
- * and fire `tracker.update` when policy maps the step to a status.
+ * Enter a step (`run X`): reset retries and blockedCount, issue its awaited command with `extra` merged into
+ * the payload, and fire `tracker.update` when policy maps the step to a status.
  */
 export const enterStep = (p: Policy, s: Snapshot, step: Step, extra: Record<string, unknown> = {}): Move => {
-  const entered: Snapshot = { ...s, at: step, retries: 0 };
+  const entered: Snapshot = { ...s, at: step, retries: 0, blockedCount: 0 };
   const { port, op, payload } = STEP_CALL[step](p, entered);
   const run = awaitOn(entered, step, { port, op, payload: { ...payload, ...extra }, node: step, kind: "run" });
   const ran: Move = { ...run, state: { ...run.state, lastRun: run.state.awaiting } };

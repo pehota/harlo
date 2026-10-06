@@ -7,7 +7,7 @@ import { isTerminal, type Policy, type Snapshot, type StartOutput } from "./type
 const fresh = (delivery: string, workItem: WorkItem): Snapshot => ({
   v: 1, delivery, workItem, at: "setup",
   blockedAt: null, awaiting: null, lastRun: null, blockedCmd: null,
-  seq: {}, retries: 0, fixRounds: 0,
+  seq: {}, retries: 0, blockedCount: 0, fixRounds: 0,
   workspace: null, criteria: null, runbook: null, changeset: null,
   findings: [], evidence: [], outcome: null, reason: null,
 });

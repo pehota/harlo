@@ -2,7 +2,7 @@
 import type { Signal, Snapshot } from "../types";
 import {
   type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, decide, failed, fire, gateEvidence, id,
-  runbook, snapshotAt, withRetryCap,
+  ok, runbook, snapshotAt, withMaxBlockedRetries, withRetryCap,
 } from "./builders.fixture";
 
 const LOGIN = ["logged in", "give up"];
@@ -10,7 +10,8 @@ const deploy = (n: number) => awaited(`deploy-${n}`, "deploy", "run", { changese
 const verify1 = awaited("verify-1", "verify", "run", { runbook }, "verify", "run");
 const land = (n: number) => ({ ...decide("land", 1, OPTIONS.land, "person"), id: id(`land-${n}`) });
 const login = (n: number) => ({ ...ask(1, "verify", "login", "Log in, then answer", "person", LOGIN), id: id(`ask-${n}`) });
-const blocked = (n: number) => ({ ...decide("blocked", 1, OPTIONS.blocked, "person", gateEvidence()), id: id(`blocked-${n}`) });
+const blocked = (n: number, note?: string) =>
+  ({ ...decide("blocked", 1, OPTIONS.blocked, "person", gateEvidence(note ? { note } : {})), id: id(`blocked-${n}`) });
 
 /** Blocked at `node` on `cmd`, awaiting the n-th blocked decide. */
 const blockedOn = (node: "deploy" | "verify", failedCmd = deploy(1), n = 1) =>
@@ -55,14 +56,51 @@ export const blockedRows: TransitionRow[] = [
     },
   },
   {
-    id: "B2", name: "step failed at the cap → blocked, decide retry|stop",
+    id: "B2", name: "step failed at the cap → blocked, decide retry|stop, blockedCount starts at 1",
     state: snapshotAt("deploy", deploy(1), { retries: 1 }),
     signal: failed(deploy(1), "registry unreachable"),
     expect: {
       at: "blocked",
       commands: [cmd(blocked(1))],
-      state: { blockedAt: "deploy", blockedCmd: deploy(1), lastRun: deploy(1), awaiting: blocked(1) },
+      state: { blockedAt: "deploy", blockedCmd: deploy(1), lastRun: deploy(1), awaiting: blocked(1), blockedCount: 1 },
       entry: { from: "deploy", to: "blocked", issued: [id("blocked-1")] },
+    },
+  },
+  {
+    id: "B2", name: "a node blocked a second time in a row → blockedCount 2, Principal sees a retry-attempt note",
+    state: snapshotAt("deploy", deploy(2), { retries: 1, blockedCount: 1, seq: { deploy: 2, blocked: 1 } }),
+    signal: failed(deploy(2), "registry unreachable"),
+    expect: {
+      at: "blocked",
+      commands: [cmd(blocked(2, "This is retry attempt 2 at this gate."))],
+      state: { blockedAt: "deploy", blockedCmd: deploy(2), blockedCount: 2 },
+      entry: { from: "deploy", to: "blocked", issued: [id("blocked-2")] },
+    },
+  },
+  {
+    id: "B2", name: "blockedCount past maxBlockedRetries → auto-abandon, the Principal is never asked again",
+    policy: withMaxBlockedRetries(2),
+    state: snapshotAt("deploy", deploy(3), { retries: 1, blockedCount: 2 }),
+    signal: failed(deploy(3), "registry unreachable"),
+    expect: {
+      at: "abandoned",
+      commands: [
+        fire("comment-1", "tracker", "comment", { text: "abandoned: deploy blocked 3 times in a row (maxBlockedRetries 2)" }),
+        fire("notify-1", "principal", "notify", { text: "abandoned: abandoned: deploy blocked 3 times in a row (maxBlockedRetries 2)" }),
+      ],
+      state: { outcome: "abandoned", reason: "deploy blocked 3 times in a row (maxBlockedRetries 2)", blockedAt: null, blockedCmd: null, awaiting: null },
+      entry: { from: "deploy", to: "abandoned", issued: [id("comment-1"), id("notify-1")] },
+    },
+  },
+  {
+    id: "B2", name: "a node succeeds after a prior blocked cycle → blockedCount resets to 0 entering the next step",
+    state: snapshotAt("deploy", deploy(2), { blockedCount: 2 }),
+    signal: ok(deploy(2), { verdict: "live" }),
+    expect: {
+      at: "verify",
+      commands: [cmd(verify1)],
+      state: { blockedCount: 0 },
+      entry: { from: "deploy", to: "verify", issued: [id("verify-1")] },
     },
   },
   {
@@ -107,6 +145,17 @@ export const blockedRows: TransitionRow[] = [
       at: "deploy",
       commands: [cmd(deploy(2))],
       state: { retries: 0, blockedAt: null, blockedCmd: null, awaiting: deploy(2), lastRun: deploy(2) },
+      entry: { from: "blocked", to: "deploy", issued: [id("deploy-2")], by: "person" },
+    },
+  },
+  {
+    id: "B3", name: "blocked retry does NOT reset blockedCount — it must keep counting toward the cap",
+    state: { ...blockedOn("deploy"), blockedCount: 1 },
+    signal: answer(blocked(1), "retry"),
+    expect: {
+      at: "deploy",
+      commands: [cmd(deploy(2))],
+      state: { retries: 0, blockedAt: null, blockedCmd: null, blockedCount: 1 },
       entry: { from: "blocked", to: "deploy", issued: [id("deploy-2")], by: "person" },
     },
   },

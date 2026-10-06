@@ -48,6 +48,7 @@ export const changeset = "cs-1";
 export const policy: Policy = {
   fixRounds: 2,
   retryCap: { default: 1 },
+  maxBlockedRetries: 3,
   minimum: {
     accept: "person", land: "person", failure: "person", blocked: "person",
     decision: { scope: "person", advisory: "model" },
@@ -128,7 +129,7 @@ export const snapshotAt = (at: Position, awaiting: Awaiting | null, over: Partia
   return {
     v: 1, delivery: D, workItem, at,
     blockedAt: null, awaiting, lastRun: awaiting?.kind === "run" ? awaiting : null, blockedCmd: null,
-    seq, retries: 0, fixRounds: 0,
+    seq, retries: 0, blockedCount: 0, fixRounds: 0,
     workspace, criteria, runbook, changeset, findings: [], evidence: [], outcome: null, reason: null,
     ...over,
   };
@@ -151,6 +152,7 @@ export const question = (
 export const failed = (to: Awaiting, info: string): Signal => ({ kind: "result", id: to.id, result: { status: "failed", info } });
 
 export const withRetryCap = (retryCap: Policy["retryCap"]): Policy => ({ ...policy, retryCap });
+export const withMaxBlockedRetries = (maxBlockedRetries: number): Policy => ({ ...policy, maxBlockedRetries });
 
 export const stop = (outcome: string, reason: string): Signal => ({ kind: "stop", outcome, reason });
 
