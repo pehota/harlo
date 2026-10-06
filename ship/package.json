@@ -4,7 +4,7 @@
   "private": true,
   "bin": { "ship": "bin/ship" },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test --max-concurrency=2",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run test"
   },
