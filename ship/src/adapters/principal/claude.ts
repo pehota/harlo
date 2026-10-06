@@ -25,12 +25,22 @@ const evidenceLines = (e: GateEvidence): string[] => [
   ...(e.note === undefined ? [] : [`Note: ${e.note}`]),
 ];
 
+/** Which answers keep a comment and where it goes, so the model knows a comment on them is acted on. */
+const commentLines = (p: Decide): string[] => {
+  const kept = p.options.flatMap((option) => {
+    const route = p.comments[option];
+    if (!route || route.goes === "dropped") return [];
+    return [`${option} (${route.goes === "feedback" ? `sent to ${route.to} as a directive` : "recorded as the reason"})`];
+  });
+  return kept.length > 0 ? [`Put any short comment in the \`comment\` field. It is kept only with: ${kept.join(", ")}.`] : [];
+};
+
 const decidePrompt = (stdin: Stdin, p: Decide): string => [
   `You are the unattended Principal for an autonomous delivery queue (${stdin.delivery}).`,
   `Decide: ${p.on}`,
   ...evidenceLines(p.evidence),
   `Answer with exactly one of: ${p.options.join(", ")}.`,
-  "You may add a short comment after your answer; it is kept only for options the caller allows a comment on.",
+  ...commentLines(p),
 ].join("\n");
 
 const askPrompt = (stdin: Stdin, p: AskPayload): string => [

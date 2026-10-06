@@ -268,9 +268,15 @@ const mainLineStray = (mark: MainLineMark | undefined): string | undefined => {
 const defineSchema = {
   type: "object",
   properties: {
-    criteria: { type: "array", items: { type: "string" } },
-    runbook: { type: "array", items: { type: "string" } },
-    question: { type: "string" },
+    criteria: { type: "array", items: { type: "string" }, description: "Acceptance criteria, each one independently checkable." },
+    runbook: {
+      type: "array", items: { type: "string" },
+      description: "Steps or commands, run from the Delivery workspace without modifying it, that show each criterion holds.",
+    },
+    question: {
+      type: "string",
+      description: "Set instead of criteria and runbook only when the WorkItem cannot be defined without an answer: one question for the Principal.",
+    },
   },
   required: [],
   additionalProperties: false,
@@ -503,7 +509,10 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 // unchecked into a Result that violated `checkBody`'s own schema).
 const findingSchema = {
   type: "object",
-  properties: { text: { type: "string" }, ref: { type: "string" } },
+  properties: {
+    text: { type: "string", description: "One specific problem, stated so Implement can act on it." },
+    ref: { type: "string", description: "Where it is: prefer a file:line; a criterion or command only when no file location applies." },
+  },
   required: ["text"],
 } as const;
 
@@ -515,8 +524,16 @@ const findingSchema = {
 const checkSchema = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["pass", "fix", "decide"] },
-    about: { type: "string", enum: ["scope", "advisory"] },
+    verdict: {
+      type: "string", enum: ["pass", "fix", "decide"],
+      description: "pass: every criterion holds. fix: specific problems Implement can fix; list them in findings. "
+        + "decide: the Principal must choose to keep going, accept as is, or stop; set about and list findings.",
+    },
+    about: {
+      type: "string", enum: ["scope", "advisory"],
+      description: "Required with decide, omitted otherwise. scope: what the WorkItem should cover is in question. "
+        + "advisory: the findings are judgment calls that need not block landing.",
+    },
     findings: { type: "array", items: findingSchema },
   },
   required: ["verdict"],

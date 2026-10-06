@@ -59,6 +59,14 @@ const call = async (
   return { exitCode, stdout: JSON.parse(stdout.trim()), stderr };
 };
 
+/** The `-p` prompt text the adapter sent the CLI for this decide. */
+const decidePromptOf = async (payload: Decide, reply: Reply): Promise<string> => {
+  const log = join(tempDir("ship-principal-claude-log-"), "log.jsonl");
+  await call("decide", payload, reply, log);
+  const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
+  return argv[argv.indexOf("-p") + 1]!;
+};
+
 const LAND: Record<string, CommentRoute> = {
   approve: { goes: "dropped" }, rework: { goes: "feedback", to: "implement" }, rescope: { goes: "feedback", to: "define" },
 };
@@ -81,6 +89,27 @@ describe("principal/claude", () => {
       is_error: false, result: "", structured_output: { answer: "rework", comment: "tests are missing" },
     });
     expect(stdout).toEqual({ status: "ok", body: { answer: "rework", by: "model", comment: "tests are missing" } });
+  });
+
+  test("decide: the prompt names which answers keep a comment and where it goes", async () => {
+    const payload = land(["approve", "rework", "rescope"]);
+    const prompt = await decidePromptOf(payload, { is_error: false, result: "", structured_output: { answer: "approve" } });
+    expect(prompt).toContain("It is kept only with: rework (sent to implement as a directive), rescope (sent to define as a directive).");
+    expect(prompt).not.toContain("approve (");
+  });
+
+  test("decide: a reason route is named as the recorded reason", async () => {
+    const payload: Decide = {
+      on: "decision", options: ["keep_going", "accept", "stop"], min: "model", evidence,
+      comments: { keep_going: { goes: "feedback", to: "implement" }, accept: { goes: "dropped" }, stop: { goes: "reason" } },
+    };
+    const prompt = await decidePromptOf(payload, { is_error: false, result: "", structured_output: { answer: "stop" } });
+    expect(prompt).toContain("stop (recorded as the reason)");
+  });
+
+  test("decide: no comment line when every option's route is dropped", async () => {
+    const prompt = await decidePromptOf(land(["approve"]), { is_error: false, result: "", structured_output: { answer: "approve" } });
+    expect(prompt).not.toContain("It is kept only with");
   });
 
   test("decide: a comment on a dropped-route option is not forwarded", async () => {
