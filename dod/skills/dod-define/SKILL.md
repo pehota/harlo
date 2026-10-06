@@ -10,11 +10,9 @@ chain: **agree the task → "how will we know it works?" (`works_when`) →
 "how do we prove that?" (the requirements, each a proof of `works_when`)**.
 `dod/base-dod.md` lists the proofs every contract carries.
 
-**Run this yourself, before your first edit, every time.** Not optional,
-not a fallback — the moment a task's shape is clear, call this before
-touching any file, the same way you self-invoke `/dod:verify` when you
-believe the task is done. Skipping it is a compliance failure, not a style
-choice; `track.sh`'s nudge and the user running it themselves are the
+Run this yourself, before your first edit, every time a task's shape is
+clear — the same way you self-invoke `/dod:verify` when you believe the
+task is done. `track.sh`'s nudge and the user running it themselves are the
 safety net for when you fail, not the plan.
 
 ## Steps
@@ -55,8 +53,14 @@ safety net for when you fail, not the plan.
 
 3. **Q1 — "How will we know it works?"** From the agreed task, write
    `works_when`: one sentence, "It works when <concrete observable outcome>"
-   — what a user or caller would see, not which files change. Everything
-   below is a proof of this sentence.
+   — what a user, caller, or reviewer would see or do, described without
+   naming the functions, fields, or types that implement it. Write it so
+   someone who has never read the code can tell whether the behaviour
+   changed. Only drop to technical language when the task itself has no
+   observable surface — a pure refactor, an internal perf fix, dependency
+   plumbing — where "it works" genuinely means "the mechanism is correct,"
+   not "a user would notice something." Everything below is a proof of this
+   sentence.
 
 4. **Q2 — "How do we prove that?"** Find what the repo offers — build, app
    start, test runner, e2e stack, docs, review — and list the proofs. Every
