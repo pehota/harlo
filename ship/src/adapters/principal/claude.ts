@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // Model Principal: an unattended `claude` CLI answers every decide/ask gate instead of a person, so a queue
-// can run autonomously with nobody at a terminal. argv: [--agent-bin <path>] principal <op>; --agent-bin
-// defaults to `claude` on PATH (a fake executable in tests, mirroring agent/claude/index.ts).
+// can run autonomously with nobody at a terminal. argv: [--agent-bin <path>] [--plugin-dir <path>]...
+// principal <op>; --agent-bin defaults to `claude` on PATH (a fake executable in tests, mirroring
+// agent/claude/index.ts); --plugin-dir is repeatable and forwarded to every CLI call `decide`/`ask` makes.
 //   decide, ask → build a prompt from the gate's evidence/options, call the CLI with a `--json-schema` that
 //                 forces `answer` into the given options, then {"status":"ok", body:{answer, by:"model", comment?}}
 //   notify, cancel → no CLI call: ack {"status":"ok", body:{}} immediately, same as tty.ts
@@ -53,9 +54,12 @@ const askPrompt = (stdin: Stdin, p: AskPayload): string => [
 /** Runs the `claude` CLI with a prompt and a JSON schema that constrains its structured answer; mirrors
  *  agent/claude/index.ts's call shape (`-p`, `--output-format json`, `--safe-mode`, `bypassPermissions`), minus
  *  session/resume (a gate reply is always a single, independent call, never continued). */
-const callAgent = async (agentBin: string, prompt: string, schema: object): Promise<string> => {
+const callAgent = async (agentBin: string, pluginDirs: string[], prompt: string, schema: object): Promise<string> => {
   const proc = Bun.spawn(
-    [agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode", "--permission-mode", "bypassPermissions"],
+    [
+      agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode", "--permission-mode", "bypassPermissions",
+      ...pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
+    ],
     { stdout: "pipe", stderr: "pipe" },
   );
   const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
@@ -99,15 +103,15 @@ const answerOf = (structured: Record<string, unknown>, options: string[] | undef
   return typeof comment === "string" && comment !== "" ? { answer, comment } : { answer };
 };
 
-const decide = async (agentBin: string, stdin: Stdin, p: Decide): Promise<unknown> => {
-  const stdout = await callAgent(agentBin, decidePrompt(stdin, p), answerSchema(p.options, true));
+const decide = async (agentBin: string, pluginDirs: string[], stdin: Stdin, p: Decide): Promise<unknown> => {
+  const stdout = await callAgent(agentBin, pluginDirs, decidePrompt(stdin, p), answerSchema(p.options, true));
   const { answer, comment } = answerOf(structuredReplyOf(stdout), p.options);
   const carries = p.comments[answer] !== undefined && p.comments[answer]!.goes !== "dropped";
   return { status: "ok", body: { answer, by: "model", ...(comment !== undefined && carries ? { comment } : {}) } };
 };
 
-const ask = async (agentBin: string, stdin: Stdin, p: AskPayload): Promise<unknown> => {
-  const stdout = await callAgent(agentBin, askPrompt(stdin, p), answerSchema(p.options ?? undefined, false));
+const ask = async (agentBin: string, pluginDirs: string[], stdin: Stdin, p: AskPayload): Promise<unknown> => {
+  const stdout = await callAgent(agentBin, pluginDirs, askPrompt(stdin, p), answerSchema(p.options ?? undefined, false));
   const { answer } = answerOf(structuredReplyOf(stdout), p.options ?? undefined);
   return { status: "ok", body: { answer, by: "model" } };
 };
@@ -115,34 +119,39 @@ const ask = async (agentBin: string, stdin: Stdin, p: AskPayload): Promise<unkno
 const notify = (): unknown => ({ status: "ok", body: {} });
 const cancel = (): unknown => ({ status: "ok", body: {} }); // every call above is async: nothing to cancel
 
-const OPS: Record<string, (agentBin: string, stdin: Stdin) => Promise<unknown>> = {
-  decide: (agentBin, stdin) => decide(agentBin, stdin, stdin.payload as Decide),
-  ask: (agentBin, stdin) => ask(agentBin, stdin, stdin.payload as AskPayload),
+const OPS: Record<string, (agentBin: string, pluginDirs: string[], stdin: Stdin) => Promise<unknown>> = {
+  decide: (agentBin, pluginDirs, stdin) => decide(agentBin, pluginDirs, stdin, stdin.payload as Decide),
+  ask: (agentBin, pluginDirs, stdin) => ask(agentBin, pluginDirs, stdin, stdin.payload as AskPayload),
   notify: () => Promise.resolve(notify()),
   cancel: () => Promise.resolve(cancel()),
 };
 
-/** argv after the script: `[--agent-bin <path>] <port> <op>`; --agent-bin defaults to `claude` on PATH. */
-const parseArgs = (args: string[]): { agentBin: string; port: string | undefined; op: string | undefined } => {
+/** argv after the script: `[--agent-bin <path>] [--plugin-dir <path>]... <port> <op>`; --agent-bin defaults to
+ *  `claude` on PATH; --plugin-dir is repeatable and defaults to none, mirroring agent/claude/index.ts. */
+const parseArgs = (
+  args: string[],
+): { agentBin: string; pluginDirs: string[]; port: string | undefined; op: string | undefined } => {
   let agentBin = "claude";
+  const pluginDirs: string[] = [];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--agent-bin") { agentBin = args[i + 1] ?? agentBin; i += 1; }
+    else if (args[i] === "--plugin-dir") { if (args[i + 1] !== undefined) pluginDirs.push(args[i + 1] as string); i += 1; }
     else positional.push(args[i] as string);
   }
   const [port, op] = positional;
-  return { agentBin, port, op };
+  return { agentBin, pluginDirs, port, op };
 };
 
 const run = async (): Promise<unknown> => {
-  const { agentBin, port, op } = parseArgs(process.argv.slice(2));
+  const { agentBin, pluginDirs, port, op } = parseArgs(process.argv.slice(2));
   const contract = port === "principal" && op ? schemaFor("principal", op) : undefined;
   const handler = op && Object.hasOwn(OPS, op) ? OPS[op] : undefined;
   if (!contract || !handler) throw new Error(`unsupported: ${port} ${op}`);
   const stdin = JSON.parse(await Bun.stdin.text()) as Stdin;
   const invalid = check(contract.payload, stdin.payload);
   if (invalid) throw new Error(`invalid payload: ${invalid}`);
-  const result = await handler(agentBin, stdin);
+  const result = await handler(agentBin, pluginDirs, stdin);
   const invalidResult = check(contract.stdout, result);
   if (invalidResult) throw new Error(`principal/claude would have printed a contract-violating Result: ${invalidResult}`);
   return result;

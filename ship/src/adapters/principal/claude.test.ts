@@ -39,15 +39,16 @@ const repliesFile = (dir: string, replies: Reply | Reply[]): string => {
   return file;
 };
 
-/** Run `principal/claude.ts --agent-bin <fake> principal <op>` with a Stdin envelope, as the Runner does.
- *  `log`, when given, is where the fake CLI's own argv (the real `-p <prompt>` text included) is captured —
- *  for a test asserting what the adapter put in the prompt, not just what it returned. */
+/** Run `principal/claude.ts --agent-bin <fake> [--plugin-dir <dir>]... principal <op>` with a Stdin envelope, as
+ *  the Runner does. `log`, when given, is where the fake CLI's own argv (the real `-p <prompt>` text included)
+ *  is captured — for a test asserting what the adapter put in the prompt, not just what it returned. */
 const call = async (
-  op: string, payload: unknown, reply: Reply | Reply[], log?: string,
+  op: string, payload: unknown, reply: Reply | Reply[], log?: string, pluginDirs?: string[],
 ): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
   const dir = tempDir("ship-principal-claude-");
   const stdin: Stdin = { id: "k-1/land-1", delivery: "k-1", port: "principal", op, workItem, workspace: "/ws/k-1", payload, tools: [] };
-  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, "principal", op], {
+  const pluginDirArgs = (pluginDirs ?? []).flatMap((d) => ["--plugin-dir", d]);
+  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, "principal", op], {
     stdin: new Blob([JSON.stringify(stdin)]),
     cwd: dir,
     stdout: "pipe",
@@ -166,5 +167,44 @@ describe("principal/claude", () => {
   test("cancel: acks ok without calling the CLI at all", async () => {
     const { stdout } = await call("cancel", { target: "k-1/land-1" }, { is_error: true, result: "should never run" });
     expect(stdout).toEqual({ status: "ok", body: {} });
+  });
+
+  test("decide: forwards configured --plugin-dir entries to the agent bin, in order", async () => {
+    const dir = tempDir("ship-principal-claude-log-");
+    const log = join(dir, "log.jsonl");
+    const payload = land(["approve", "rework"]);
+    await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, log, ["/a/dod", "/b/other"]);
+    const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
+    expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(2);
+    expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
+    expect(argv[argv.lastIndexOf("--plugin-dir") + 1]).toBe("/b/other");
+  });
+
+  test("ask: forwards configured --plugin-dir entries to the agent bin", async () => {
+    const dir = tempDir("ship-principal-claude-log-");
+    const log = join(dir, "log.jsonl");
+    const payload: AskPayload = { prompt: "which env?", min: "model", options: ["staging", "prod"], evidence };
+    await call("ask", payload, { is_error: false, result: "", structured_output: { answer: "staging" } }, log, ["/a/dod"]);
+    const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
+    expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(1);
+    expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
+  });
+
+  test("decide: with no --plugin-dir given, the CLI argv carries no --plugin-dir flags", async () => {
+    const dir = tempDir("ship-principal-claude-log-");
+    const log = join(dir, "log.jsonl");
+    const payload = land(["approve", "rework"]);
+    await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, log);
+    const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
+    expect(argv).not.toContain("--plugin-dir");
+  });
+
+  test("decide: --plugin-dir ahead of port/op does not get absorbed into positional parsing", async () => {
+    const payload = land(["approve", "rework"]);
+    const { exitCode, stdout } = await call(
+      "decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, undefined, ["/a/dod"],
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({ status: "ok", body: { answer: "approve", by: "model" } });
   });
 });
