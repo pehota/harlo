@@ -268,7 +268,14 @@ const mainLineStray = (mark: MainLineMark | undefined): string | undefined => {
 const defineSchema = {
   type: "object",
   properties: {
-    criteria: { type: "array", items: { type: "string" }, description: "Acceptance criteria, each one independently checkable." },
+    criteria: {
+      type: "array", items: { type: "string" },
+      description: "Acceptance criteria, each one independently checkable. Each describes what a user, caller, "
+        + "or reviewer would see or do, without naming the functions, fields, or types that implement it — "
+        + "written so someone who has never read the code can tell whether the behaviour changed. Only drop to "
+        + "technical language when the WorkItem itself has no observable surface (a pure refactor, an internal "
+        + "perf fix, dependency plumbing).",
+    },
     runbook: {
       type: "array", items: { type: "string" },
       description: "Steps or commands, run from the Delivery workspace without modifying it, that show each criterion holds.",
