@@ -38,7 +38,7 @@ state__locked() {
   local state_path="$1"; shift
   mkdir -p "$(dirname "$state_path")" 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
-    ( flock -x 200; "$@"; ) 200>"${state_path}.lock" 2>/dev/null
+    ( flock -x 9; "$@"; ) 9>"${state_path}.lock" 2>/dev/null
   else
     "$@"
   fi
