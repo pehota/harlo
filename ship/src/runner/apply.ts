@@ -3,11 +3,13 @@
 // immediate Results are queued and applied in the same loop.
 import type { CommandId, DeliveryId, WorkItem } from "../contracts/common";
 import type { TimedEntry } from "../contracts/snapshot";
+import { GATES } from "../core/types";
 import { start } from "../core/start";
 import { transition } from "../core/transition";
 import type { Command, Entry, Note, Policy, RunnerSignal, Signal, Snapshot } from "../core/types";
 import type { Reply, Spawned } from "./spawn";
 import type { State } from "./state";
+import type { Telemetry } from "./telemetry";
 
 export type Deps = {
   policy: Policy;
@@ -15,6 +17,51 @@ export type Deps = {
   spawn: (snap: Snapshot, command: Command) => Spawned;
   host: string; // for `sent` entries
   now: () => string; // the Runner stamps `time`; the core has no clock
+  telemetry?: Telemetry; // optional (harlo-55); absent behaves exactly like a no-op sink
+  heartbeatMs?: number; // how often an in-flight command ticks `awaiting`; defaults to HEARTBEAT_MS
+};
+
+const HEARTBEAT_MS = 5_000;
+
+/** The node name a command belongs to, for telemetry only: the awaited command on `state`, else its own id. */
+const nodeOf = (state: Snapshot, command: Command): string => {
+  const awaiting = state.awaiting;
+  if (awaiting && awaiting.id === command.id) return awaiting.node;
+  return command.op;
+};
+
+/** Best-effort: a telemetry adapter must never affect a step/gate's outcome, so a throwing notify is swallowed. */
+const safeNotify = (telemetry: Telemetry, event: Parameters<Telemetry["notify"]>[0]): void => {
+  try {
+    telemetry.notify(event);
+  } catch {
+    // best-effort sink: never let telemetry change the run's outcome
+  }
+};
+
+/** Notify `start`, tick `awaiting` every heartbeat while in flight, then notify `resolved` once `done` settles. */
+const withTelemetry = async (
+  options: { deps: Deps; planned: Planned; command: Command; done: Promise<Reply> },
+): Promise<Reply> => {
+  const { deps, planned, command, done } = options;
+  const telemetry = deps.telemetry;
+  if (!telemetry) return done;
+  const name = nodeOf(planned.state, command);
+  const startedAt = Date.now();
+  const notify = (phase: "start" | "resolved" | "awaiting") =>
+    safeNotify(telemetry, { delivery: planned.delivery, name, op: command.op, phase, elapsedMs: Date.now() - startedAt });
+
+  notify("start");
+  const gateAwaiting = planned.state.awaiting?.id === command.id && (GATES as readonly string[]).includes(name);
+  if (gateAwaiting) notify("awaiting");
+
+  const ticker = setInterval(() => notify("awaiting"), deps.heartbeatMs ?? HEARTBEAT_MS);
+  try {
+    return await done;
+  } finally {
+    clearInterval(ticker);
+    notify("resolved");
+  }
 };
 
 /** A signal waiting to be applied: a start for a WorkItem, or a signal for a Delivery. */
@@ -127,7 +174,7 @@ const execute = async (deps: Deps, planned: Planned, command: Command): Promise<
   const spawned = deps.spawn(planned.state, command);
   const sentThenExit = async ({ pid, started, done }: Extract<Spawned, { spawned: true }>) => {
     const journaled = await journal(deps, planned.delivery, { kind: "sent", id: command.id, pid, host: deps.host, started, payload: command.payload });
-    return { reply: await done, journaled };
+    return { reply: await withTelemetry({ deps, planned, command, done }), journaled };
   };
   // a spawn error ran nothing: no `sent`
   const { reply, journaled } = spawned.spawned ? await sentThenExit(spawned) : { reply: spawned.reply, journaled: true };

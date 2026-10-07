@@ -41,6 +41,7 @@ export type CapabilityProfile = { env?: Record<string, string>; tools?: string[]
 export type MachineConfig = {
   principal: string[];
   state: string[];
+  telemetry?: string[]; // optional: a Delivery lifecycle event sink (harlo-55), never required
   secrets?: Record<string, { env: string }>; // secret name → the Runner env var holding it
   capabilities?: Partial<Record<Port, CapabilityProfile>>;
 };
@@ -137,6 +138,7 @@ export const machineConfigSchema: JSONSchemaType<MachineConfig> = {
   properties: {
     principal: argvSchema,
     state: argvSchema,
+    telemetry: { ...argvSchema, nullable: true },
     secrets: {
       type: "object",
       additionalProperties: {

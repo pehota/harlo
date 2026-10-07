@@ -106,6 +106,17 @@ describe("valid", () => {
     });
   });
 
+  test("a machine config without `telemetry` loads with telemetry: null", () => {
+    const config = load(project(), machine());
+    expect(config.telemetry).toBeNull();
+  });
+
+  test("a machine config with `telemetry` loads it as an adapter spec", () => {
+    const withTelemetry = { ...machine(), telemetry: ["bun", "adapters/telemetry/tty.ts"] };
+    const config = load(project(), withTelemetry);
+    expect(config.telemetry).toEqual({ argv: ["bun", "adapters/telemetry/tty.ts"], env: {}, tools: [] });
+  });
+
   test("without $SHIP_MACHINE_CONFIG the machine layer is ~/.config/ship/<projectId>.json", () => {
     const repo = tempDir();
     const home = tempDir();

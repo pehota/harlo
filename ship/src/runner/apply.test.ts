@@ -7,6 +7,7 @@ import {
 import type { Policy } from "../core/types";
 import { type Deps, type Pending, apply } from "./apply";
 import { FakeSpawn, FakeState, type Script } from "./fixtures/fakes.fixture";
+import type { Telemetry, TelemetryEvent } from "./telemetry";
 
 const TIME = "2026-09-28T12:00:00.000Z";
 const HOST = "test-host";
@@ -23,6 +24,15 @@ const harness = (scripts: Record<string, Script> = {}, p: Policy = policy) => {
   const deps: Deps = { policy: p, state, spawn: spawn.spawn, host: HOST, now: () => TIME };
   return { state, spawn, deps };
 };
+
+/** Records every notify() call in order, for assertions on telemetry's events. */
+class FakeTelemetry implements Telemetry {
+  readonly events: TelemetryEvent[] = [];
+  notify(event: TelemetryEvent): void {
+    this.events.push(event);
+  }
+  async drain(): Promise<void> {}
+}
 
 /** The Runner-written entries of a Delivery's journal, as `<kind> <id>`. */
 const runnerEntries = (entries: TimedEntry[]): string[] =>
@@ -185,5 +195,63 @@ describe("apply loop", () => {
     const report = await apply(deps, { kind: "signal", delivery: D, signal: stale });
     expect(report).toEqual({ exit: 0, output: { delivery: D, issued: [], awaiting: id("setup-1"), ignored: true } });
     expect(state.top(D)?.entries).toMatchObject([{ note: "ignored_stale" }]);
+  });
+
+  test("with no telemetry configured, behavior is unaffected (no Deps.telemetry needed)", async () => {
+    const { state, deps } = harness({ [id("setup-1")]: setupOk, [id("define-1")]: defineOk });
+    const report = await apply(deps, startK);
+    expect(report.exit).toBe(0);
+    expect(state.top(D)?.state.at).toBe("accept");
+  });
+
+  describe("telemetry", () => {
+    test("each awaited command notifies start then resolved, with delivery/name/op/phase/elapsedMs", async () => {
+      const telemetry = new FakeTelemetry();
+      const { deps } = harness({ [id("setup-1")]: setupOk, [id("define-1")]: defineOk });
+      await apply({ ...deps, telemetry }, startK);
+      const bySetup = telemetry.events.filter((e) => e.op === "setup");
+      expect(bySetup.map((e) => e.phase)).toEqual(["start", "resolved"]);
+      for (const e of bySetup) {
+        expect(e).toMatchObject({ delivery: D, name: "setup", op: "setup" });
+        expect(typeof e.elapsedMs).toBe("number");
+      }
+    });
+
+    test("a gate beginning its wait for a reply notifies `awaiting` once entered", async () => {
+      const telemetry = new FakeTelemetry();
+      const { deps } = harness({ [id("setup-1")]: setupOk, [id("define-1")]: defineOk });
+      await apply({ ...deps, telemetry }, startK);
+      const accept = telemetry.events.filter((e) => e.name === "accept");
+      expect(accept.map((e) => e.phase)).toEqual(["start", "awaiting", "resolved"]);
+    });
+
+    test("a slow in-flight command gets extra `awaiting` ticks with strictly increasing elapsedMs before resolving", async () => {
+      const telemetry = new FakeTelemetry();
+      let exit = (): void => {};
+      const until = new Promise<void>((resolve) => { exit = resolve; });
+      const { deps } = harness({ [id("setup-1")]: { reply: { kind: "accepted" }, until } });
+      const running = apply({ ...deps, telemetry, heartbeatMs: 5 }, startK);
+      for (let i = 0; i < 200 && telemetry.events.filter((e) => e.phase === "awaiting").length < 2; i += 1) {
+        await Bun.sleep(5);
+      }
+      exit();
+      await running;
+      const awaiting = telemetry.events.filter((e) => e.phase === "awaiting");
+      expect(awaiting.length).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < awaiting.length; i += 1) {
+        expect(awaiting[i]?.elapsedMs).toBeGreaterThan(awaiting[i - 1]?.elapsedMs ?? 0);
+      }
+      const resolved = telemetry.events.find((e) => e.phase === "resolved");
+      expect(resolved).toBeDefined();
+      expect(resolved?.elapsedMs).toBeGreaterThanOrEqual(awaiting.at(-1)?.elapsedMs ?? 0);
+    });
+
+    test("a telemetry adapter that throws on notify does not change the run's outcome", async () => {
+      const throwing: Telemetry = { notify: () => { throw new Error("boom"); }, drain: async () => {} };
+      const { state, deps } = harness({ [id("setup-1")]: setupOk, [id("define-1")]: defineOk });
+      const report = await apply({ ...deps, telemetry: throwing }, startK);
+      expect(report.exit).toBe(0);
+      expect(state.top(D)?.state.at).toBe("accept");
+    });
   });
 });

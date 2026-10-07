@@ -11,6 +11,9 @@ const BIN = join(ROOT, "bin", "ship");
 const STATE = join(ROOT, "src", "adapters", "state", "files.ts");
 const FAKE = join(ROOT, "src", "adapters", "fake.ts");
 const CONFLICTING_STATE = join(import.meta.dir, "fixtures", "conflicting-state.sh");
+const RECORDING_TELEMETRY = join(import.meta.dir, "fixtures", "recording-telemetry.sh");
+const CRASHING_TELEMETRY = join(import.meta.dir, "fixtures", "crashing-telemetry.sh");
+const HANGING_TELEMETRY = join(import.meta.dir, "fixtures", "hanging-telemetry.sh");
 const TIMEOUT = 30_000;
 
 const dirs: string[] = [];
@@ -18,7 +21,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type Options = { replies?: Record<string, unknown>; state?: string[] };
+type Options = { replies?: Record<string, unknown>; state?: string[]; telemetry?: string[] };
 type Ran = { exit: number; out: Record<string, unknown> | null; stderr: string };
 
 const ok = (body: unknown) => JSON.stringify({ status: "ok", body });
@@ -33,6 +36,7 @@ const project = () => {
   const stateDir = join(dir, "state");
   const machinePath = join(dir, "machine.json");
   const script = join(dir, "script.json");
+  const telemetryLog = join(dir, "telemetry.jsonl");
 
   const configure = (options: Options = {}): void => {
     writeFileSync(script, JSON.stringify({ replies: { ...DEFAULT_REPLIES, ...options.replies } }));
@@ -50,13 +54,15 @@ const project = () => {
     };
     writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "demo", adapters, policy }));
     const state = options.state ?? ["bun", STATE, "--dir", stateDir];
-    writeFileSync(machinePath, JSON.stringify({ principal: fake, state }));
+    const machine: Record<string, unknown> = { principal: fake, state };
+    if (options.telemetry) machine.telemetry = options.telemetry;
+    writeFileSync(machinePath, JSON.stringify(machine));
   };
 
   const ship = async (...args: string[]): Promise<Ran> => {
     const proc = Bun.spawn(["bun", BIN, ...args], {
       cwd: dir, stdout: "pipe", stderr: "pipe",
-      env: { PATH: process.env.PATH ?? "", HOME: dir, SHIP_MACHINE_CONFIG: machinePath },
+      env: { PATH: process.env.PATH ?? "", HOME: dir, SHIP_MACHINE_CONFIG: machinePath, RECORD_TO: telemetryLog },
     });
     const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     const line = stdout.trim();
@@ -72,9 +78,21 @@ const project = () => {
   const journal = (delivery: string): TimedEntry[] => versions(delivery).flatMap((v) => read(delivery, v).entries);
   const snapshot = (delivery: string): Snapshot => read(delivery, versions(delivery).at(-1) ?? 0).state;
   const deliveries = (): string[] => (existsSync(stateDir) ? readdirSync(stateDir).sort() : []);
+  /** Each `ship` invocation's telemetry fires are independent processes appending concurrently to one file,
+   * so a line can interleave with another; keep only lines that parse as a complete JSON object. */
+  const telemetryEvents = (): Record<string, unknown>[] =>
+    existsSync(telemetryLog)
+      ? readFileSync(telemetryLog, "utf8").split("\n").filter((l) => l.trim()).flatMap((l) => {
+          try {
+            return [JSON.parse(l)];
+          } catch {
+            return [];
+          }
+        })
+      : [];
 
   configure();
-  return { dir, configure, ship, versions, journal, snapshot, deliveries };
+  return { dir, configure, ship, versions, journal, snapshot, deliveries, telemetryEvents };
 };
 
 const FAILED_READ = { "tracker.read": { status: "failed", info: "tracker unreachable" } };
@@ -285,5 +303,70 @@ describe("invalid input and config", () => {
     const ran = await p.ship("start", "k");
     expect(ran.exit).toBe(2);
     expect(p.deliveries()).toEqual([]);
+  }, TIMEOUT);
+});
+
+describe("telemetry", () => {
+  test("with no `telemetry` key, start/next/signal/stop/changed/status behave exactly as on main", async () => {
+    const p = project();
+    expect(await p.ship("start", "k")).toMatchObject({ exit: 0, out: { delivery: "k-1", awaiting: "k-1/setup-1" } });
+    expect(await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }))).toMatchObject({ exit: 0 });
+    expect(await p.ship("status")).toMatchObject({ exit: 0 });
+    expect(await p.ship("changed", "k-1")).toMatchObject({ exit: 0 });
+    expect(await p.ship("stop", "k-1", "abandoned", "not needed")).toMatchObject({ exit: 0 });
+    expect(await p.ship("next")).toMatchObject({ exit: 0 });
+    expect(p.telemetryEvents()).toEqual([]);
+  }, TIMEOUT);
+
+  test("a configured telemetry adapter receives start/resolved for a step, and start/awaiting/resolved for a gate", async () => {
+    const p = project();
+    p.configure({ telemetry: ["bash", RECORDING_TELEMETRY] });
+    await p.ship("start", "k");
+    await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }));
+    await p.ship("signal", "k-1", "k-1/define-1", ok({ criteria: ["greets"], runbook: ["greet Ada"] }));
+    const events = p.telemetryEvents();
+    const setup = events.filter((e) => e.name === "setup");
+    expect(setup.map((e) => e.phase)).toEqual(["start", "resolved"]);
+    const accept = events.filter((e) => e.name === "accept");
+    expect(accept.map((e) => e.phase)).toEqual(["start", "awaiting", "resolved"]);
+    for (const e of events) {
+      expect(e).toMatchObject({ delivery: "k-1", op: expect.any(String), phase: expect.any(String) });
+      expect(typeof e.elapsedMs).toBe("number");
+    }
+  }, TIMEOUT);
+
+  test("next/signal/stop/changed each notify their step/gate too", async () => {
+    const p = project();
+    p.configure({ replies: { "tracker.next": { status: "ok", body: { key: "k" } } }, telemetry: ["bash", RECORDING_TELEMETRY] });
+    await p.ship("next");
+    await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }));
+    await p.ship("changed", "k-1");
+    await p.ship("stop", "k-1", "abandoned", "not needed");
+    const names = new Set(p.telemetryEvents().map((e) => e.name));
+    expect(names.has("setup")).toBe(true);
+  }, TIMEOUT);
+
+  test("a telemetry adapter that exits non-zero gives the same outcome as telemetry unconfigured", async () => {
+    const plain = project();
+    const withCrashing = project();
+    withCrashing.configure({ telemetry: ["bash", CRASHING_TELEMETRY] });
+    const [a, b] = await Promise.all([plain.ship("start", "k"), withCrashing.ship("start", "k")]);
+    expect(b).toMatchObject({ exit: a.exit, out: { delivery: a.out?.delivery, awaiting: a.out?.awaiting, issued: a.out?.issued } });
+  }, TIMEOUT);
+
+  test("a telemetry adapter that hangs gives the same outcome as telemetry unconfigured", async () => {
+    const plain = project();
+    const withHanging = project();
+    withHanging.configure({ telemetry: ["bash", HANGING_TELEMETRY] });
+    const [a, b] = await Promise.all([plain.ship("start", "k"), withHanging.ship("start", "k")]);
+    expect(b).toMatchObject({ exit: a.exit, out: { delivery: a.out?.delivery, awaiting: a.out?.awaiting, issued: a.out?.issued } });
+  }, TIMEOUT);
+
+  test("a telemetry adapter pointed at a nonexistent executable gives the same outcome as telemetry unconfigured", async () => {
+    const plain = project();
+    const withMissing = project();
+    withMissing.configure({ telemetry: [join(withMissing.dir, "does-not-exist")] });
+    const [a, b] = await Promise.all([plain.ship("start", "k"), withMissing.ship("start", "k")]);
+    expect(b).toMatchObject({ exit: a.exit, out: { delivery: a.out?.delivery, awaiting: a.out?.awaiting, issued: a.out?.issued } });
   }, TIMEOUT);
 });

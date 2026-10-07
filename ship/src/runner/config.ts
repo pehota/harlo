@@ -19,7 +19,7 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
-export type Config = { projectId: string; policy: Policy; adapters: Record<Port, AdapterSpec> };
+export type Config = { projectId: string; policy: Policy; adapters: Record<Port, AdapterSpec>; telemetry: AdapterSpec | null };
 type Env = Record<string, string | undefined>;
 
 const DEFAULT_POLICY = {
@@ -114,6 +114,7 @@ export const loadConfig = (repo: string, env: Env = process.env): Config => {
   const adapters = Object.fromEntries(
     PORTS.map((port) => [port, adapterSpec(argvs[port], profiles[port] ?? {}, secrets, env)]),
   ) as Record<Port, AdapterSpec>;
+  const telemetry = machine.telemetry ? { argv: machine.telemetry, env: {}, tools: [] } : null;
 
-  return { projectId: project.projectId, policy, adapters };
+  return { projectId: project.projectId, policy, adapters, telemetry };
 };

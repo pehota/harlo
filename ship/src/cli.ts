@@ -12,6 +12,7 @@ import { type Deps, type Pending, apply } from "./runner/apply";
 import { type Config, ConfigError, loadConfig } from "./runner/config";
 import { RunnerCallError, callRunnerOnly, spawnCommand } from "./runner/spawn";
 import { stateClient } from "./runner/state";
+import { telemetryClient } from "./runner/telemetry";
 
 const USAGE = `usage:
   ship start <key>
@@ -132,6 +133,8 @@ const VERBS: Record<string, [number, number, (ctx: Ctx, ...args: string[]) => Pr
   status: [0, 1, (ctx, d) => status(ctx, d)],
 };
 
+let telemetry: Deps["telemetry"];
+
 const run = async (argv: string[]): Promise<Ran> => {
   const [verb, ...args] = argv;
   const found = verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb] : undefined;
@@ -140,12 +143,14 @@ const run = async (argv: string[]): Promise<Ran> => {
   if (args.length < min || args.length > max) throw new UsageError(`${verb}: wrong number of arguments`);
 
   const config = loadConfig(process.cwd());
+  telemetry = telemetryClient(config.telemetry);
   const deps: Deps = {
     policy: config.policy,
     state: stateClient(config.adapters.state),
     spawn: (snap, command) => spawnCommand(config.adapters, snap, command),
     host: hostname(),
     now: () => new Date().toISOString(),
+    telemetry,
   };
   return handler({ config, deps }, ...args);
 };
@@ -157,11 +162,13 @@ const exitFor = (error: unknown): number | undefined =>
 try {
   const { exit, line } = await run(process.argv.slice(2));
   console.log(JSON.stringify(line));
+  await telemetry?.drain();
   process.exit(exit);
 } catch (error) {
   const exit = exitFor(error);
   if (exit === undefined) throw error;
   console.error(error instanceof Error ? error.message : String(error));
   if (exit === 1) console.error(USAGE);
+  await telemetry?.drain();
   process.exit(exit);
 }
