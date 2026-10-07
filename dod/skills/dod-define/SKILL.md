@@ -86,7 +86,10 @@ safety net for when you fail, not the plan.
      (see/do, not control flow). If applicable, find the runner (`npm run
      e2e`, `playwright test` — detect or ask); if the repo has none, mark
      `applicable:true` with `reason` noting the manual pass and no automated
-     e2e, and check the real surface by hand.
+     e2e, and check the real surface by hand. Either way, plan it as a local
+     run before the change ships — start the app locally and drive it with
+     the tools available (runner, browser automation) — never a check after
+     release.
      `scenario`, decided independently: its `cmd` names the functional test
      the implementer must write and run — one that exercises the changed
      behavior the way a human would check it and observes the `works_when`
