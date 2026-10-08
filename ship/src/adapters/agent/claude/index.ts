@@ -331,7 +331,8 @@ const dodRequirementSchema = {
     agent: { type: "string", description: "judgement only: who judges it, e.g. dod-reviewer." },
     doc_paths: {
       type: "array", items: { type: "string" },
-      description: "docs only, when applicable: the repo-relative doc files this change must update.",
+      description: "docs only, when applicable: the doc files this change must update, as repo-relative file paths "
+        + "(e.g. docs/usage.md): never a directory, never absolute, no trailing /, no .. segments, no surrounding spaces.",
     },
   },
   required: ["id", "type", "source", "proves"],
@@ -353,6 +354,17 @@ const defineDodSchema = {
 } as const;
 
 const nonEmpty = (value: unknown): boolean => typeof value === "string" && value.trim() !== "";
+
+/** Why a `doc_paths` entry is not a repo-relative file path, or undefined when it is. dod's doc_paths name doc
+ *  files to update, never directories: Check compares each against `git diff --name-only`, which lists files only,
+ *  so a directory, absolute or `..` path could never match and would hold Check at `fix` every round. */
+const docPathProblem = (path: string): string | undefined => {
+  if (path !== path.trim()) return "has surrounding whitespace";
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return "is absolute";
+  if (path.endsWith("/")) return "ends in / (a directory, not a file)";
+  if (path.split("/").includes("..")) return "contains a .. segment";
+  return undefined;
+};
 
 /** Every way `out` breaks dod/lib/contract.sh's write-time rules (works_when, the protocol ids, proves, reason on
  *  applicable:false, cmd/expect_exit on an applicable check, an explicit applicable on e2e/scenario/docs, doc_paths
@@ -380,6 +392,12 @@ const dodContractErrors = (out: { works_when?: unknown; requirements?: unknown }
     if (entry.applicable !== undefined && !explicit) errors.push(`${name} has a non-boolean applicable`);
     const decided = entry.id === "e2e" || entry.id === "scenario" || entry.id === "docs";
     if (decided && !explicit) errors.push(`${name} needs an explicit applicable true or false`);
+    if (Array.isArray(entry.doc_paths)) {
+      for (const path of entry.doc_paths) {
+        const problem = typeof path === "string" ? docPathProblem(path) : "is not a string";
+        if (problem !== undefined) errors.push(`${name} doc_paths entry ${JSON.stringify(path)} ${problem}; it must be a repo-relative file path`);
+      }
+    }
     if (entry.applicable === false && !nonEmpty(entry.reason)) errors.push(`${name} is applicable:false without a non-empty reason`);
     // docs is never machine-run (contract.sh exempts it from the cmd rule); its proof is doc_paths instead.
     if (entry.id === "docs") {
@@ -414,7 +432,8 @@ const DOD_DEFINE_INSTRUCTIONS = [
     + "An inapplicable e2e or scenario has cmd and expect_exit null; every other check entry, applicable or not, "
     + "keeps its cmd and expect_exit, so an extra requirement that does not apply is better written as a judgement. "
     + "An applicable docs entry lists the doc files this change must update in "
-    + "doc_paths (repo-relative) and has cmd and expect_exit null.",
+    + "doc_paths and has cmd and expect_exit null. doc_paths are repo-relative file paths, e.g. docs/usage.md: never "
+    + "a directory, never absolute, no trailing /, no .. segments, no surrounding whitespace.",
 ].join("\n");
 
 /** Fresh call: the full WorkItem framing. A resumed call sends ONLY the new delta (feedback/answer) — the

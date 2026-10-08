@@ -1335,6 +1335,15 @@ describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)
       `${id} without an explicit applicable`, (c) => { delete entry(c, id).applicable; }, `"${id}" needs an explicit applicable true or false`,
     ]),
     ["an applicable docs without doc_paths", (c) => { delete entry(c, "docs").doc_paths; }, '"docs" is applicable but has no non-empty doc_paths'],
+    ...([
+      ["an absolute doc_paths entry", "/abs/README.md", "is absolute"],
+      ["a doc_paths entry ending in /", "docs/", "ends in /"],
+      ["a doc_paths entry with surrounding whitespace", " docs/greet.md ", "has surrounding whitespace"],
+      ["a doc_paths entry with a .. segment", "docs/../README.md", "contains a .. segment"],
+    ] as const).map(([what, path, problem]): [string, (c: DodContract) => void, string] => [
+      what, (c) => { entry(c, "docs").doc_paths = ["README.md", path]; },
+      `"docs" doc_paths entry ${JSON.stringify(path)} ${problem}`,
+    ]),
     ["an applicable docs with empty doc_paths", (c) => { entry(c, "docs").doc_paths = []; }, '"docs" is applicable but has no non-empty doc_paths'],
   ];
   for (const [name, breakIt, why] of REJECTIONS) {

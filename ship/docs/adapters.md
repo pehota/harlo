@@ -137,7 +137,7 @@ agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requiremen
       applicable?: boolean;        // explicit on e2e, scenario, docs; absent elsewhere means applicable
       reason?: string;             // non-empty whenever applicable is false
       agent?: string;              // judgement: who judges it, e.g. dod-reviewer
-      doc_paths?: string[];        // docs, when applicable: the doc files this change must update
+      doc_paths?: string[];        // docs, when applicable: repo-relative doc FILE paths this change must update
     }[];
   }
   ```
@@ -147,7 +147,10 @@ agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requiremen
   `applicable:false` without a non-empty `reason`; a `check` without
   `cmd`/`expect_exit` (only `docs`, and `e2e`/`scenario` when `applicable:false`, are
   exempt — any other check entry needs them even when `applicable:false`); `e2e`/`scenario`/`docs` without an explicit
-  `applicable`; an applicable `docs` without non-empty `doc_paths`.
+  `applicable`; an applicable `docs` without non-empty `doc_paths`; a `doc_paths` entry
+  that is not a repo-relative file path (absolute, ending in `/`, with surrounding
+  whitespace, or with a `..` segment), named in the `failed` info. Check never matches
+  directories, so such a path could never be satisfied.
   [`../test/fixtures/dod-requirements.json`](../test/fixtures/dod-requirements.json) is
   a valid example.
 
