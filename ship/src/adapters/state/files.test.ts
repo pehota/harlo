@@ -8,7 +8,7 @@ import type { Stdin, WorkItem } from "../../../src/contracts/common";
 import { schemaFor } from "../../../src/contracts/ports";
 import type { TimedEntry } from "../../../src/contracts/snapshot";
 import type { Snapshot } from "../../../src/core/types";
-import { snapshotAt, workItem as baseWorkItem } from "../../../src/core/fixtures/builders.fixture";
+import { criteria, runbook, snapshotAt, workItem as baseWorkItem } from "../../../src/core/fixtures/builders.fixture";
 
 const ADAPTER = join(import.meta.dir, "files.ts");
 const ajv = new Ajv();
@@ -87,6 +87,14 @@ const seedV1 = (dir: string) => {
   mkdirSync(join(dir, "PROJ-1-1"), { recursive: true });
   writeFileSync(join(dir, "PROJ-1-1", "1.json"), JSON.stringify({ state: s1, entries: [] }));
 };
+/** A raw `<version>.json` in the shape persisted before harlo-58 (8b20b36): top-level criteria/runbook. */
+type Legacy = { version: number; criteria: unknown; runbook: unknown; entries?: TimedEntry[] };
+const seedLegacy = ({ version, criteria, runbook, entries = [] }: Legacy) => (dir: string) => {
+  const { requirements: _, ...rest } = s1;
+  mkdirSync(join(dir, "PROJ-1-1"), { recursive: true });
+  const state = { ...rest, criteria, runbook };
+  writeFileSync(join(dir, "PROJ-1-1", `${version}.json`), JSON.stringify({ state, entries }));
+};
 
 const rows: Row[] = [
   {
@@ -111,6 +119,24 @@ const rows: Row[] = [
       writeFileSync(join(dir, "PROJ-1-1", "1.json"), JSON.stringify({ state: s1, entries: [] }));
     },
     steps: [{ call: load("PROJ-1-1"), expect: ok({ version: 1, state: s1 }) }],
+  },
+  {
+    name: "a Snapshot persisted before harlo-58 (8b20b36), with top-level criteria/runbook, loads as requirements",
+    seed: (dir) => {
+      seedLegacy({ version: 1, criteria: null, runbook: null })(dir);
+      seedLegacy({ version: 2, criteria, runbook, entries: [a] })(dir);
+    },
+    steps: [
+      { call: load("PROJ-1-1"), expect: ok({ version: 2, state: { ...s1, requirements: { criteria, runbook } } }) },
+      { call: journal("PROJ-1-1"), expect: ok({ entries: [a] }) },
+      { call: list("PROJ-1"), expect: ok({ deliveries: ["PROJ-1-1"] }) },
+    ],
+    after: (dir) => expect(JSON.parse(readFileSync(join(dir, "PROJ-1-1", "2.json"), "utf8")).state.criteria).toEqual(criteria),
+  },
+  {
+    name: "a pre-Define Snapshot persisted before harlo-58 (criteria/runbook null) loads with requirements null",
+    seed: seedLegacy({ version: 1, criteria: null, runbook: null }),
+    steps: [{ call: load("PROJ-1-1"), expect: ok({ version: 1, state: { ...s1, requirements: null } }) }],
   },
   {
     name: "load of an unknown Delivery is version 0, state null",

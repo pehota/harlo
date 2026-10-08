@@ -47,9 +47,21 @@ const versionsOf = (dir: string): number[] => {
   return versions.sort((x, y) => x - y);
 };
 
+/** A state persisted before harlo-58 (8b20b36) has top-level `criteria`/`runbook` and no `requirements`: read it
+ *  as the requirements the shipped agent adapter's Define emits, null before Define. Translated on read; the file
+ *  stays as it is. */
+const upgradeLegacy = (stored: unknown): unknown => {
+  const state = (stored as { state?: unknown })?.state;
+  if (typeof state !== "object" || state === null || "requirements" in state) return stored;
+  if (!("criteria" in state) && !("runbook" in state)) return stored;
+  const { criteria = null, runbook = null, ...rest } = state as Record<string, unknown>;
+  const requirements = criteria === null && runbook === null ? null : { criteria, runbook };
+  return { ...(stored as object), state: { ...rest, requirements } };
+};
+
 const readVersion = (dir: string, version: number): Stored => {
   const path = join(dir, `${version}.json`);
-  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const parsed = upgradeLegacy(JSON.parse(readFileSync(path, "utf8")));
   const error = check(storedSchema, parsed);
   if (error) throw new Error(`corrupt ${path}: ${error}`);
   return parsed as Stored;
