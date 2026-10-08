@@ -109,6 +109,70 @@ Check judges scope by it, so commits on the main line that are not on
 `ship/<delivery>` never count as the changeset's files. With no `base` it falls
 back to generic wording ("the main-line branch").
 
+## `agent/claude/index.ts`: `--requirements plain|dod` and declared files (harlo-61)
+
+The requirements object is opaque to the core (harlo-58). The core carries Define's
+`body.requirements` unchanged to Implement, Check and Verify. Its shape is the Define
+adapter's choice, and `agent/claude/index.ts` offers two, picked by an argv flag
+parsed next to `--agent-bin` and `--plugin-dir`:
+
+```
+agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requirements plain|dod] <port> <op>
+```
+
+- **`plain`** (the default, also what you get with no flag):
+  `{requirements: {criteria: string[], runbook: string[]}}`.
+- **`dod`**: `{requirements: <contract>}`, the shape `dod/lib/contract.sh` enforces:
+
+  ```ts
+  {
+    works_when: string;            // non-empty: "how will we know it works?"
+    requirements: {
+      id: string;                  // tests, e2e, scenario, docs, review must all be present; extra ids pass through as-is
+      type: "check" | "judgement";
+      cmd?: string | null;         // check: the command; null for docs and for applicable:false
+      expect_exit?: number | null;
+      source: string;              // protocol | task | auto-detected | …
+      proves: string;              // non-empty: which part of works_when it proves
+      applicable?: boolean;        // explicit on e2e, scenario, docs; absent elsewhere means applicable
+      reason?: string;             // non-empty whenever applicable is false
+      agent?: string;              // judgement: who judges it, e.g. dod-reviewer
+      doc_paths?: string[];        // docs, when applicable: the doc files this change must update
+    }[];
+  }
+  ```
+
+  A reply that breaks any `contract.sh` write rule is `failed`, never `ok`. The rules:
+  `works_when` missing or empty; a protocol id missing; an empty or missing `proves`;
+  `applicable:false` without a non-empty `reason`; an applicable `check` without
+  `cmd`/`expect_exit` (`docs` is exempt); `e2e`/`scenario`/`docs` without an explicit
+  `applicable`; an applicable `docs` without non-empty `doc_paths`.
+  [`../test/fixtures/dod-requirements.json`](../test/fixtures/dod-requirements.json) is
+  a valid example.
+
+Any other `--requirements` value, or the flag with no value, makes the adapter exit
+`2` at startup, before it reads stdin. The message names `--requirements`. It never
+falls back to `plain`.
+
+**Check's declared-files rule.** This runs whatever the mode, on any requirements
+object. A requirement *declares files* when it is an object with a `doc_paths` array
+of strings and is not marked `applicable:false`. Check finds these by walking the
+whole object under any key or nesting. It never looks at requirement ids. An
+`applicable:false` object is skipped along with everything inside it. For each
+declared path, Check runs `git diff --name-only <base>...<sha>` in the workspace,
+where `<base>` is the payload's `base` (the Delivery's main line, see above) and
+`<sha>` is the changeset's commit. Then:
+
+- Every declared path is in the diff: nothing is added, and Check's verdict is
+  the two agent passes' composed verdict, unchanged.
+- Any declared path is missing: the verdict is at least `fix`, with one finding
+  per missing path (`ref` is the path). This holds even when both agent passes
+  reply `pass`. Missing-path findings are added to the agents' own findings and
+  never replace them. A `decide` from an agent still outranks `fix`.
+- Paths are declared but the payload has no `base`: `failed`, saying the base is
+  missing, and no agent call is made. The adapter never assumes a branch name.
+  With no declared paths, a missing `base` changes nothing.
+
 ## `implement.run` and Principal feedback
 
 Payload: `{base?, requirements, findings, feedback?, answer?}` (harlo-58: `requirements` is

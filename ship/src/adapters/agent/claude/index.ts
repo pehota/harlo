@@ -3,8 +3,9 @@
 // `implement` and `check` (plan §6 amendment), so it lives in its own module folder (adapters/agent/claude/)
 // rather than a per-port folder — it isn't split into port-specific variants.
 //
-// argv: [--agent-bin <path>] [--plugin-dir <path>]... <port> <op>, port one of "define" | "implement" |
-// "check"; --agent-bin defaults to `claude` on PATH (a fake executable in tests, per M1.9's own test spec).
+// argv: [--agent-bin <path>] [--plugin-dir <path>]... [--requirements plain|dod] <port> <op>, port one of "define" |
+// "implement" | "check"; --agent-bin defaults to `claude` on PATH (a fake executable in tests, per M1.9's own test
+// spec); --requirements picks the shape Define emits (harlo-61), default `plain`; an unknown mode is a startup error.
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
@@ -58,7 +59,12 @@ import { check } from "../../../../src/contracts/validate";
 import { STEP_PORTS, type StepPort } from "../../../../src/core/ports/agent";
 
 /** `usage` is set by callAgent once this run's CLI reply has parsed; every Result (and crash) after that carries it. */
-type Ctx = { agentBin: string; pluginDirs: string[]; usage?: Usage };
+type Ctx = { agentBin: string; pluginDirs: string[]; requirements: RequirementsMode; usage?: Usage };
+
+/** harlo-61: the requirements shape Define emits. `plain` is `{criteria, runbook}`; `dod` is the contract
+ *  dod/lib/contract.sh enforces (`{works_when, requirements: [...]}`). Only Define reads it. */
+const REQUIREMENTS_MODES = ["plain", "dod"] as const;
+type RequirementsMode = (typeof REQUIREMENTS_MODES)[number];
 
 /** Thrown instead of returning `failed`, once a real commit has happened (implement only): a crash, never `failed`. */
 class Crash extends Error {}
@@ -302,23 +308,129 @@ const defineSchema = {
   additionalProperties: false,
 } as const;
 
+// ── define, `--requirements dod` (harlo-61) ──
+// The shape dod/lib/contract.sh enforces on write, mirrored here so a dod-mode Define never emits a contract that
+// dod itself would reject. Flat at the root (no top-level oneOf, see checkSchema below); the runtime check in
+// dodContractErrors, not this schema, is what actually enforces the rules.
+const DOD_PROTOCOL_IDS = ["tests", "e2e", "scenario", "docs", "review"] as const;
+
+const dodRequirementSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "tests, e2e, scenario, docs, review, or your own id for an extra requirement." },
+    type: { type: "string", enum: ["check", "judgement"], description: "check: a command with an expected exit. judgement: a reviewer's call." },
+    cmd: { type: ["string", "null"], description: "check only: the command, run from the Delivery workspace. null for docs and for an inapplicable entry." },
+    expect_exit: { type: ["integer", "null"], description: "check only: the exit code cmd must return. null where cmd is null." },
+    source: { type: "string", description: "Where it came from: protocol, task, auto-detected." },
+    proves: { type: "string", description: "Which part of works_when this requirement proves. Never empty." },
+    applicable: {
+      type: "boolean",
+      description: "Required on e2e, scenario and docs; optional elsewhere (absent means applicable). false needs a reason.",
+    },
+    reason: { type: "string", description: "Why: required, non-empty, whenever applicable is false." },
+    agent: { type: "string", description: "judgement only: who judges it, e.g. dod-reviewer." },
+    doc_paths: {
+      type: "array", items: { type: "string" },
+      description: "docs only, when applicable: the repo-relative doc files this change must update.",
+    },
+  },
+  required: ["id", "type", "source", "proves"],
+  additionalProperties: false,
+} as const;
+
+const defineDodSchema = {
+  type: "object",
+  properties: {
+    works_when: { type: "string", description: "One sentence: how we will know it works. Every requirement proves part of it." },
+    requirements: {
+      type: "array", items: dodRequirementSchema,
+      description: "One entry per id in tests, e2e, scenario, docs, review, plus any extra requirements of your own.",
+    },
+    question: defineSchema.properties.question,
+  },
+  required: [],
+  additionalProperties: false,
+} as const;
+
+const nonEmpty = (value: unknown): boolean => typeof value === "string" && value.trim() !== "";
+
+/** Every way `out` breaks dod/lib/contract.sh's write-time rules (works_when, the protocol ids, proves, reason on
+ *  applicable:false, cmd/expect_exit on an applicable check, an explicit applicable on e2e/scenario/docs, doc_paths
+ *  on an applicable docs); empty when it is a valid contract. An absent `applicable` elsewhere means applicable. */
+const dodContractErrors = (out: { works_when?: unknown; requirements?: unknown }): string[] => {
+  const errors: string[] = [];
+  if (!nonEmpty(out.works_when)) errors.push("works_when is missing or empty");
+  if (!Array.isArray(out.requirements)) return [...errors, "requirements is not an array"];
+  const entries = out.requirements as Record<string, unknown>[];
+  for (const id of DOD_PROTOCOL_IDS) {
+    const count = entries.filter((e) => e?.id === id).length;
+    if (count === 0) errors.push(`protocol requirement "${id}" is missing`);
+    else if (count > 1 && id !== "tests" && id !== "review") errors.push(`protocol requirement "${id}" appears ${count} times`);
+  }
+  entries.forEach((entry, i) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      errors.push(`requirements[${i}] is not an object`);
+      return;
+    }
+    const name = nonEmpty(entry.id) ? `"${entry.id as string}"` : `requirements[${i}]`;
+    if (!nonEmpty(entry.id)) errors.push(`${name} has no id`);
+    if (entry.type !== "check" && entry.type !== "judgement") errors.push(`${name} has type ${JSON.stringify(entry.type)}, not check or judgement`);
+    if (!nonEmpty(entry.proves)) errors.push(`${name} has a missing or empty proves`);
+    const explicit = entry.applicable === true || entry.applicable === false;
+    if (entry.applicable !== undefined && !explicit) errors.push(`${name} has a non-boolean applicable`);
+    const decided = entry.id === "e2e" || entry.id === "scenario" || entry.id === "docs";
+    if (decided && !explicit) errors.push(`${name} needs an explicit applicable true or false`);
+    if (entry.applicable === false) {
+      if (!nonEmpty(entry.reason)) errors.push(`${name} is applicable:false without a non-empty reason`);
+      return;
+    }
+    // docs is never machine-run (contract.sh exempts it from the cmd rule); its proof is doc_paths instead.
+    if (entry.id === "docs") {
+      const paths = entry.doc_paths;
+      if (entry.applicable === true && !(Array.isArray(paths) && paths.length > 0 && paths.every(nonEmpty))) {
+        errors.push(`${name} is applicable but has no non-empty doc_paths`);
+      }
+      return;
+    }
+    const runnable = entry.type === "check" || (decided && entry.applicable === true);
+    if (runnable && (!nonEmpty(entry.cmd) || typeof entry.expect_exit !== "number")) {
+      errors.push(`${name} is an applicable check without cmd and expect_exit`);
+    }
+  });
+  return errors;
+};
+
+/** What a dod-mode Define is asked for, in every fresh prompt (a resumed session already has it). */
+const DOD_DEFINE_INSTRUCTIONS = [
+  "Define the WorkItem as a definition-of-done contract: a works_when sentence and a requirements list.",
+  "works_when: one non-empty sentence answering \"how will we know it works?\".",
+  "requirements: one entry each with id tests, e2e, scenario, docs and review, plus any extra requirements of your "
+    + "own. Every entry has a non-empty proves naming the part of works_when it proves.",
+  "A check entry (type check) carries cmd and expect_exit. A judgement entry (type judgement, e.g. review) names "
+    + "its agent instead.",
+  "e2e, scenario and docs each set applicable explicitly. applicable:false always needs a non-empty reason "
+    + "(cmd and expect_exit null). An applicable docs entry lists the doc files this change must update in "
+    + "doc_paths (repo-relative) and has cmd and expect_exit null.",
+].join("\n");
+
 /** Fresh call: the full WorkItem framing. A resumed call sends ONLY the new delta (feedback/answer) — the
  *  resumed session already has the original task in its history; resending the whole thing on top of "here's
  *  an answer" reads as a brand-new ambiguous request and was found, by dogfooding M1.12, to make the agent
  *  re-enter its confirm-first loop indefinitely instead of proceeding. */
 type DefinePromptArgs = {
   workItem: WorkItem; payload: DefinePayload; resume: boolean; workspace: string; mainLine: string | undefined;
-  delivery: string; priorQuestion?: string;
+  delivery: string; mode: RequirementsMode; priorQuestion?: string;
 };
 
-const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery, priorQuestion }: DefinePromptArgs): string => {
+const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery, mode, priorQuestion }: DefinePromptArgs): string => {
+  const fields = mode === "dod" ? "works_when/requirements" : "criteria/runbook";
   const delta: string[] = [];
   if (payload.feedback !== undefined) delta.push(`Feedback from a prior review: ${payload.feedback}`);
   if (payload.answer !== undefined) {
     delta.push(
       priorQuestion !== undefined
         ? `Answer to your previous question ("${priorQuestion}"): ${payload.answer}. Do not repeat this or any `
-          + "earlier question — it is answered. Proceed to a criteria/runbook verdict."
+          + `earlier question — it is answered. Proceed to a ${fields} verdict.`
         : `Answer to your previous question: ${payload.answer}`,
     );
   }
@@ -331,12 +443,12 @@ const definePrompt = ({ workItem, payload, resume, workspace, mainLine, delivery
       + `name, and never a two-dot diff against ${baseRef(payload.base)}.`,
   ].join("\n");
   if (resume) {
-    return [rule, ...delta, "Reply now with the criteria/runbook (or question) fields — no further questions."].join("\n\n");
+    return [rule, ...delta, `Reply now with the ${fields} (or question) fields — no further questions.`].join("\n\n");
   }
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     workItem.body,
-    "Define acceptance criteria and a runbook for verifying them.",
+    mode === "dod" ? DOD_DEFINE_INSTRUCTIONS : "Define acceptance criteria and a runbook for verifying them.",
     rule,
     ...delta,
   ].join("\n\n");
@@ -355,14 +467,19 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const resume = session !== undefined;
   const priorQuestion = session?.lastQuestion;
   const reply = await callAgent({
-    ctx, prompt: definePrompt({ workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery, priorQuestion }), schema: defineSchema,
+    ctx, prompt: definePrompt({
+      workItem: stdin.workItem, payload, resume, workspace, mainLine, delivery: stdin.delivery, mode: ctx.requirements, priorQuestion,
+    }),
+    schema: ctx.requirements === "dod" ? defineDodSchema : defineSchema,
     resume: session, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
   });
   if (reply.is_error) {
     saveSession("define", state, stdin.delivery, reply);
     return failed(ctx, reply.result);
   }
-  const out = reply.structured_output as { criteria?: string[]; runbook?: string[]; question?: string } | undefined;
+  const out = reply.structured_output as
+    | { criteria?: string[]; runbook?: string[]; works_when?: unknown; requirements?: unknown; question?: string }
+    | undefined;
   if (out?.question) {
     // The agent was just told its previous question was answered, yet asked the identical one again: it is
     // stuck in a confirm-first loop (M1.12's original failure mode, recurring). Fail instead of re-asking
@@ -375,6 +492,14 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     return { status: "question", about: "clarify", prompt: out.question, ...usageEvidence(ctx) };
   }
   saveSession("define", state, stdin.delivery, reply);
+  if (ctx.requirements === "dod") {
+    // harlo-61: a reply dod would reject is never ok — the contract is passed through as-is only once it holds.
+    const errors = dodContractErrors(out ?? {});
+    if (errors.length > 0) return failed(ctx, `agent reply is not a valid dod contract: ${errors.join("; ")}`);
+    return {
+      status: "ok", body: { requirements: { works_when: out!.works_when, requirements: out!.requirements } }, ...evidenceOf(ctx, reply),
+    };
+  }
   if (!out?.criteria || !out?.runbook) throw new Error(`agent reply missing criteria/runbook: ${reply.result}`);
   // This adapter's own choice of requirements shape (harlo-58): the core only guarantees `requirements` is
   // carried through unchanged — what goes inside it is this adapter's vocabulary, not the core's.
@@ -655,6 +780,54 @@ const changesetMismatch = (workspace: string, delivery: string, changeset: strin
   return undefined;
 };
 
+// ── Declared files must be in the changeset (harlo-61) ──
+// Deterministic, beside the two agent passes: a requirement that names files it must change is checked against
+// git, never left to an agent's reading. Generic over any requirements shape: no requirement id is known here.
+
+/** Every path a requirement declares: any object, at any key or nesting, with a `doc_paths` array of strings,
+ *  unless it is marked `applicable:false` (then neither it nor anything inside it counts). Deduplicated, in order. */
+const declaredPaths = (requirements: unknown): string[] => {
+  const found = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (node === null || typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    if (obj.applicable === false) return;
+    const paths = obj.doc_paths;
+    if (Array.isArray(paths) && paths.every((p) => typeof p === "string")) {
+      for (const path of paths as string[]) found.add(path.replace(/^\.\//, ""));
+    }
+    Object.values(obj).forEach(walk);
+  };
+  walk(requirements);
+  return [...found];
+};
+
+/** The declared paths' own verdict: `fix` with one finding per path missing from `git diff --name-only
+ *  <base>...<sha>` (the changeset's files, harlo-52's three-dot scope), `pass` when all are there; or why the
+ *  diff could not be taken. */
+const declaredPathsVerdict = (
+  options: { workspace: string; base: string; sha: string; paths: string[] },
+): { ok: true; verdict: PassVerdict } | { ok: false; info: string } => {
+  const { workspace, base, sha, paths } = options;
+  const range = `${base}...${sha}`;
+  const diff = git(workspace, ["diff", "--name-only", range]);
+  if (diff.code !== 0) return { ok: false, info: `git diff --name-only ${range} failed in ${workspace}: ${diff.stderr.trim()}` };
+  const changed = new Set(diff.stdout.split("\n").filter((line) => line !== ""));
+  const missing = paths.filter((path) => !changed.has(path));
+  if (missing.length === 0) return { ok: true, verdict: { verdict: "pass" } };
+  return {
+    ok: true,
+    verdict: {
+      verdict: "fix",
+      findings: missing.map((path) => ({
+        text: `${path} is declared in a requirement's doc_paths but is not changed in \`git diff --name-only ${range}\`; update it.`,
+        ref: path,
+      })),
+    },
+  };
+};
+
 /** One pass's parsed verdict (harlo-58: the mechanical requirements pass and the independent review pass each
  *  produce one of these, then get composed into the single Result `checkRun` prints). */
 type PassVerdict =
@@ -672,9 +845,9 @@ type PassOutcome =
  *  sharing one `Ctx` running concurrently would race and one's usage would silently clobber the other's.
  *  Never throws — a malformed reply is `ok: false`, the same `failed` treatment the old single-call `checkRun`
  *  gave it, just scoped to this one pass. */
-const runCheckPass = async (options: { agentBin: string; pluginDirs: string[]; prompt: string; workspace: string }): Promise<PassOutcome> => {
-  const { agentBin, pluginDirs, prompt, workspace } = options;
-  const passCtx: Ctx = { agentBin, pluginDirs };
+const runCheckPass = async (options: { ctx: Ctx; prompt: string; workspace: string }): Promise<PassOutcome> => {
+  const { ctx, prompt, workspace } = options;
+  const passCtx: Ctx = { agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, requirements: ctx.requirements };
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever. Each pass below is its own fresh call
   // too, so neither can lean on the other's reasoning (harlo-58: review must be structurally independent).
@@ -728,13 +901,29 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   if (!workspace) throw new Error("check run requires a workspace (from workspace.setup)");
   const mismatch = changesetMismatch(workspace, stdin.delivery, payload.changeset);
   if (mismatch !== undefined) return { status: "failed", info: mismatch };
+  // harlo-61: declared files are diffed against the payload's own base — never an assumed branch name.
+  const paths = declaredPaths(payload.requirements);
+  let files: PassVerdict = { verdict: "pass" };
+  if (paths.length > 0) {
+    if (payload.base === undefined) {
+      return {
+        status: "failed",
+        info: `requirements declare files (${paths.join(", ")}) but the check payload has no base (the Delivery's `
+          + "main-line branch) to diff the changeset against",
+      };
+    }
+    const sha = payload.changeset.slice(payload.changeset.lastIndexOf("@") + 1);
+    const declared = declaredPathsVerdict({ workspace, base: payload.base, sha, paths });
+    if (!declared.ok) return { status: "failed", info: declared.info };
+    files = declared.verdict;
+  }
   const requirementsPrompt = checkRequirementsPrompt(stdin.workItem, payload, workspace, stdin.delivery);
   const reviewPrompt = checkReviewPrompt(stdin.workItem, payload, workspace, stdin.delivery);
   // Two independent passes (harlo-58): the mechanical requirements check and the code-quality review never
   // share a call, so neither can lean on or be biased by the other's reasoning.
   const [requirementsOutcome, reviewOutcome] = await Promise.all([
-    runCheckPass({ agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, prompt: requirementsPrompt, workspace }),
-    runCheckPass({ agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, prompt: reviewPrompt, workspace }),
+    runCheckPass({ ctx, prompt: requirementsPrompt, workspace }),
+    runCheckPass({ ctx, prompt: reviewPrompt, workspace }),
   ]);
   const evidence = [...requirementsOutcome.evidence, ...reviewOutcome.evidence];
   if (!requirementsOutcome.ok || !reviewOutcome.ok) {
@@ -743,7 +932,9 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     const info = !requirementsOutcome.ok ? requirementsOutcome.info : (reviewOutcome as { ok: false; info: string }).info;
     return { status: "failed", info, ...(evidence.length > 0 ? { evidence } : {}) };
   }
-  const verdict = composeVerdicts(requirementsOutcome.verdict, reviewOutcome.verdict);
+  // The declared-files verdict composes like a third pass: all present (`pass`) leaves the agents' verdict exactly
+  // as it was; any missing makes it at least `fix`, with one finding per missing path, whatever the agents said.
+  const verdict = composeVerdicts(composeVerdicts(requirementsOutcome.verdict, reviewOutcome.verdict), files);
   const result = { status: "ok", body: verdict, ...(evidence.length > 0 ? { evidence } : {}) };
   // Belt-and-braces: validate the mapped Result against the port's own stdout contract before printing it,
   // mirroring how adapters/state/files.ts validates its own stored payload on the way in.
@@ -757,21 +948,31 @@ const RUN: Record<StepPort, (ctx: Ctx, stdin: Stdin) => Promise<unknown>> = {
 };
 const cancelOp = async (): Promise<unknown> => ({ status: "ok", body: {} }); // nothing runs in the background
 
-/** argv after the script: `[--agent-bin <path>] [--plugin-dir <path>]... <port> <op>`; --agent-bin defaults
- *  to `claude` on PATH; --plugin-dir is repeatable and defaults to none (a clean --safe-mode agent). */
+/** argv after the script: `[--agent-bin <path>] [--plugin-dir <path>]... [--requirements plain|dod] <port> <op>`;
+ *  --agent-bin defaults to `claude` on PATH; --plugin-dir is repeatable and defaults to none (a clean --safe-mode
+ *  agent); --requirements defaults to `plain`, and any other value throws rather than falling back (harlo-61). */
 const parseArgs = (
   args: string[],
-): { agentBin: string; pluginDirs: string[]; port: string | undefined; op: string | undefined } => {
+): { agentBin: string; pluginDirs: string[]; requirements: RequirementsMode; port: string | undefined; op: string | undefined } => {
   let agentBin = "claude";
+  let requirements: RequirementsMode = "plain";
   const pluginDirs: string[] = [];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === "--agent-bin") { agentBin = args[i + 1] ?? agentBin; i += 1; }
     else if (args[i] === "--plugin-dir") { if (args[i + 1] !== undefined) pluginDirs.push(args[i + 1] as string); i += 1; }
+    else if (args[i] === "--requirements") {
+      const mode = args[i + 1];
+      if (!(REQUIREMENTS_MODES as readonly (string | undefined)[]).includes(mode)) {
+        throw new Error(`--requirements must be one of ${REQUIREMENTS_MODES.join(", ")}; got ${mode === undefined ? "nothing" : JSON.stringify(mode)}`);
+      }
+      requirements = mode as RequirementsMode;
+      i += 1;
+    }
     else positional.push(args[i] as string);
   }
   const [port, op] = positional;
-  return { agentBin, pluginDirs, port, op };
+  return { agentBin, pluginDirs, requirements, port, op };
 };
 
 const main = async (ctx: Ctx): Promise<unknown> => {
@@ -786,8 +987,16 @@ const main = async (ctx: Ctx): Promise<unknown> => {
   return op === "cancel" ? cancelOp() : RUN[stepPort](ctx, stdin);
 };
 
-const { agentBin, pluginDirs } = parseArgs(process.argv.slice(2));
-const ctx: Ctx = { agentBin, pluginDirs };
+/** A bad flag is a startup failure (exit 2, before stdin is read), never a silent default: the config is wrong. */
+const startup = (() => {
+  try {
+    return parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`agent-claude: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+})();
+const ctx: Ctx = { agentBin: startup.agentBin, pluginDirs: startup.pluginDirs, requirements: startup.requirements };
 try {
   console.log(JSON.stringify(await main(ctx)));
 } catch (error) {

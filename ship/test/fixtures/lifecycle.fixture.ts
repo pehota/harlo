@@ -62,10 +62,13 @@ export type Logged = RunnerStdin;
  * `shipPty()`, which answers gates inline via a real pty as they appear, in the same `ship` invocation.
  * `items` (key → frontmatter status) puts the real md Tracker on the tracker port instead, one `<key>.md` each
  * in `trackerDir`, so `ship next` and the tracker's status/comment writes are real.
+ * `adapters` (port → argv prefix) puts a real adapter on those ports instead of the fake (harlo-61).
  */
 export const lifecycle = (
   replies: Record<string, unknown>, policy: Record<string, unknown> = {},
-  { principal = "fake", items }: { principal?: "fake" | "tty"; items?: Record<string, string> } = {},
+  { principal = "fake", items, adapters: real = {} }: {
+    principal?: "fake" | "tty"; items?: Record<string, string>; adapters?: Record<string, string[]>;
+  } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "ship-e2e-"));
   const stateDir = join(dir, "state");
@@ -84,6 +87,7 @@ export const lifecycle = (
     ["tracker", "workspace", "define", "implement", "check", "integrate", "deploy", "verify"].map((port) => [port, fake]),
   );
   if (items) adapters.tracker = ["bun", MD, "--dir", trackerDir];
+  Object.assign(adapters, real);
   writeFileSync(join(dir, "ship.config.json"), JSON.stringify({ projectId: "e2e", adapters, policy: { ...POLICY, ...policy } }));
   const principalArgv = principal === "tty" ? ["bun", TTY] : fake;
   writeFileSync(machinePath, JSON.stringify({ principal: principalArgv, state: ["bun", STATE, "--dir", stateDir] }));

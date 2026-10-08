@@ -3,7 +3,7 @@
 // implement's workspace so its `changeset` comes from a real commit, never an invented sha.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Stdin, WorkItem } from "../../../../src/contracts/common";
@@ -84,6 +84,7 @@ type CallOpts = {
   pluginDirs?: string[];
   cwd?: string; // the adapter's own cwd (the main-line checkout); defaults to a fresh non-repo dir
   cwdLog?: string;
+  requirementsMode?: string; // harlo-61: passed as `--requirements <mode>` when set; absent means the default
 };
 
 /** Run `agent/claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
@@ -94,7 +95,8 @@ const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown
     workItem, workspace: opts.workspace === undefined ? gitRepo() : opts.workspace, payload: opts.payload, tools: [],
   };
   const pluginDirArgs = (opts.pluginDirs ?? []).flatMap((dir) => ["--plugin-dir", dir]);
-  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, opts.port, opts.op], {
+  const modeArgs = opts.requirementsMode === undefined ? [] : ["--requirements", opts.requirementsMode];
+  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, ...modeArgs, opts.port, opts.op], {
     stdin: new Blob([JSON.stringify(stdin)]),
     // Never the repo running these tests: the implement guard would watch it as the main-line checkout.
     cwd: opts.cwd ?? tempDir("ship-agent-cwd-"),
@@ -1226,5 +1228,217 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
     expect(readLog(log)[0]).toContain("s-old");
     const { costUsd: _unknown, ...rest } = USAGE;
     expect(stdout).toMatchObject({ evidence: [{ label: "reasoning" }, usageItem(rest)] });
+  });
+});
+
+// ── harlo-61: a dod-shaped requirements object, Define to Check ──
+const DOD_FIXTURE = join(import.meta.dir, "..", "..", "..", "..", "test", "fixtures", "dod-requirements.json");
+type DodEntry = Record<string, unknown>;
+type DodContract = { works_when?: unknown; requirements: DodEntry[] };
+const dodContract = (): DodContract => JSON.parse(readFileSync(DOD_FIXTURE, "utf8")) as DodContract;
+
+/** Commit `files` (path → content) in the workspace, returning the new HEAD. */
+const commitFiles = (ws: string, files: Record<string, string>): string => {
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(ws, path, ".."), { recursive: true });
+    writeFileSync(join(ws, path), content);
+  }
+  for (const args of [["add", "-A"], ["commit", "-q", "-m", "change"]]) {
+    const proc = Bun.spawnSync(["git", "-C", ws, ...args], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${proc.stderr.toString()}`);
+  }
+  return headSha(ws);
+};
+
+describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)", () => {
+  const defineWith = async (mode: string | undefined, structured_output: unknown) => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "…", session_id: "sess-def", structured_output });
+    const ran = await call({ port: "define", op: "run", payload: {} satisfies DefinePayload, home, agentReplies, log, requirementsMode: mode });
+    return { ...ran, log };
+  };
+  const plainOut = { criteria: ["greets Ada"], runbook: ["run greet Ada"] };
+
+  test("harlo-61: no flag is plain mode: {criteria, runbook}, asked for with the plain schema", async () => {
+    const { stdout, log } = await defineWith(undefined, plainOut);
+    expect(stdout).toMatchObject({ status: "ok", body: { requirements: plainOut } });
+    const argv = readLog(log)[0]!;
+    expect(Object.keys(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).properties)).toEqual(["criteria", "runbook", "question"]);
+  });
+
+  test("harlo-61: --requirements plain is the same as no flag", async () => {
+    const { stdout } = await defineWith("plain", plainOut);
+    expect(stdout).toMatchObject({ status: "ok", body: { requirements: plainOut } });
+  });
+
+  for (const [name, mode, rest] of [
+    ["an unknown mode", "xml", []], ["a missing mode", undefined, ["--requirements"]],
+  ] as const) {
+    test(`harlo-61: ${name} fails at startup naming --requirements, never falling back to plain`, async () => {
+      const fx = tempDir("ship-agent-fx-");
+      const log = join(fx, "log.jsonl");
+      const agentReplies = repliesFile(fx, { is_error: false, result: "…", structured_output: plainOut });
+      const flag = mode === undefined ? [...rest] : ["--requirements", mode];
+      const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...flag, "define", "run"], {
+        stdin: new Blob(["{}"]), cwd: tempDir("ship-agent-cwd-"), stdout: "pipe", stderr: "pipe",
+        env: { PATH: process.env.PATH ?? "", HOME: tempDir("ship-agent-home-"), FAKE_AGENT_REPLIES: agentReplies, FAKE_AGENT_LOG: log },
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("--requirements");
+      expect(existsSync(log)).toBe(false); // the agent was never called
+    });
+  }
+
+  test("harlo-61: dod mode emits the agent's contract as the requirements object, extra entries passed through", async () => {
+    const contract = dodContract();
+    const { stdout, log } = await defineWith("dod", contract);
+    expect(stdout).toMatchObject({ status: "ok", body: { requirements: contract } });
+    expect((stdout as { body: { requirements: unknown } }).body.requirements).toEqual(contract);
+    const argv = readLog(log)[0]!;
+    const schema = JSON.parse(argv[argv.indexOf("--json-schema") + 1]!) as { properties: Record<string, unknown> };
+    expect(Object.keys(schema.properties)).toEqual(["works_when", "requirements", "question"]);
+    expect(promptOf(argv)).toContain("works_when");
+    expect(promptOf(argv)).toContain("doc_paths");
+  });
+
+  test("harlo-61: dod mode passes a question through, as plain mode does", async () => {
+    const { stdout } = await defineWith("dod", { question: "Which greeting?" });
+    expect(stdout).toMatchObject({ status: "question", about: "clarify", prompt: "Which greeting?" });
+  });
+
+  const entry = (c: DodContract, id: string): DodEntry => c.requirements.find((e) => e.id === id)!;
+  const REJECTIONS: [string, (c: DodContract) => void, string][] = [
+    ["works_when missing", (c) => { delete c.works_when; }, "works_when is missing or empty"],
+    ["works_when empty", (c) => { c.works_when = ""; }, "works_when is missing or empty"],
+    ...["tests", "e2e", "scenario", "docs", "review"].map((id): [string, (c: DodContract) => void, string] => [
+      `protocol id ${id} missing`, (c) => { c.requirements = c.requirements.filter((e) => e.id !== id); },
+      `protocol requirement "${id}" is missing`,
+    ]),
+    ["proves missing", (c) => { delete entry(c, "review").proves; }, '"review" has a missing or empty proves'],
+    ["proves empty", (c) => { entry(c, "lint").proves = ""; }, '"lint" has a missing or empty proves'],
+    ["applicable:false without a reason", (c) => { delete entry(c, "scenario").reason; }, '"scenario" is applicable:false without a non-empty reason'],
+    ["applicable:false with an empty reason", (c) => { entry(c, "scenario").reason = ""; }, '"scenario" is applicable:false without a non-empty reason'],
+    ["an applicable check without cmd", (c) => { delete entry(c, "tests").cmd; }, '"tests" is an applicable check without cmd and expect_exit'],
+    ["an applicable check without expect_exit", (c) => { entry(c, "e2e").expect_exit = null; }, '"e2e" is an applicable check without cmd and expect_exit'],
+    ["an extra check with absent applicable and no cmd", (c) => { entry(c, "lint").cmd = null; }, '"lint" is an applicable check without cmd and expect_exit'],
+    ...["e2e", "scenario", "docs"].map((id): [string, (c: DodContract) => void, string] => [
+      `${id} without an explicit applicable`, (c) => { delete entry(c, id).applicable; }, `"${id}" needs an explicit applicable true or false`,
+    ]),
+    ["an applicable docs without doc_paths", (c) => { delete entry(c, "docs").doc_paths; }, '"docs" is applicable but has no non-empty doc_paths'],
+    ["an applicable docs with empty doc_paths", (c) => { entry(c, "docs").doc_paths = []; }, '"docs" is applicable but has no non-empty doc_paths'],
+  ];
+  for (const [name, breakIt, why] of REJECTIONS) {
+    test(`harlo-61: dod mode is failed, never ok, on ${name}`, async () => {
+      const contract = dodContract();
+      breakIt(contract);
+      const { stdout } = await defineWith("dod", contract);
+      expect(stdout).toMatchObject({ status: "failed" });
+      expect((stdout as { info: string }).info).toContain(why);
+    });
+  }
+
+  test("harlo-61: dod mode accepts an absent applicable on a non-protocol entry (applicable by default)", async () => {
+    const contract = dodContract();
+    expect(entry(contract, "lint").applicable).toBeUndefined();
+    const { stdout } = await defineWith("dod", contract);
+    expect(stdout).toMatchObject({ status: "ok" });
+  });
+});
+
+describe("agent-claude adapter: Check verifies declared doc_paths against the base (harlo-61)", () => {
+  const checkWith = async (options: { requirements: unknown; files: Record<string, string>; base?: string; replies?: Reply | Reply[] }) => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, options.replies ?? { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const ws = gitRepo();
+    const sha = commitFiles(ws, options.files);
+    const payload: CheckPayload = {
+      requirements: options.requirements, changeset: `ship/PROJ-1-1@${sha}`, ...(options.base === undefined ? {} : { base: options.base }),
+    };
+    const ran = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+    return { ...ran, log, sha };
+  };
+
+  test("harlo-61: a declared path the changeset never touched is fix naming it, though both passes reply pass", async () => {
+    const { stdout, sha } = await checkWith({ requirements: dodContract(), base: "main", files: { "README.md": "hello, Ada\n" } });
+    expect(stdout).toMatchObject({ status: "ok", body: { verdict: "fix" } });
+    const findings = (stdout as { body: { findings: { text: string; ref?: string }[] } }).body.findings;
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.ref).toBe("docs/greet.md");
+    expect(findings[0]!.text).toContain("docs/greet.md");
+    expect(findings[0]!.text).toContain(`git diff --name-only main...${sha}`);
+  });
+
+  test("harlo-61: every declared path missing gives one finding per path", async () => {
+    const { stdout } = await checkWith({ requirements: dodContract(), base: "main", files: { "src/greet.ts": "x\n" } });
+    const findings = (stdout as { body: { findings: { ref?: string }[] } }).body.findings;
+    expect(findings.map((f) => f.ref)).toEqual(["README.md", "docs/greet.md"]);
+  });
+
+  test("harlo-61: every declared path changed adds nothing: the agents' composed verdict exactly as before", async () => {
+    const files = { "README.md": "hello, Ada\n", "docs/greet.md": "# greet\n" };
+    const { stdout } = await checkWith({ requirements: dodContract(), base: "main", files });
+    expect(stdout).toEqual({ status: "ok", body: { verdict: "pass" }, evidence: [{ label: "reasoning", text: "r" }, { label: "reasoning", text: "r" }] });
+    const fixed = await checkWith({
+      requirements: dodContract(), base: "main", files,
+      replies: { is_error: false, result: "r", structured_output: { verdict: "fix", findings: [{ text: "f1" }] } },
+    });
+    expect(fixed.stdout).toMatchObject({ status: "ok", body: { verdict: "fix", findings: [{ text: "f1" }, { text: "f1" }] } });
+  });
+
+  test("harlo-61: missing-path findings are added to the agents' own fix findings, never replacing them", async () => {
+    const { stdout } = await checkWith({
+      requirements: dodContract(), base: "main", files: { "README.md": "x\n" },
+      replies: { is_error: false, result: "r", structured_output: { verdict: "fix", findings: [{ text: "f1" }] } },
+    });
+    const findings = (stdout as { body: { findings: { text: string; ref?: string }[] } }).body.findings;
+    expect(findings.map((f) => f.ref ?? f.text)).toEqual(["f1", "f1", "docs/greet.md"]);
+  });
+
+  test("harlo-61: doc_paths are found under any key or nesting; applicable:false entries carrying doc_paths are ignored", async () => {
+    const requirements = {
+      anything: { deeper: [{ doc_paths: ["README.md"] }] },
+      waived: { applicable: false, reason: "n/a", doc_paths: ["never.md"], inner: { doc_paths: ["also-never.md"] } },
+      notStrings: { doc_paths: [1, 2] },
+    };
+    const { stdout } = await checkWith({ requirements, base: "main", files: { "README.md": "x\n" } });
+    expect(stdout).toMatchObject({ status: "ok", body: { verdict: "pass" } });
+    const missing = await checkWith({ requirements, base: "main", files: { "other.md": "x\n" } });
+    const findings = (missing.stdout as { body: { findings: { ref?: string }[] } }).body.findings;
+    expect(findings.map((f) => f.ref)).toEqual(["README.md"]);
+  });
+
+  test("harlo-61: declared files with no base in the payload is failed saying so, without calling the agent", async () => {
+    const { stdout, log } = await checkWith({ requirements: dodContract(), files: { "README.md": "x\n", "docs/greet.md": "x\n" } });
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain("no base");
+    expect((stdout as { info: string }).info).not.toMatch(/\bmain\b(?!-line)/);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  test("harlo-61: no declared files and no base changes nothing", async () => {
+    const { stdout } = await checkWith({ requirements: { criteria: ["c"], runbook: ["r"] }, files: { "src/greet.ts": "x\n" } });
+    expect(stdout).toMatchObject({ status: "ok", body: { verdict: "pass" } });
+  });
+
+  test("harlo-61: the diff is against the payload's base, not an assumed main", async () => {
+    // A base branch `trunk` that already carries docs/greet.md: only the three-dot diff from it counts.
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const ws = gitRepo();
+    Bun.spawnSync(["git", "-C", ws, "branch", "trunk", "main"]);
+    const sha = commitFiles(ws, { "README.md": "x\n", "docs/greet.md": "x\n" });
+    const payload: CheckPayload = { requirements: dodContract(), changeset: `ship/PROJ-1-1@${sha}`, base: "trunk" };
+    const { stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies });
+    expect(stdout).toMatchObject({ status: "ok", body: { verdict: "pass" } });
+    const bad = await call({ port: "check", op: "run", payload: { ...payload, base: "no-such-branch" }, home, workspace: ws, agentReplies });
+    expect(bad.stdout).toMatchObject({ status: "failed" });
+    expect((bad.stdout as { info: string }).info).toContain("no-such-branch...");
   });
 });

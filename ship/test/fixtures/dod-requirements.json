@@ -1,0 +1,11 @@
+{
+  "works_when": "running greet with a name prints a greeting that names that person, and the README says so",
+  "requirements": [
+    { "id": "tests", "type": "check", "cmd": "bun test", "expect_exit": 0, "source": "protocol", "proves": "greet prints a greeting naming the given person" },
+    { "id": "e2e", "type": "check", "cmd": "bun test test/e2e", "expect_exit": 0, "source": "task", "proves": "the greet command prints the greeting end to end", "applicable": true, "reason": "adds a user-facing command" },
+    { "id": "scenario", "type": "check", "cmd": null, "expect_exit": null, "source": "task", "proves": "no multi-step user scenario changes", "applicable": false, "reason": "a single command with no multi-step flow" },
+    { "id": "docs", "type": "check", "cmd": null, "expect_exit": null, "source": "task", "proves": "the README says greet names the person", "applicable": true, "doc_paths": ["README.md", "docs/greet.md"] },
+    { "id": "review", "type": "judgement", "agent": "dod-reviewer", "source": "protocol", "proves": "the change is the smallest one that makes greet name the person" },
+    { "id": "lint", "type": "check", "cmd": "bun run typecheck", "expect_exit": 0, "source": "auto-detected", "proves": "greet compiles cleanly alongside the rest of the code" }
+  ]
+}
