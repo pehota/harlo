@@ -359,10 +359,14 @@ const nonEmpty = (value: unknown): boolean => typeof value === "string" && value
  *  files to update, never directories: Check compares each against `git diff --name-only`, which lists files only,
  *  so a directory, absolute or `..` path could never match and would hold Check at `fix` every round. */
 const docPathProblem = (path: string): string | undefined => {
+  if (path === "") return "is empty";
   if (path !== path.trim()) return "has surrounding whitespace";
   if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return "is absolute";
   if (path.endsWith("/")) return "ends in / (a directory, not a file)";
-  if (path.split("/").includes("..")) return "contains a .. segment";
+  // A single leading ./ is fine (Check strips it); git never prints an empty or `.` segment anywhere else.
+  const segments = path.replace(/^\.\//, "").split("/");
+  if (segments.includes("..")) return "contains a .. segment";
+  if (segments.some((segment) => segment === "" || segment === ".")) return "has an empty or . segment (not normalised)";
   return undefined;
 };
 

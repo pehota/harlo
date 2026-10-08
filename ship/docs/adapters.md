@@ -148,8 +148,9 @@ agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requiremen
   `cmd`/`expect_exit` (only `docs`, and `e2e`/`scenario` when `applicable:false`, are
   exempt — any other check entry needs them even when `applicable:false`); `e2e`/`scenario`/`docs` without an explicit
   `applicable`; an applicable `docs` without non-empty `doc_paths`; a `doc_paths` entry
-  that is not a repo-relative file path (absolute, ending in `/`, with surrounding
-  whitespace, or with a `..` segment), named in the `failed` info. Check never matches
+  that is not a repo-relative file path (empty, absolute, ending in `/`, with
+  surrounding whitespace, a `..` segment, or an empty or `.` segment such as
+  `docs//x.md` or `docs/./x.md`; one leading `./` is fine), named in the `failed` info. Check never matches
   directories, so such a path could never be satisfied.
   [`../test/fixtures/dod-requirements.json`](../test/fixtures/dod-requirements.json) is
   a valid example.

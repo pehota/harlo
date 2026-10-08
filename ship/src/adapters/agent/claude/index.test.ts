@@ -1344,6 +1344,15 @@ describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)
       what, (c) => { entry(c, "docs").doc_paths = ["README.md", path]; },
       `"docs" doc_paths entry ${JSON.stringify(path)} ${problem}`,
     ]),
+    ...([
+      ["an empty doc_paths entry", "", "is empty"],
+      ["a doc_paths entry with a . segment", "docs/./greet.md", "has an empty or . segment"],
+      ["a doc_paths entry with an empty segment", "docs//greet.md", "has an empty or . segment"],
+    ] as const).map(([what, path, problem]): [string, (c: DodContract) => void, string] => [
+      `${what} on an extra entry`,
+      (c) => { c.requirements.push({ id: "x", type: "judgement", source: "task", proves: "p", doc_paths: [path] }); },
+      `"x" doc_paths entry ${JSON.stringify(path)} ${problem}`,
+    ]),
     ["an applicable docs with empty doc_paths", (c) => { entry(c, "docs").doc_paths = []; }, '"docs" is applicable but has no non-empty doc_paths'],
   ];
   for (const [name, breakIt, why] of REJECTIONS) {
@@ -1364,6 +1373,13 @@ describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)
     );
     const { stdout } = await defineWith("dod", contract);
     expect(stdout).toMatchObject({ status: "ok", body: { requirements: contract } });
+  });
+
+  test("harlo-61: dod mode accepts a doc_paths entry with a single leading ./", async () => {
+    const contract = dodContract();
+    entry(contract, "docs").doc_paths = ["./README.md", "docs/greet.md"];
+    const { stdout } = await defineWith("dod", contract);
+    expect(stdout).toMatchObject({ status: "ok" });
   });
 
   test("harlo-61: dod mode accepts an absent applicable on a non-protocol entry (applicable by default)", async () => {
