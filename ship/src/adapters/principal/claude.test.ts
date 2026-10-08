@@ -108,6 +108,15 @@ describe("principal/claude", () => {
     expect(prompt).toContain("stop (recorded as the reason)");
   });
 
+  test("decide: blocked at Implement, retry's comment is named as a directive to implement (harlo-62)", async () => {
+    const payload: Decide = {
+      on: "blocked", options: ["retry", "stop"], min: "model", evidence,
+      comments: { retry: { goes: "feedback", to: "implement" }, stop: { goes: "reason" } },
+    };
+    const prompt = await decidePromptOf(payload, { is_error: false, result: "", structured_output: { answer: "retry" } });
+    expect(prompt).toContain("It is kept only with: retry (sent to implement as a directive), stop (recorded as the reason).");
+  });
+
   test("decide: no comment line when every option's route is dropped", async () => {
     const prompt = await decidePromptOf(land(["approve"]), { is_error: false, result: "", structured_output: { answer: "approve" } });
     expect(prompt).not.toContain("It is kept only with");

@@ -20,6 +20,7 @@ const DROPPED = { goes: "dropped" } as const;
 /**
  * Where each gate answer's comment goes (harlo-51), the one place it is decided: `feedback` to the step the answer
  * runs, the Delivery's `reason`, or dropped (journaled as `ignored_comment`). The decide payload carries it too.
+ * Blocked's `retry` re-issues whatever was blocked, so its route depends on where: see `BLOCKED_AT_IMPLEMENT`.
  */
 export const COMMENT_ROUTES = {
   accept: { accept: FEEDBACK_TO("implement"), adjust: FEEDBACK_TO("define") },
@@ -29,9 +30,17 @@ export const COMMENT_ROUTES = {
   blocked: { retry: DROPPED, stop: REASON },
 } as const satisfies { [P in DecidePoint]: Record<(typeof GATE_OPTIONS)[P][number], CommentRoute> };
 
-/** The route of `answer`'s comment at `on`; undefined for an answer outside the gate's options. */
-export const commentRoute = (on: DecidePoint, answer: string): CommentRoute | undefined => {
-  const routes: Record<string, CommentRoute> = COMMENT_ROUTES[on];
+/** Blocked at Implement, `retry`'s comment is the Principal's guidance for the re-issued Implement (harlo-62).
+ *  Elsewhere it stays dropped: no other blockable step takes `feedback`. */
+const BLOCKED_AT_IMPLEMENT = { ...COMMENT_ROUTES.blocked, retry: FEEDBACK_TO("implement") } as const;
+
+/** The routes the decide at `on` offers; at Blocked they depend on the node it is blocked at. */
+export const commentRoutes = (on: DecidePoint, blockedAt: Node | null = null): Record<string, CommentRoute> =>
+  on === "blocked" && blockedAt === "implement" ? BLOCKED_AT_IMPLEMENT : COMMENT_ROUTES[on];
+
+/** The route of `answer`'s comment at `on` (blocked at `blockedAt`); undefined for an answer outside the options. */
+export const commentRoute = (on: DecidePoint, answer: string, blockedAt: Node | null = null): CommentRoute | undefined => {
+  const routes = commentRoutes(on, blockedAt);
   return Object.hasOwn(routes, answer) ? routes[answer] : undefined;
 };
 
@@ -50,7 +59,7 @@ export const evidenceBundle = (s: Snapshot): GateEvidence => ({
 /** Await `principal.decide` at a decide point with its constant options (`decide G`). */
 const awaitDecide = (s: Snapshot, on: DecidePoint, min: PrincipalKind): Move => {
   const options = [...GATE_OPTIONS[on]];
-  const payload: Decide = { on, options, comments: { ...COMMENT_ROUTES[on] }, min, evidence: evidenceBundle(s) };
+  const payload: Decide = { on, options, comments: { ...commentRoutes(on, s.blockedAt) }, min, evidence: evidenceBundle(s) };
   return awaitOn(s, on, { port: "principal", op: "decide", payload, node: on, kind: "decide", options });
 };
 

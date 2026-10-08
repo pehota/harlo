@@ -185,7 +185,10 @@ whatever the Define adapter's own `ok` body returned, carried through unchanged 
 never names or constrains its shape, only that it exists). `feedback` is the Principal's
 comment, verbatim, from any gate answer that sends the Delivery back to Implement
 with one: Accept `accept`, Land `rework`, Decision `keep_going`, Failure
-`fix_forward`. No comment, no `feedback` key. Which answers carry a comment, and
+`fix_forward`, and Blocked `retry` when the block is at Implement (harlo-62). No
+comment, no `feedback` key. A Blocked `retry` re-issues the saved Implement command
+unchanged except for `feedback`: the comment, appended after a blank line to any
+`feedback` that command already carried. Which answers carry a comment, and
 where it goes, is the `comments` map of each `principal.decide` payload (see below).
 
 `ok` body: `{changeset, feedback?}`.
@@ -228,10 +231,20 @@ option, saying where a comment on that answer goes:
   arrives anyway, the core applies the answer as if there were none and journals
   the entry with note `ignored_comment`.
 
-The core fills `comments` from `COMMENT_ROUTES` (`src/core/gates.ts`). A Principal
-should show the person, per option, whether a comment is kept. `principal/tty.ts`
-marks each option line (`rework  [+ comment → Implement]`). It drops free text after
-a `dropped` option and says so.
+The core fills `comments` from `COMMENT_ROUTES` (`src/core/gates.ts`). The one
+route that depends on more than the gate is Blocked `retry` (harlo-62): blocked at
+Implement it is `{goes: "feedback", to: "implement"}`, so the Principal's guidance
+reaches the re-issued Implement as `payload.feedback` and the agent adapter frames
+it as a PRINCIPAL DIRECTIVE (its `feedbackDirective`), the same as any other
+feedback. Blocked anywhere else, `retry`'s comment is `dropped`, since no other
+blockable step takes `feedback`. `ship signal <d> --blocked retry --comment <text>`
+routes the comment exactly as the decide answer does (dropped ones are journaled
+`ignored_comment` too).
+
+A Principal should show the person, per option, whether a comment is kept.
+`principal/tty.ts` marks each option line (`rework  [+ comment → Implement]`,
+and blocked at Implement `retry  [+ comment → Implement]`). It drops free text
+after a `dropped` option and says so.
 
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 

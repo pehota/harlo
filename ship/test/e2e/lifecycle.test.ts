@@ -253,6 +253,29 @@ describe("lifecycle on fakes", () => {
     expect(payloadOf(p.log(), "blocked-1")).toMatchObject({ on: "blocked", options: ["retry", "stop"] });
   }, TIMEOUT);
 
+  // harlo-62: blocked at Implement, the Principal's retry comment is guidance for the re-issued Implement.
+  test.concurrent("Blocked at Implement: retry with guidance → Implement re-run with the comment as feedback", async () => {
+    const guidance = "The tests already pass: just commit what is in the workspace.";
+    const p = project({
+      ...HAPPY,
+      "implement.run": [failed("no commit"), failed("no commit"), ok({ changeset: "c1", feedback: applied })],
+    });
+    await start(p, "accept-1");
+    await signal(p, "accept-1", answer("accept"), "blocked-1");
+    expect(await p.snapshot()).toMatchObject({ at: "blocked", blockedAt: "implement" });
+    expect(payloadOf(p.log(), "blocked-1")).toMatchObject({
+      on: "blocked", comments: { retry: { goes: "feedback", to: "implement" }, stop: { goes: "reason" } },
+    });
+    await signal(p, "blocked-1", answer("retry", guidance), "land-1");
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", requirements, findings: [] });
+    expect(payloadOf(p.log(), "implement-3")).toEqual({ base: "trunk", requirements, findings: [], feedback: guidance });
+    const { sent, body } = await journaledRound(p, "implement-3");
+    expect(sent?.feedback).toBe(guidance);
+    expect(body).toEqual({ changeset: "c1", feedback: applied });
+    const decided = (await p.journal()).find((e) => e.signal.kind === "result" && e.signal.id === `${D}/blocked-1`);
+    expect(decided?.note).toBeUndefined();
+  }, TIMEOUT);
+
   test.concurrent("Failure gate accept closes with accepted_with_failure", async () => {
     const p = project({ ...HAPPY, "deploy.run": [verdict("not_live", [{ text: "health check red" }])] });
     await toLand(p);

@@ -75,6 +75,18 @@ describe("principal/tty", () => {
     expect(printed).not.toContain("optional: add free text");
   });
 
+  test("decide: blocked at Implement, retry's line says its comment goes to Implement (harlo-62)", async () => {
+    const payload: Decide = {
+      on: "blocked", options: ["retry", "stop"], min: "person", evidence,
+      comments: { retry: { goes: "feedback", to: "implement" }, stop: { goes: "reason" } },
+    };
+    const { stdout, printed } = await call("decide", "k-1/blocked-1", payload, [
+      { wait: "Answer with one of:", send: "retry, just commit what is there\n" },
+    ]);
+    expect(printed).toContain("retry  [+ comment → Implement]");
+    expect(stdout).toEqual(ok("retry", "just commit what is there"));
+  });
+
   test("decide: a gate whose options all drop comments shows no comment marker", async () => {
     const payload: Decide = { on: "land", options: ["approve"], comments: { approve: { goes: "dropped" } }, min: "person", evidence };
     const { printed } = await call("decide", "k-1/land-1", payload, [{ wait: "Answer with one of:", send: "approve\n" }]);

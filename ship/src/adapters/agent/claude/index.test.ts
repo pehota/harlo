@@ -438,6 +438,64 @@ describe("agent-claude adapter: implement", () => {
     expect(stdout).toMatchObject({ status: "ok", body: { feedback: { outcome: "applied", reason: "kept it short" } } });
   });
 
+  // harlo-62: Blocked at Implement, `retry` re-issues the failed command; a retry comment arrives as its `feedback`.
+  const RESUME_TEXT = "Continue implementing and commit your changes — no further questions.";
+  const fixRound: ImplementPayload = { requirements: ["c"], findings: [{ text: "empty name is not rejected" }] };
+
+  /** A fix round that fails (no commit) and is then re-issued with `retry` as `payload`; the last two prompts. */
+  const blockedRetry = async (retry: ImplementPayload, last: Reply) => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", commit: true, reportHead: true, session_id: "sess-impl-blk" },
+      { is_error: false, result: "nothing to commit", session_id: "sess-impl-blk" },
+      { session_id: "sess-impl-blk", ...last },
+    ]);
+    const run = (payload: ImplementPayload) => call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    await run({ requirements: ["c"], findings: [] });
+    expect((await run(fixRound)).stdout).toMatchObject({ status: "failed" });
+    const result = await run(retry);
+    const [, failedArgv, retryArgv] = readLog(log);
+    return { ...result, failedPrompt: promptOf(failedArgv!), retryArgv: retryArgv! };
+  };
+
+  test("blocked-retry with guidance resumes the session with the guidance as a PRINCIPAL DIRECTIVE", async () => {
+    const guidance = "The guard is already there: just commit it.";
+    const { exitCode, stdout, retryArgv } = await blockedRetry({ ...fixRound, feedback: guidance }, {
+      is_error: false, result: "r3", commit: true, reportHead: true,
+      structured_output: { feedback: { outcome: "applied", reason: "committed the guard" } },
+    });
+    expect(exitCode).toBe(0);
+    expect(retryArgv[retryArgv.indexOf("--resume") + 1]).toBe("sess-impl-blk");
+    const prompt = promptOf(retryArgv);
+    expect(prompt).not.toContain(workItem.title);
+    const directive = [
+      "PRINCIPAL DIRECTIVE — this takes priority over your earlier reading of the same finding:", "<<<", guidance, ">>>",
+      "Either make the requested change and commit it, or explicitly decline it with a stated reason.",
+    ].join("\n");
+    expect(prompt).toContain(directive);
+    expect(prompt).toContain(RESUME_TEXT);
+    expect(JSON.parse(retryArgv[retryArgv.indexOf("--json-schema") + 1]!).required).toEqual(["commit", "feedback"]);
+    expect(stdout).toMatchObject({ status: "ok", body: { feedback: { outcome: "applied", reason: "committed the guard" } } });
+  });
+
+  test("blocked-retry without guidance re-sends exactly today's fixed resume text", async () => {
+    const { exitCode, failedPrompt, retryArgv } = await blockedRetry(fixRound, {
+      is_error: false, result: "r3", commit: true, reportHead: true,
+    });
+    expect(exitCode).toBe(0);
+    expect(retryArgv[retryArgv.indexOf("--resume") + 1]).toBe("sess-impl-blk");
+    const prompt = promptOf(retryArgv);
+    expect(prompt).toBe(failedPrompt); // the same command, re-issued unchanged
+    expect(prompt).not.toContain("PRINCIPAL DIRECTIVE");
+    const lines = prompt.split("\n");
+    expect(lines.at(-2)).toBe(RESUME_TEXT);
+    expect(lines.at(-3)).toBe("- empty name is not rejected");
+    expect(JSON.parse(retryArgv[retryArgv.indexOf("--json-schema") + 1]!).required).toEqual(["commit"]);
+  });
+
   test("an explicit decline with a reason is ok even without a new commit", async () => {
     const { stdout, ws } = await feedbackRound({
       is_error: false, result: "r2", reportHead: true,

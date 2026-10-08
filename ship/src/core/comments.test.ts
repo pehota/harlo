@@ -5,7 +5,7 @@ import type { Decide, DecidePoint } from "../contracts/common";
 import { COMMENT_ROUTES, GATE_OPTIONS, commentRoute, enterBlocked, enterDecision, enterGate } from "./gates";
 import type { Move } from "./steps";
 import { transition } from "./transition";
-import { answer, awaited, changeset, policy, snapshotAt } from "./fixtures/builders.fixture";
+import { answer, awaited, changeset, policy, requirements, snapshotAt } from "./fixtures/builders.fixture";
 
 const COMMENT = "a comment, verbatim:\n- with a list";
 const deploy1 = awaited("deploy-1", "deploy", "run", { changeset }, "deploy", "run");
@@ -80,5 +80,54 @@ describe("COMMENT_ROUTES (harlo-51)", () => {
         break;
       }
     }
+  });
+});
+
+describe("Blocked at Implement: retry's comment reaches Implement as feedback (harlo-62)", () => {
+  const implement1 = awaited("implement-1", "implement", "run", { requirements, findings: [] }, "implement", "run");
+  const gate = enterBlocked(policy, snapshotAt("implement", null), "implement", implement1).state;
+  const decide = gate.awaiting!;
+  const recover = (comment?: string) => ({ kind: "blocked_recovery", action: "retry", ...(comment === undefined ? {} : { comment }) }) as const;
+
+  test("the blocked decide offers retry's comment to Implement; elsewhere it stays dropped", () => {
+    expect((decide.payload as Decide).comments).toEqual({ retry: { goes: "feedback", to: "implement" }, stop: { goes: "reason" } });
+    expect(commentRoute("blocked", "retry", "implement")).toEqual({ goes: "feedback", to: "implement" });
+    expect(commentRoute("blocked", "retry", "deploy")).toEqual({ goes: "dropped" });
+    expect(commentRoute("blocked", "retry")).toEqual({ goes: "dropped" });
+  });
+
+  test("retry + comment re-issues the saved command with the comment as feedback, otherwise unchanged", () => {
+    const out = transition(policy, gate, answer(decide, "retry", "person", COMMENT));
+    const step = out.commands.find((c) => c.await)!;
+    expect(step).toMatchObject({ port: "implement", op: "run", payload: { ...(implement1.payload as object), feedback: COMMENT } });
+    expect(out.state).toMatchObject({ at: "implement", blockedAt: null, blockedCmd: null, retries: 0 });
+    expect(out.entry.note).toBeUndefined();
+  });
+
+  test("retry without a comment re-issues the saved command exactly as before", () => {
+    const step = transition(policy, gate, answer(decide, "retry")).commands.find((c) => c.await)!;
+    expect(step.payload).toEqual(implement1.payload);
+  });
+
+  test("the guidance joins feedback the saved command already carried", () => {
+    const fed = { ...implement1, payload: { ...(implement1.payload as object), feedback: "earlier" } };
+    const at = enterBlocked(policy, snapshotAt("implement", null), "implement", fed).state;
+    const step = transition(policy, at, answer(at.awaiting!, "retry", "person", COMMENT)).commands.find((c) => c.await)!;
+    expect((step.payload as { feedback: string }).feedback).toBe(`earlier\n\n${COMMENT}`);
+  });
+
+  test("`ship signal --blocked retry --comment` routes the comment the same way", () => {
+    const out = transition(policy, gate, recover(COMMENT));
+    expect(out.commands.find((c) => c.await)!.payload).toMatchObject({ feedback: COMMENT });
+    expect(out.entry.note).toBeUndefined();
+    expect(transition(policy, gate, recover()).commands.find((c) => c.await)!.payload).toEqual(implement1.payload);
+  });
+
+  test("a recovery retry comment at a non-Implement block is dropped and journaled as ignored", () => {
+    const at = ENTER.blocked().state;
+    const withComment = transition(policy, at, recover(COMMENT));
+    const without = transition(policy, at, recover());
+    expect(withComment.commands).toEqual(without.commands);
+    expect(withComment.entry.note).toBe("ignored_comment");
   });
 });

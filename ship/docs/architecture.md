@@ -234,7 +234,7 @@ stateDiagram-v2
 | State | Entered when | Leaves by |
 |---|---|---|
 | waiting (flag on a step) | a command is outstanding | its signal |
-| Blocked | a step stays `failed` past its retry cap | Principal signal `retry` (re-issue the step) or `stop` |
+| Blocked | a step stays `failed` past its retry cap | Principal signal `retry` (re-issue the step; blocked at Implement, a `retry` comment goes with it as `feedback`) or `stop` |
 | Abandoned (terminal) | `stop{outcome, reason}` from any non-terminal state | — |
 | Closed (terminal) | Teardown finishes | — |
 
@@ -276,7 +276,9 @@ stateDiagram-v2
 | Integrate | conflict (`question`) | answer "resolved" → re-issue Integrate; "rework" → Implement |
 | Blocked | on entry | issue Principal `decide{retry \| stop}`, giving `retry` an id |
 | Blocked | Principal adapter `failed` | stay Blocked, issue nothing (the failed decide is not retried); the environment alerts; only a Delivery signal moves it |
-| Blocked | `blocked_recovery{retry}` (`ship signal <d> --blocked retry`) | cancel any awaited blocked decide, re-issue the saved `blockedCmd` at `blockedAt`, `retries` 0, blocked cleared (as the decide's `retry`) |
+| Blocked | Principal `retry` + comment, blocked at Implement | re-issue the saved `blockedCmd` with the comment as `payload.feedback` (appended to any it had), otherwise unchanged; Implement gets it as a PRINCIPAL DIRECTIVE (harlo-62) |
+| Blocked | Principal `retry` + comment, blocked anywhere else | re-issue the saved `blockedCmd` unchanged; the comment is dropped, journaled `ignored_comment` |
+| Blocked | `blocked_recovery{retry, comment?}` (`ship signal <d> --blocked retry [--comment ...]`) | cancel any awaited blocked decide, re-issue the saved `blockedCmd` at `blockedAt`, `retries` 0, blocked cleared, the comment routed (as the decide's `retry`) |
 | Blocked | `blocked_recovery{stop, comment?}` | abandon with the comment, default `stopped at blocked <node>` (as the decide's `stop`) |
 | Setup | `workItem_changed` | keep the new WorkItem, flow unchanged (Define has not run yet) |
 | Define, Accept gate, Implement, Check, Decision gate (incl. questions) | `workItem_changed` | cancel the awaited command, re-run Define with the new WorkItem; fix rounds and findings kept |

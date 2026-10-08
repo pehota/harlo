@@ -57,6 +57,20 @@ const fixRound = (p: Policy, s: Snapshot, findings: Finding[]): Move =>
     ? enterStep(p, { ...s, findings, fixRounds: s.fixRounds + 1 }, "implement")
     : enterDecision(p, { ...s, findings }, "scope");
 
+/** The saved `blockedCmd` with `comment` added as its `feedback` when the retry route carries it (harlo-62): the
+ *  Principal's guidance joins any feedback the command already had, the command is otherwise unchanged. */
+const guided = (s: Snapshot, comment: string | undefined): Awaiting => {
+  const cmd = present(s, "blockedCmd");
+  if (comment === undefined || commentRoute("blocked", "retry", s.blockedAt)?.goes !== "feedback") return cmd;
+  const payload = cmd.payload as { feedback?: string };
+  const feedback = payload.feedback === undefined ? comment : `${payload.feedback}\n\n${comment}`;
+  return { ...cmd, payload: { ...payload, feedback } };
+};
+
+/** Blocked → `retry`: re-issue the saved command at the node it blocked, its retry counter reset. */
+const retryBlocked = (s: Snapshot, comment: string | undefined): Move =>
+  reissue({ ...s, at: present(s, "blockedAt"), retries: 0, blockedAt: null, blockedCmd: null }, guided(s, comment));
+
 /** ok results, by the position they arrive at. Gate answers are ok results of `principal.decide`. */
 const onOk: { [P in Position]?: OnOk } = {
   setup: (p, s, body) => {
@@ -120,7 +134,7 @@ const onOk: { [P in Position]?: OnOk } = {
     const b = body as DecideBody;
     const node = present(s, "blockedAt");
     return branch(s, b.answer, {
-      retry: () => reissue({ ...s, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd")),
+      retry: () => retryBlocked(s, b.comment),
       stop: () => abandon(p, s, "abandoned", reasonOf("blocked", b) ?? `stopped at blocked ${node}`),
     });
   },
@@ -181,7 +195,7 @@ const onPosition = (p: Policy, s: Snapshot, body: unknown): Move => {
 
 /** A gate answer whose comment COMMENT_ROUTES drops: applied as if it had none, and journaled as ignored. */
 const onDecided = (p: Policy, s: Snapshot, awaiting: Awaiting, b: DecideBody): Applied => {
-  if (b.comment === undefined || commentRoute(awaiting.node as DecidePoint, b.answer)?.goes !== "dropped") {
+  if (b.comment === undefined || commentRoute(awaiting.node as DecidePoint, b.answer, s.blockedAt)?.goes !== "dropped") {
     return onPosition(p, s, b);
   }
   const { comment: _ignored, ...bare } = b;
@@ -249,15 +263,16 @@ const onChanged = (p: Policy, s: Snapshot, sig: ChangedSignal): Applied => {
   }
 };
 
-/** The same retry/stop as the blocked decide's answer, but taken from a Delivery signal; the stale decide is cancelled. */
+/** The same retry/stop as the blocked decide's answer, comment routes included, but taken from a Delivery signal;
+ *  the stale decide is cancelled. */
 const onRecovery = (p: Policy, s: Snapshot, sig: RecoverySignal): TransitionOutput => {
   if (s.at !== "blocked") return ignore(s, sig, "ignored_not_blocked"); // B8: never a way past a gate or question
   const node = present(s, "blockedAt");
   const move = andThen(cancelAwaited(s), (idle) =>
-    sig.action === "retry"
-      ? reissue({ ...idle, at: node, retries: 0, blockedAt: null, blockedCmd: null }, present(s, "blockedCmd"))
-      : abandon(p, idle, "abandoned", sig.comment ?? `stopped at blocked ${node}`));
-  return settle(s, sig, move);
+    sig.action === "retry" ? retryBlocked(idle, sig.comment) : abandon(p, idle, "abandoned", sig.comment ?? `stopped at blocked ${node}`));
+  const dropped = sig.action === "retry" && sig.comment !== undefined
+    && commentRoute("blocked", "retry", node)?.goes === "dropped";
+  return settle(s, sig, dropped ? { ...move, note: "ignored_comment" } : move);
 };
 
 export const transition = (p: Policy, s: Snapshot, sig: Signal): TransitionOutput => {
