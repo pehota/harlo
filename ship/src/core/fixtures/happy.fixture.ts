@@ -1,8 +1,8 @@
 // §4.2 happy-path rows.
 import type { EvidenceItem } from "../../contracts/common";
 import {
-  type TransitionRow, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok, policy,
-  OPTIONS, runbook, snapshotAt, withTracker, workspace,
+  type TransitionRow, answer, awaited, changeset, cmd, decide, fire, gateEvidence, id, ok, policy,
+  OPTIONS, requirements, snapshotAt, withTracker, workspace,
 } from "./builders.fixture";
 
 const plan: EvidenceItem = { label: "plan", url: "file:///ws/k-1/plan.md" };
@@ -12,19 +12,19 @@ const setup1 = awaited("setup-1", "workspace", "setup", {}, "setup", "run");
 const define1 = awaited("define-1", "define", "run", {}, "define", "run");
 const defineOnBase = awaited("define-1", "define", "run", { base: "trunk" }, "define", "run"); // harlo-52
 const accept1 = decide("accept", 1, ACCEPT, "person");
-const implement1 = awaited("implement-1", "implement", "run", { criteria, findings: [] }, "implement", "run");
-const check1 = awaited("check-1", "check", "run", { criteria, changeset }, "check", "run");
+const implement1 = awaited("implement-1", "implement", "run", { requirements, findings: [] }, "implement", "run");
+const check1 = awaited("check-1", "check", "run", { requirements, changeset }, "check", "run");
 const land1 = decide("land", 1, LAND, "person");
 const integrate1 = awaited("integrate-1", "integrate", "run", { changeset }, "integrate", "run");
 const deploy1 = awaited("deploy-1", "deploy", "run", { changeset }, "deploy", "run");
-const verify1 = awaited("verify-1", "verify", "run", { runbook }, "verify", "run");
+const verify1 = awaited("verify-1", "verify", "run", { requirements }, "verify", "run");
 const close1 = awaited("close-1", "tracker", "update", { status: "done" }, "close", "run");
 const teardown1 = awaited("teardown-1", "workspace", "teardown", { path: workspace }, "teardown", "run");
 
 export const happyRows: TransitionRow[] = [
   {
     id: "H1", name: "setup ok → define",
-    state: snapshotAt("setup", setup1, { workspace: null, criteria: null, runbook: null, changeset: null }),
+    state: snapshotAt("setup", setup1, { workspace: null, requirements: null, changeset: null }),
     signal: ok(setup1, { path: workspace, base: "trunk" }),
     expect: {
       at: "define",
@@ -34,14 +34,14 @@ export const happyRows: TransitionRow[] = [
     },
   },
   {
-    id: "H2", name: "define ok → accept gate, criteria and runbook set, evidence appended",
-    state: snapshotAt("define", define1, { criteria: null, runbook: null, changeset: null, retries: 1 }),
-    signal: ok(define1, { criteria, runbook }, [plan]),
+    id: "H2", name: "define ok → accept gate, requirements set, evidence appended",
+    state: snapshotAt("define", define1, { requirements: null, changeset: null, retries: 1 }),
+    signal: ok(define1, { requirements }, [plan]),
     expect: {
       at: "accept",
       commands: [cmd(decide("accept", 1, ACCEPT, "person", gateEvidence({ changeset: null, evidence: [plan] })))],
       state: {
-        criteria, runbook, evidence: [plan], retries: 0, lastRun: define1,
+        requirements, evidence: [plan], retries: 0, lastRun: define1,
         awaiting: decide("accept", 1, ACCEPT, "person", gateEvidence({ changeset: null, evidence: [plan] })),
       },
       entry: { from: "define", to: "accept", issued: [id("accept-1")] },
@@ -89,9 +89,9 @@ export const happyRows: TransitionRow[] = [
     expect: {
       at: "implement",
       commands: [cmd(awaited("implement-1", "implement", "run",
-        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run"))],
+        { requirements, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run"))],
       state: { lastRun: awaited("implement-1", "implement", "run",
-        { criteria, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run") },
+        { requirements, findings: [], feedback: "keep the greeting under 20 chars\n- no emoji" }, "implement", "run") },
       entry: { from: "accept", to: "implement", issued: [implement1.id], by: "person" },
     },
   },
@@ -115,7 +115,7 @@ export const happyRows: TransitionRow[] = [
     signal: ok(implement1, { changeset: "cs-2" }),
     expect: {
       at: "check",
-      commands: [cmd(awaited("check-1", "check", "run", { criteria, changeset: "cs-2" }, "check", "run"))],
+      commands: [cmd(awaited("check-1", "check", "run", { requirements, changeset: "cs-2" }, "check", "run"))],
       state: { changeset: "cs-2" },
       entry: { from: "implement", to: "check", issued: [id("check-1")] },
     },

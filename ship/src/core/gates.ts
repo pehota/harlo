@@ -42,7 +42,7 @@ export const CONFLICT_OPTIONS = ["resolved", "rework"] as const;
  *  visit to the same node also carries how many times already (the Principal otherwise has no memory of its
  *  own prior answers at this gate), so it can reason about escalating instead of retrying forever. */
 export const evidenceBundle = (s: Snapshot): GateEvidence => ({
-  workItem: s.workItem, criteria: s.criteria, runbook: s.runbook, changeset: s.changeset,
+  workItem: s.workItem, requirements: s.requirements, changeset: s.changeset,
   findings: s.findings, evidence: s.evidence,
   ...(s.at === "blocked" && s.blockedCount > 1 ? { note: `This is retry attempt ${s.blockedCount} at this gate.` } : {}),
 });

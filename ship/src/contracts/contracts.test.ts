@@ -14,7 +14,7 @@ const must = <T>(x: T | undefined): T => {
 
 const workItem = { key: "PROJ-1", title: "Add a greeting", body: "Say hello." };
 const gateEvidence = {
-  workItem, criteria: ["greets"], runbook: null, changeset: null, findings: [], evidence: [],
+  workItem, requirements: { criteria: ["greets"] }, changeset: null, findings: [], evidence: [],
 };
 
 describe("every port/op in §3.2 has a schema", () => {
@@ -46,7 +46,7 @@ describe("Result", () => {
   const step = must(schemaFor("define", "run"));
   const service = must(schemaFor("workspace", "setup"));
   const runnerOnly = must(schemaFor("state", "list"));
-  const okDefine = { status: "ok", body: { criteria: ["greets"], runbook: ["run it"] } };
+  const okDefine = { status: "ok", body: { requirements: { criteria: ["greets"], runbook: ["run it"] } } };
   const question = { status: "question", prompt: "Which greeting?", about: "clarify", options: ["hi", "hello"] };
   const accepted = { status: "accepted" };
   const failed = { status: "failed", info: "no network" };
@@ -206,7 +206,7 @@ describe("Snapshot", () => {
     v: 1, delivery: "PROJ-1-1", workItem, at: "setup", blockedAt: null,
     awaiting: { id: "PROJ-1-1/setup-1", port: "workspace", op: "setup", await: true, payload: {}, node: "setup", kind: "run" },
     lastRun: null, blockedCmd: null, seq: { setup: 1 }, retries: 0, blockedCount: 0, fixRounds: 0, workspace: null,
-    criteria: null, runbook: null, changeset: null, findings: [], evidence: [], outcome: null, reason: null,
+    requirements: null, changeset: null, findings: [], evidence: [], outcome: null, reason: null,
   };
   test.each([
     ["valid", snapshot, true],

@@ -1,13 +1,13 @@
 // §4.4 Failure-gate rows.
 import type { Finding } from "../../contracts/common";
 import {
-  type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok,
-  policy, runbook, snapshotAt, withTracker,
+  type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, decide, fire, gateEvidence, id, ok,
+  policy, requirements, snapshotAt, withTracker,
 } from "./builders.fixture";
 
 const findings: Finding[] = [{ text: "greeting page returns 500", ref: "https://example.test/runs/7" }];
 const deploy1 = awaited("deploy-1", "deploy", "run", { changeset }, "deploy", "run");
-const verify1 = awaited("verify-1", "verify", "run", { runbook }, "verify", "run");
+const verify1 = awaited("verify-1", "verify", "run", { requirements }, "verify", "run");
 const failure = (evidence = gateEvidence({ findings })) => decide("failure", 1, OPTIONS.failure, "person", evidence);
 const close1 = awaited("close-1", "tracker", "update", { status: "done" }, "close", "run");
 
@@ -51,7 +51,7 @@ export const failureRows: TransitionRow[] = [
     signal: answer(failure(), "fix_forward"),
     expect: {
       at: "implement",
-      commands: [cmd(awaited("implement-3", "implement", "run", { criteria, findings }, "implement", "run"))],
+      commands: [cmd(awaited("implement-3", "implement", "run", { requirements, findings }, "implement", "run"))],
       state: { fixRounds: 1, findings },
       entry: { from: "failure", to: "implement", issued: [id("implement-3")], by: "person" },
     },
@@ -63,7 +63,7 @@ export const failureRows: TransitionRow[] = [
     expect: {
       at: "implement",
       commands: [cmd(awaited("implement-3", "implement", "run",
-        { criteria, findings, feedback: "return 503, not 500, while the store warms up" }, "implement", "run"))],
+        { requirements, findings, feedback: "return 503, not 500, while the store warms up" }, "implement", "run"))],
       state: { fixRounds: 1, findings },
       entry: { from: "failure", to: "implement", issued: [id("implement-3")], by: "person" },
     },
@@ -75,7 +75,7 @@ export const failureRows: TransitionRow[] = [
     expect: {
       at: "implement",
       commands: [cmd(awaited("implement-2", "implement", "run",
-        { criteria, findings: [], feedback: "add the missing env var" }, "implement", "run"))],
+        { requirements, findings: [], feedback: "add the missing env var" }, "implement", "run"))],
       state: { fixRounds: 0, findings: [] },
       entry: { from: "failure", to: "implement", issued: [id("implement-2")], by: "person" },
     },

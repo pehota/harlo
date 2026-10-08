@@ -64,8 +64,8 @@ const onOk: { [P in Position]?: OnOk } = {
     return enterStep(p, { ...s, workspace: path, base }, "define");
   },
   define: (p, s, body) => {
-    const { criteria, runbook } = body as DefineBody;
-    return enterGate(p, { ...s, criteria, runbook }, "accept");
+    const { requirements } = body as DefineBody;
+    return enterGate(p, { ...s, requirements }, "accept");
   },
   accept: (p, s, body) => {
     const b = body as DecideBody;

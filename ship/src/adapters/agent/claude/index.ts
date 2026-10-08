@@ -151,6 +151,19 @@ const usageOf = (reply: AgentReply, costBefore: number | undefined): Usage | und
  *  refuses the write. Implement is the only step allowed to touch files. */
 const NO_EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
+/** `requirements` is opaque to the core (harlo-58) — this adapter renders the full object as JSON unconditionally
+ *  (never dropping any part of it, the exact bug harlo-58 fixes one layer down) and, only when it happens to
+ *  recognize its own `defineRun`'s shape (`{criteria, runbook}`), ALSO adds a readable bullet-list rendering on
+ *  top, as a convenience for the model — a different Define adapter's own vocabulary still gets the full JSON. */
+const requirementsLines = (requirements: unknown): string[] => {
+  if (requirements === null || requirements === undefined) return [];
+  const r = requirements as { criteria?: unknown; runbook?: unknown };
+  const readable = Array.isArray(r.criteria) && Array.isArray(r.runbook)
+    ? ["Criteria:", ...(r.criteria as string[]).map((c) => `- ${c}`), "Runbook:", ...(r.runbook as string[]).map((c) => `- ${c}`)]
+    : [];
+  return [...readable, "Requirements (full):", JSON.stringify(requirements)];
+};
+
 type CallAgentArgs = {
   ctx: Ctx; prompt: string; schema: unknown; resume: Session | undefined; cwd?: string; disallowedTools?: string[];
 };
@@ -363,7 +376,11 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   }
   saveSession("define", state, stdin.delivery, reply);
   if (!out?.criteria || !out?.runbook) throw new Error(`agent reply missing criteria/runbook: ${reply.result}`);
-  return { status: "ok", body: { criteria: out.criteria, runbook: out.runbook }, ...evidenceOf(ctx, reply) };
+  // This adapter's own choice of requirements shape (harlo-58): the core only guarantees `requirements` is
+  // carried through unchanged — what goes inside it is this adapter's vocabulary, not the core's.
+  return {
+    status: "ok", body: { requirements: { criteria: out.criteria, runbook: out.runbook } }, ...evidenceOf(ctx, reply),
+  };
 };
 
 // ── implement ──
@@ -426,7 +443,7 @@ const implementPrompt = ({ workItem, payload, resume, workspace, mainLine, deliv
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Implement it in this working directory and commit your changes.",
     ...rule,
-    "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
+    ...requirementsLines(payload.requirements),
     ...delta,
   ].join("\n");
 };
@@ -547,20 +564,36 @@ const checkSchema = {
   additionalProperties: false,
 } as const;
 
-const checkPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string, delivery: string): string => {
+/** Shared framing both check passes need: scope rule, changeset, and the prior answer if this is a resumed ask. */
+const checkFraming = (workItem: WorkItem, payload: CheckPayload, workspace: string, delivery: string): string[] => {
   const lines = [
     `WorkItem ${workItem.key}: ${workItem.title}`,
-    "Check this changeset against the acceptance criteria.",
     ...workspaceRule(workspace, mainLineOf(workspace), delivery, payload.base),
     // harlo-52: a two-dot diff, or the wrong base, counts the main line's own newer commits as this changeset's.
     `Judge scope by ${scopeDiff(payload.base)} only: commits on ${baseRef(payload.base)} that are not on `
       + `ship/${delivery} are not part of this changeset, and their files never count as its files.`,
     `Changeset: ${payload.changeset}`,
-    "Criteria:", ...payload.criteria.map((c) => `- ${c}`),
   ];
   if (payload.answer !== undefined) lines.push(`Answer to your previous question: ${payload.answer}`);
-  return lines.join("\n");
+  return lines;
 };
+
+/** Mechanical pass: does each named requirement hold (harlo-58 — a Check-only concern, split from review below). */
+const checkRequirementsPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string, delivery: string): string => [
+  ...checkFraming(workItem, payload, workspace, delivery),
+  "Check this changeset against the requirements below — only whether each one holds, not general code quality.",
+  ...requirementsLines(payload.requirements),
+].join("\n");
+
+/** Independent review pass: code-quality judgement of the diff, structurally separate from the mechanical
+ *  requirements check above — a different `callAgent` call, so neither pass's reasoning can lean on the other's
+ *  (harlo-58's "no single agent call does both"). */
+const checkReviewPrompt = (workItem: WorkItem, payload: CheckPayload, workspace: string, delivery: string): string => [
+  ...checkFraming(workItem, payload, workspace, delivery),
+  "Independently review this changeset's code quality and correctness — bugs, missed edge cases, anything a "
+    + "careful reviewer would flag — regardless of whether the named requirements below technically hold.",
+  ...requirementsLines(payload.requirements),
+].join("\n");
 
 /** harlo-53: a changeset committed anywhere but `ship/<delivery>` in the workspace (e.g. on the main-line
  *  checkout) is not this Delivery's work — reviewing it would pass work that integrate never lands. */
@@ -576,36 +609,96 @@ const changesetMismatch = (workspace: string, delivery: string, changeset: strin
   return undefined;
 };
 
+/** One pass's parsed verdict (harlo-58: the mechanical requirements pass and the independent review pass each
+ *  produce one of these, then get composed into the single Result `checkRun` prints). */
+type PassVerdict =
+  | { verdict: "pass" }
+  | { verdict: "fix"; findings: Finding[] }
+  | { verdict: "decide"; about: "scope" | "advisory"; findings: Finding[] };
+
+type PassOutcome =
+  | { ok: true; verdict: PassVerdict; evidence: EvidenceItem[] }
+  | { ok: false; info: string; evidence: EvidenceItem[] };
+
+/** Run one check pass (its own `callAgent` call, own prompt, own `Ctx`) and parse its reply into a
+ *  `PassOutcome` — ok with a verdict, or not-ok with why, either way carrying that pass's own usage evidence.
+ *  A fresh `Ctx` per pass (not the shared one) matters because `callAgent` mutates `ctx.usage`: two passes
+ *  sharing one `Ctx` running concurrently would race and one's usage would silently clobber the other's.
+ *  Never throws — a malformed reply is `ok: false`, the same `failed` treatment the old single-call `checkRun`
+ *  gave it, just scoped to this one pass. */
+const runCheckPass = async (options: { agentBin: string; pluginDirs: string[]; prompt: string; workspace: string }): Promise<PassOutcome> => {
+  const { agentBin, pluginDirs, prompt, workspace } = options;
+  const passCtx: Ctx = { agentBin, pluginDirs };
+  // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
+  // and no read of either `define`'s or `implement`'s state file, ever. Each pass below is its own fresh call
+  // too, so neither can lean on the other's reasoning (harlo-58: review must be structurally independent).
+  const reply = await callAgent({
+    ctx: passCtx, prompt, schema: checkSchema, resume: undefined, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
+  });
+  const evidence = evidenceOf(passCtx, reply).evidence ?? [];
+  if (reply.is_error) return { ok: false, info: reply.result, evidence };
+  const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
+  if (out?.verdict === "pass") return { ok: true, verdict: { verdict: "pass" }, evidence };
+  if (out?.verdict === "fix") return { ok: true, verdict: { verdict: "fix", findings: out.findings ?? [] }, evidence };
+  if (out?.verdict === "decide") {
+    // A schema-conformant reply can't get here with `about` missing/invalid any more (see checkSchema above),
+    // but the agent's actual reply is never trusted blindly: guard again at runtime, never forward an `about`
+    // that isn't one of the two values `checkBody` accepts, so a bad reply can't produce a contract-violating
+    // Result.
+    if (out.about !== "scope" && out.about !== "advisory") {
+      return { ok: false, info: `agent reply had verdict "decide" without a valid "about" (scope|advisory): ${reply.result}`, evidence };
+    }
+    return { ok: true, verdict: { verdict: "decide", about: out.about, findings: out.findings ?? [] }, evidence };
+  }
+  return { ok: false, info: `agent reply had an unexpected verdict: ${reply.result}`, evidence };
+};
+
+/** Compose both passes' verdicts into one: `decide` outranks `fix` outranks `pass`; when both passes report
+ *  findings, both sets are kept (neither pass's findings are dropped in favor of the other's). */
+const composeVerdicts = (requirements: PassVerdict, review: PassVerdict): PassVerdict => {
+  if (requirements.verdict === "decide" || review.verdict === "decide") {
+    const about: "scope" | "advisory" =
+      (requirements.verdict === "decide" && requirements.about === "scope")
+      || (review.verdict === "decide" && review.about === "scope") ? "scope" : "advisory";
+    const findings = [
+      ...(requirements.verdict === "pass" ? [] : requirements.findings),
+      ...(review.verdict === "pass" ? [] : review.findings),
+    ];
+    return { verdict: "decide", about, findings };
+  }
+  if (requirements.verdict === "fix" || review.verdict === "fix") {
+    const findings = [
+      ...(requirements.verdict === "fix" ? requirements.findings : []),
+      ...(review.verdict === "fix" ? review.findings : []),
+    ];
+    return { verdict: "fix", findings };
+  }
+  return { verdict: "pass" };
+};
+
 const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const payload = stdin.payload as CheckPayload;
   const workspace = stdin.workspace;
   if (!workspace) throw new Error("check run requires a workspace (from workspace.setup)");
   const mismatch = changesetMismatch(workspace, stdin.delivery, payload.changeset);
   if (mismatch !== undefined) return { status: "failed", info: mismatch };
-  const prompt = checkPrompt(stdin.workItem, payload, workspace, stdin.delivery);
-  // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
-  // and no read of either `define`'s or `implement`'s state file, ever.
-  const reply = await callAgent({
-    ctx, prompt, schema: checkSchema, resume: undefined, cwd: workspace, disallowedTools: NO_EDIT_TOOLS,
-  });
-  if (reply.is_error) return failed(ctx, reply.result);
-  const out = reply.structured_output as { verdict?: string; about?: string; findings?: Finding[] } | undefined;
-  let result: unknown;
-  if (out?.verdict === "pass") result = { status: "ok", body: { verdict: "pass" } };
-  else if (out?.verdict === "fix") result = { status: "ok", body: { verdict: "fix", findings: out.findings ?? [] } };
-  else if (out?.verdict === "decide") {
-    // A schema-conformant reply can't get here with `about` missing/invalid any more (see checkSchema above),
-    // but the agent's actual reply is never trusted blindly: guard again at runtime, never forward an `about`
-    // that isn't one of the two values `checkBody` accepts, so a bad reply can't produce a contract-violating
-    // Result. Nothing has been committed at Check time, so `failed` (via the top-level catch, below) is safe.
-    if (out.about !== "scope" && out.about !== "advisory") {
-      throw new Error(`agent reply had verdict "decide" without a valid "about" (scope|advisory): ${reply.result}`);
-    }
-    result = { status: "ok", body: { verdict: "decide", about: out.about, findings: out.findings ?? [] } };
-  } else {
-    throw new Error(`agent reply had an unexpected verdict: ${reply.result}`);
+  const requirementsPrompt = checkRequirementsPrompt(stdin.workItem, payload, workspace, stdin.delivery);
+  const reviewPrompt = checkReviewPrompt(stdin.workItem, payload, workspace, stdin.delivery);
+  // Two independent passes (harlo-58): the mechanical requirements check and the code-quality review never
+  // share a call, so neither can lean on or be biased by the other's reasoning.
+  const [requirementsOutcome, reviewOutcome] = await Promise.all([
+    runCheckPass({ agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, prompt: requirementsPrompt, workspace }),
+    runCheckPass({ agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, prompt: reviewPrompt, workspace }),
+  ]);
+  const evidence = [...requirementsOutcome.evidence, ...reviewOutcome.evidence];
+  if (!requirementsOutcome.ok || !reviewOutcome.ok) {
+    // Either pass's own failure is reported; if both failed, the requirements pass's message leads (arbitrary
+    // but deterministic — never silently prefers one over the other based on which resolved first).
+    const info = !requirementsOutcome.ok ? requirementsOutcome.info : (reviewOutcome as { ok: false; info: string }).info;
+    return { status: "failed", info, ...(evidence.length > 0 ? { evidence } : {}) };
   }
-  result = { ...(result as Record<string, unknown>), ...evidenceOf(ctx, reply) };
+  const verdict = composeVerdicts(requirementsOutcome.verdict, reviewOutcome.verdict);
+  const result = { status: "ok", body: verdict, ...(evidence.length > 0 ? { evidence } : {}) };
   // Belt-and-braces: validate the mapped Result against the port's own stdout contract before printing it,
   // mirroring how adapters/state/files.ts validates its own stored payload on the way in.
   const invalid = check(schemaFor("check", "run")!.stdout, result);

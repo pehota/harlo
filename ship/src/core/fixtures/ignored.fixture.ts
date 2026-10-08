@@ -13,7 +13,7 @@ const teardown1 = awaited("teardown-1", "workspace", "teardown", { path: "/ws/k-
 
 export const ignoredRows: TransitionRow[] = [
   ignored("R1", "result for an earlier command id is stale",
-    snapshotAt("define", define2), ok(define1, { criteria: [], runbook: [] }), "ignored_stale"),
+    snapshotAt("define", define2), ok(define1, { requirements: { criteria: [], runbook: [] } }), "ignored_stale"),
   ignored("R1", "result for another Delivery's id is stale",
     snapshotAt("define", define1), { kind: "result", id: "k-2/define-1", result: { status: "ok", body: {} } }, "ignored_stale"),
   ignored("R1", "result while awaiting nothing (blocked after B6) is stale",

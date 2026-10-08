@@ -72,7 +72,7 @@ export const deliveryRows: TransitionRow[] = [
     blockedAt("check"), changed({}), "workitem_unchanged"),
   {
     id: "W2", name: "changed at setup → stay, WorkItem updated",
-    state: snapshotAt("setup", setup1, { criteria: null, runbook: null, changeset: null, workspace: null }),
+    state: snapshotAt("setup", setup1, { requirements: null, changeset: null, workspace: null }),
     signal: edit,
     expect: {
       at: "setup", commands: [],

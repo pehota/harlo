@@ -1,6 +1,6 @@
 // Core types (plan §3.3). Only types come from contracts/; the core never imports ajv.
 import type {
-  CommandId, DeliveryId, EvidenceItem, Finding, Port, PrincipalKind, Result, WorkItem,
+  CommandId, DeliveryId, EvidenceItem, Finding, Port, PrincipalKind, Requirements, Result, WorkItem,
 } from "../contracts/common";
 
 export const STEPS = [
@@ -44,8 +44,9 @@ export type Snapshot = {
   fixRounds: number;
   workspace: string | null;
   base?: string; // main-line branch from workspace.setup; absent before Setup, and on a Delivery that predates it
-  criteria: string[] | null;
-  runbook: string[] | null;
+  // Whatever a configured Define adapter returned (harlo-58): opaque to the core (P9-style — recorded and
+  // carried through, never interpreted), so its shape is never named or constrained here.
+  requirements: Requirements | null;
   changeset: string | null;
   findings: Finding[]; // latest verdict's findings
   evidence: EvidenceItem[]; // appended, never read (P9)

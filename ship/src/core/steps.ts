@@ -49,14 +49,16 @@ export const cancelAwaited = (s: Snapshot): Move => {
   return moot === null ? idle : withFire(idle, moot.port, "cancel", { target: moot.id });
 };
 
-/** A snapshot field the position guarantees; null here is a core bug, not an input case. */
-export const present = <F extends "criteria" | "runbook" | "changeset" | "workspace" | "outcome" | "lastRun" | "blockedAt" | "blockedCmd",
+/** A snapshot field the position guarantees; null here is a core bug, not an input case. `requirements` is
+ *  `unknown | null`, which TS can't narrow via `NonNullable` the way it can a concrete type, so that one field
+ *  returns as `unknown` (still never `null` at runtime, enforced by the same check below). */
+export const present = <F extends "requirements" | "changeset" | "workspace" | "outcome" | "lastRun" | "blockedAt" | "blockedCmd",
 >(
   s: Snapshot, field: F,
-): NonNullable<Snapshot[F]> => {
+): F extends "requirements" ? unknown : NonNullable<Snapshot[F]> => {
   const value = s[field];
   if (value === null) throw new Error(`snapshot.${field} is null at ${s.at}`);
-  return value;
+  return value as F extends "requirements" ? unknown : NonNullable<Snapshot[F]>;
 };
 
 /** Close awaits this status; config validation guarantees it for the core's own outcomes (plan §3.5). */
@@ -74,14 +76,16 @@ const STEP_CALL: Record<Step, (p: Policy, s: Snapshot) => Call> = {
   setup: () => ({ port: "workspace", op: "setup", payload: {} }),
   define: (_, s) => ({ port: "define", op: "run", payload: { ...baseOf(s) } }),
   implement: (_, s) => ({
-    port: "implement", op: "run", payload: { ...baseOf(s), criteria: present(s, "criteria"), findings: s.findings },
+    port: "implement", op: "run",
+    payload: { ...baseOf(s), requirements: present(s, "requirements"), findings: s.findings },
   }),
   check: (_, s) => ({
-    port: "check", op: "run", payload: { ...baseOf(s), criteria: present(s, "criteria"), changeset: present(s, "changeset") },
+    port: "check", op: "run",
+    payload: { ...baseOf(s), requirements: present(s, "requirements"), changeset: present(s, "changeset") },
   }),
   integrate: (_, s) => ({ port: "integrate", op: "run", payload: { changeset: present(s, "changeset") } }),
   deploy: (_, s) => ({ port: "deploy", op: "run", payload: { changeset: present(s, "changeset") } }),
-  verify: (_, s) => ({ port: "verify", op: "run", payload: { runbook: present(s, "runbook") } }),
+  verify: (_, s) => ({ port: "verify", op: "run", payload: { requirements: present(s, "requirements") } }),
   close: (p, s) => ({ port: "tracker", op: "update", payload: { status: outcomeStatus(p, present(s, "outcome")) } }),
   teardown: (_, s) => ({ port: "workspace", op: "teardown", payload: { path: present(s, "workspace") } }),
 };

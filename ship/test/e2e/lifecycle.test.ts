@@ -4,8 +4,8 @@
 // Each scenario asserts the final Snapshot.at, the journal (read through `state journal`) and the fake's stdin log.
 import { afterAll, describe, expect, test } from "bun:test";
 import {
-  D, HAPPY, answer, calls, coreSequence, criteria, defined, failed, implemented, issuedAndSent, lifecycle, ok, payloadOf,
-  question, runbook, verdict, workItem,
+  D, HAPPY, answer, calls, coreSequence, defined, failed, implemented, issuedAndSent, lifecycle, ok, payloadOf,
+  question, requirements, runbook, verdict, workItem,
 } from "../fixtures/lifecycle.fixture";
 import type { Position } from "../../src/core/types";
 
@@ -91,8 +91,8 @@ describe("lifecycle on fakes", () => {
       ...TO_ACCEPT.calls,
       "implement.run implement-1", "check.run check-1", "implement.run implement-2", "check.run check-2", "principal.decide land-1",
     ]);
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings });
-    expect(payloadOf(p.log(), "check-2")).toEqual({ base: "trunk", criteria, changeset: "c2" });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", requirements, findings });
+    expect(payloadOf(p.log(), "check-2")).toEqual({ base: "trunk", requirements, changeset: "c2" });
   }, TIMEOUT);
 
   test.concurrent("N fix rounds reach Decision; keep_going resets the rounds", async () => {
@@ -135,7 +135,7 @@ describe("lifecycle on fakes", () => {
       ...TO_ACCEPT.calls, ...TO_LAND.calls,
       "implement.run implement-2", "check.run check-2", "principal.decide land-2", "define.run define-2", "principal.decide accept-2",
     ]);
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings: [], feedback: "shorter greeting" });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", requirements, findings: [], feedback: "shorter greeting" });
     expect(payloadOf(p.log(), "define-2")).toEqual({ base: "trunk", feedback: "split off the farewell" });
   }, TIMEOUT);
 
@@ -165,7 +165,7 @@ describe("lifecycle on fakes", () => {
     await start(p, "accept-1");
     await signal(p, "accept-1", answer("accept"), "decision-1");
     await signal(p, "decision-1", answer("keep_going", directive), "land-1");
-    expect(payloadOf(p.log(), "implement-3")).toEqual({ base: "trunk", criteria, findings, feedback: directive });
+    expect(payloadOf(p.log(), "implement-3")).toEqual({ base: "trunk", requirements, findings, feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-3");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c3", feedback: applied });
@@ -182,7 +182,7 @@ describe("lifecycle on fakes", () => {
     await toLand(p);
     await signal(p, "land-1", answer("approve"), "failure-1");
     await signal(p, "failure-1", answer("fix_forward", directive), "land-2");
-    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", criteria, findings: [], feedback: directive });
+    expect(payloadOf(p.log(), "implement-2")).toEqual({ base: "trunk", requirements, findings: [], feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-2");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c1", feedback: declined });
@@ -193,7 +193,7 @@ describe("lifecycle on fakes", () => {
     const p = project({ ...HAPPY, "implement.run": [ok({ changeset: "c1", feedback: applied })] });
     await start(p, "accept-1");
     await signal(p, "accept-1", answer("accept", directive), "land-1");
-    expect(payloadOf(p.log(), "implement-1")).toEqual({ base: "trunk", criteria, findings: [], feedback: directive });
+    expect(payloadOf(p.log(), "implement-1")).toEqual({ base: "trunk", requirements, findings: [], feedback: directive });
     const { sent, body } = await journaledRound(p, "implement-1");
     expect(sent?.feedback).toBe(directive);
     expect(body).toEqual({ changeset: "c1", feedback: applied });
@@ -286,7 +286,7 @@ describe("lifecycle on fakes", () => {
   test.concurrent("changed before Land re-runs Define; changed after Land only notifies", async () => {
     const p = project({
       ...HAPPY, "integrate.run": [], // integrate accepts: still running when the second change arrives
-      "define.run": [defined, ok({ criteria: ["greets Ada by full name"], runbook })],
+      "define.run": [defined, ok({ requirements: { criteria: ["greets Ada by full name"], runbook } })],
       "tracker.read": [workItem(), workItem("Greet by full name"), workItem("Greet by nickname")],
     });
     await start(p, "accept-1");
@@ -306,7 +306,9 @@ describe("lifecycle on fakes", () => {
     expect(payloadOf(p.log(), "cancel-1")).toEqual({ target: `${D}/accept-1` });
     expect(p.log().find((s) => s.id === `${D}/define-2`)?.workItem).toMatchObject({ title: "Greet by full name" });
     const accept2 = payloadOf(p.log(), "accept-2") as { evidence: Record<string, unknown> };
-    expect(accept2.evidence).toMatchObject({ workItem: { title: "Greet by full name" }, criteria: ["greets Ada by full name"] });
+    expect(accept2.evidence).toMatchObject({
+      workItem: { title: "Greet by full name" }, requirements: { criteria: ["greets Ada by full name"] },
+    });
     expect(accept2.evidence).not.toHaveProperty("note");
     expect(payloadOf(p.log(), "notify-1")).toEqual({ text: "WorkItem changed after Land; flow unchanged" });
     expect((await p.snapshot()).workItem.title).toBe("Greet by nickname");

@@ -181,10 +181,22 @@ const showCommit = (root: string, sha: string): string[] => {
   return ["", proc.stdout.toString()];
 };
 
+/** `requirements` is opaque to the core (harlo-58) — this dev tool renders the full object as JSON unless it
+ *  happens to recognize the `{criteria, runbook}` shape the shipped agent adapter emits, same convention as
+ *  that adapter's own prompt rendering (never assumes the shape, never drops anything outside it). */
+const requirementsLines = (requirements: unknown): string[] => {
+  if (requirements === null || requirements === undefined) return [];
+  const r = requirements as { criteria?: unknown; runbook?: unknown };
+  if (Array.isArray(r.criteria) && Array.isArray(r.runbook)) {
+    return [...bullets("Criteria", r.criteria as string[]), ...bullets("Runbook", r.runbook as string[])];
+  }
+  return [`Requirements: ${JSON.stringify(requirements)}`];
+};
+
 const outputLines = (port: string, body: Record<string, unknown>, root: string | undefined): string[] => {
   switch (port) {
     case "define":
-      return [...bullets("Criteria", body.criteria as string[] | undefined), ...bullets("Runbook", body.runbook as string[] | undefined)];
+      return requirementsLines(body.requirements);
     case "implement": {
       const changeset = body.changeset as string;
       return [`Changeset: ${changeset}`, ...(root ? showCommit(root, shaOf(changeset)) : [])];

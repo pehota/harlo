@@ -2,12 +2,12 @@
 import type { Signal, Snapshot } from "../types";
 import {
   type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, decide, failed, fire, gateEvidence, id,
-  ok, runbook, snapshotAt, withMaxBlockedRetries, withRetryCap,
+  ok, requirements, snapshotAt, withMaxBlockedRetries, withRetryCap,
 } from "./builders.fixture";
 
 const LOGIN = ["logged in", "give up"];
 const deploy = (n: number) => awaited(`deploy-${n}`, "deploy", "run", { changeset }, "deploy", "run");
-const verify1 = awaited("verify-1", "verify", "run", { runbook }, "verify", "run");
+const verify1 = awaited("verify-1", "verify", "run", { requirements }, "verify", "run");
 const land = (n: number) => ({ ...decide("land", 1, OPTIONS.land, "person"), id: id(`land-${n}`) });
 const login = (n: number) => ({ ...ask(1, "verify", "login", "Log in, then answer", "person", LOGIN), id: id(`ask-${n}`) });
 const blocked = (n: number, note?: string) =>

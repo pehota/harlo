@@ -22,7 +22,7 @@ export const startRows: StartRow[] = [
         v: 1, delivery: "k-1", workItem, at: "setup",
         blockedAt: null, awaiting: setup1("k-1"), lastRun: setup1("k-1"), blockedCmd: null,
         seq: { setup: 1 }, retries: 0, fixRounds: 0,
-        workspace: null, criteria: null, runbook: null, changeset: null,
+        workspace: null, requirements: null, changeset: null,
         findings: [], evidence: [], outcome: null, reason: null,
       },
       entry: { from: null, to: "setup", issued: ["k-1/setup-1"] },

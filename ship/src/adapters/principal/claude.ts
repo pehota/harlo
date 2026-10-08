@@ -13,13 +13,17 @@ import type { AskPayload, CancelPayload, NotifyPayload } from "../../../src/cont
 import { schemaFor } from "../../../src/contracts/ports";
 import { check } from "../../../src/contracts/validate";
 
+/** `requirements` is opaque to the core (harlo-58): rendered as pretty-printed JSON, same as any other evidence
+ *  the adapter doesn't interpret — never assumes a `criteria`/`runbook` shape inside it. */
+const requirementsLines = (requirements: unknown): string[] =>
+  requirements === null || requirements === undefined ? [] : ["Requirements:", JSON.stringify(requirements, null, 2)];
+
 /** The evidence bundle as plain lines (P9: passed through as given, never interpreted) — same shape as tty.ts,
  *  since the CLI reads it as plain prompt text, not structured JSON. */
 const evidenceLines = (e: GateEvidence): string[] => [
   `WorkItem ${e.workItem.key}: ${e.workItem.title}${e.workItem.url ? ` <${e.workItem.url}>` : ""}`,
   ...e.workItem.body.split("\n").map((line) => `  ${line}`),
-  ...(e.criteria && e.criteria.length > 0 ? ["Criteria:", ...e.criteria.map((c) => `  - ${c}`)] : []),
-  ...(e.runbook && e.runbook.length > 0 ? ["Runbook:", ...e.runbook.map((r) => `  - ${r}`)] : []),
+  ...requirementsLines(e.requirements),
   ...(e.changeset === null ? [] : [`Changeset: ${e.changeset}`]),
   ...(e.findings.length > 0 ? ["Findings:", ...e.findings.map((f) => `  - ${f.ref ? `${f.text} (${f.ref})` : f.text}`)] : []),
   ...(e.evidence.length > 0 ? ["Evidence:", ...e.evidence.map((i) => `  - ${[i.label, i.text, i.url].filter(Boolean).join(" — ")}`)] : []),

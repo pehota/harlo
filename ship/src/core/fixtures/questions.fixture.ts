@@ -1,18 +1,18 @@
 // §4.5 question rows (step ports only). Fixture policy maps question about `clarify` to model; others → person.
 import type { EvidenceItem, Finding } from "../../contracts/common";
 import {
-  type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, criteria, gateEvidence, id, question,
-  runbook, snapshotAt,
+  type TransitionRow, OPTIONS, answer, ask, awaited, changeset, cmd, gateEvidence, id, question,
+  requirements, snapshotAt,
 } from "./builders.fixture";
 
-const early = { criteria: null, runbook: null, changeset: null }; // Define has not produced anything yet
+const early = { requirements: null, changeset: null }; // Define has not produced anything yet
 const shot: EvidenceItem = { label: "login page", url: "file:///ws/k-1/login.png" };
 const findings: Finding[] = [{ text: "an earlier check finding" }];
 const LOGIN = ["logged in", "give up"];
 
 const define1 = awaited("define-1", "define", "run", {}, "define", "run");
-const verify1 = awaited("verify-1", "verify", "run", { runbook }, "verify", "run");
-const check1 = awaited("check-1", "check", "run", { criteria, changeset }, "check", "run");
+const verify1 = awaited("verify-1", "verify", "run", { requirements }, "verify", "run");
+const check1 = awaited("check-1", "check", "run", { requirements, changeset }, "check", "run");
 const integrate1 = awaited("integrate-1", "integrate", "run", { changeset }, "integrate", "run");
 
 const clarify1 = ask(1, "define", "clarify", "Greet by first or full name?", "model", undefined,
@@ -87,7 +87,7 @@ export const questionRows: TransitionRow[] = [
     signal: answer(login1, "logged in"),
     expect: {
       at: "verify",
-      commands: [cmd(awaited("verify-2", "verify", "run", { runbook, answer: "logged in" }, "verify", "run"))],
+      commands: [cmd(awaited("verify-2", "verify", "run", { requirements, answer: "logged in" }, "verify", "run"))],
       state: { retries: 0 },
       entry: { from: "verify", to: "verify", issued: [id("verify-2")], by: "person" },
     },
@@ -109,7 +109,7 @@ export const questionRows: TransitionRow[] = [
     signal: answer(conflict1, "rework"),
     expect: {
       at: "implement",
-      commands: [cmd(awaited("implement-2", "implement", "run", { criteria, findings }, "implement", "run"))],
+      commands: [cmd(awaited("implement-2", "implement", "run", { requirements, findings }, "implement", "run"))],
       state: { fixRounds: 1 },
       entry: { from: "integrate", to: "implement", issued: [id("implement-2")], by: "person" },
     },

@@ -43,6 +43,7 @@ export const workItem: WorkItem = { key: "k", title: "Greet by name", body: "Say
 export const workspace = "/ws/k-1";
 export const criteria = ["greets the given name"];
 export const runbook = ["run greet Ada and read the output"];
+export const requirements = { criteria, runbook };
 export const changeset = "cs-1";
 
 export const policy: Policy = {
@@ -99,7 +100,7 @@ export const fire = (suffix: string, port: Port, op: string, payload: unknown): 
 });
 
 export const gateEvidence = (over: Partial<GateEvidence> = {}): GateEvidence => ({
-  workItem, criteria, runbook, changeset, findings: [], evidence: [], ...over,
+  workItem, requirements, changeset, findings: [], evidence: [], ...over,
 });
 
 /** An awaited `principal.decide`; its `comments` are the core's one comment-route table (harlo-51). */
@@ -130,7 +131,7 @@ export const snapshotAt = (at: Position, awaiting: Awaiting | null, over: Partia
     v: 1, delivery: D, workItem, at,
     blockedAt: null, awaiting, lastRun: awaiting?.kind === "run" ? awaiting : null, blockedCmd: null,
     seq, retries: 0, blockedCount: 0, fixRounds: 0,
-    workspace, criteria, runbook, changeset, findings: [], evidence: [], outcome: null, reason: null,
+    workspace, requirements, changeset, findings: [], evidence: [], outcome: null, reason: null,
     ...over,
   };
 };

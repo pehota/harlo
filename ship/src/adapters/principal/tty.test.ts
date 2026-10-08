@@ -16,7 +16,7 @@ const ajv = new Ajv();
 
 const workItem = { key: "k", title: "Greet by name", body: "Say hello.", url: "https://tracker.example/k" };
 const evidence: GateEvidence = {
-  workItem, criteria: ["greets Ada"], runbook: ["run greet Ada"], changeset: "abc123",
+  workItem, requirements: { criteria: ["greets Ada"], runbook: ["run greet Ada"] }, changeset: "abc123",
   findings: [{ text: "no test for empty name", ref: "greet.ts:3" }],
   evidence: [{ label: "plan", url: "file:///ws/k-1/plan.md" }], note: "workItem changed",
 };

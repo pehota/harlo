@@ -125,10 +125,10 @@ const readLog = (log: string): string[][] =>
 const promptOf = (argv: string[]): string => argv[argv.indexOf("-p") + 1]!;
 
 /** A changeset for the workspace's current HEAD on its Delivery branch, as implement would report it. */
-const checkPayload = (ws: string): CheckPayload => ({ criteria: ["c"], changeset: `ship/PROJ-1-1@${headSha(ws)}` });
+const checkPayload = (ws: string): CheckPayload => ({ requirements: ["c"], changeset: `ship/PROJ-1-1@${headSha(ws)}` });
 
 describe("agent-claude adapter: define", () => {
-  test("run maps structured output to ok{criteria, runbook}", async () => {
+  test("run maps structured output to ok{requirements: {criteria, runbook}}", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, {
@@ -140,7 +140,7 @@ describe("agent-claude adapter: define", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({
       status: "ok",
-      body: { criteria: ["greets the given name"], runbook: ["run greet Ada"] },
+      body: { requirements: { criteria: ["greets the given name"], runbook: ["run greet Ada"] } },
       evidence: [{ label: "reasoning", text: "…" }],
     });
   });
@@ -286,7 +286,7 @@ describe("agent-claude adapter: implement", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, session_id: "sess-impl-1" });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     expect(exitCode).toBe(0);
     expect(readLog(log)[0]).not.toContain("--resume");
@@ -298,7 +298,7 @@ describe("agent-claude adapter: implement", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, session_id: "sess-impl-perm" });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     const argv = readLog(log)[0]!;
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
@@ -309,7 +309,7 @@ describe("agent-claude adapter: implement", () => {
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, session_id: "sess-impl-2" });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({
@@ -329,12 +329,12 @@ describe("agent-claude adapter: implement", () => {
       { is_error: false, result: "r2", commit: true, session_id: "sess-impl-3" },
     ]);
     await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     await call({
       port: "implement", op: "run",
-      payload: { criteria: ["c"], findings: [{ text: "fix this" }] } satisfies ImplementPayload,
+      payload: { requirements: ["c"], findings: [{ text: "fix this" }] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     const [first, second] = readLog(log);
@@ -353,12 +353,12 @@ describe("agent-claude adapter: implement", () => {
       { is_error: false, result: "r2", commit: true, session_id: "sess-impl-4" },
     ]);
     await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     await call({
       port: "implement", op: "run",
-      payload: { criteria: ["c"], findings: [{ text: "fix the greeting" }] } satisfies ImplementPayload,
+      payload: { requirements: ["c"], findings: [{ text: "fix the greeting" }] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     const [first, second] = readLog(log);
@@ -381,10 +381,10 @@ describe("agent-claude adapter: implement", () => {
       { session_id: "sess-impl-fb", ...second },
     ]);
     await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [{ text: "empty name is not rejected" }], feedback };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [{ text: "empty name is not rejected" }], feedback };
     const result = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     return { ...result, ws, argv: readLog(log)[1]! };
   };
@@ -419,7 +419,7 @@ describe("agent-claude adapter: implement", () => {
       is_error: false, result: "r1", commit: true, session_id: "sess-impl-new",
       structured_output: { feedback: { outcome: "applied", reason: "kept it short" } },
     });
-    const payload: ImplementPayload = { criteria: ["greets the given name"], findings: [], feedback };
+    const payload: ImplementPayload = { requirements: { criteria: ["greets the given name"], runbook: [] }, findings: [], feedback };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     expect(exitCode).toBe(0);
     const [argv] = readLog(log);
@@ -478,7 +478,7 @@ describe("agent-claude adapter: implement", () => {
     const agentReplies = repliesFile(fx, {
       is_error: false, result: "done", commit: true, structured_output: { feedback: { outcome: "applied", reason: "x" } },
     });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     const argv = readLog(log)[0]!;
     expect(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).properties).not.toHaveProperty("feedback");
@@ -490,7 +490,7 @@ describe("agent-claude adapter: implement", () => {
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, { is_error: true, result: "boom" });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "failed", info: "boom" });
@@ -501,7 +501,7 @@ describe("agent-claude adapter: implement", () => {
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, { is_error: true, result: "boom", commit: true });
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).not.toBe(0);
     expect(stdout).toBeUndefined(); // no stdout Result line was printed: a crash, not a swallowed `failed`
@@ -525,7 +525,67 @@ describe("implement ok body contract (harlo-38)", () => {
   });
 });
 
-describe("agent-claude adapter: check", () => {
+describe("agent-claude adapter: check runs two independent passes (harlo-58)", () => {
+  test("requirements and review are separate callAgent calls, each with its own fresh session (no --resume)", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const ws = gitRepo();
+    await call({ port: "check", op: "run", payload: checkPayload(ws), home, workspace: ws, agentReplies, log });
+    const argvs = readLog(log);
+    expect(argvs).toHaveLength(2); // one call per pass, not one call producing both verdicts
+    for (const argv of argvs) expect(argv).not.toContain("--resume"); // P8: every pass is its own fresh session
+  });
+
+  test("the two passes' prompts differ: one names requirements only, the other asks for independent review", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const ws = gitRepo();
+    await call({ port: "check", op: "run", payload: checkPayload(ws), home, workspace: ws, agentReplies, log });
+    const prompts = readLog(log).map(promptOf);
+    const requirementsPrompt = prompts.find((p) => p.includes("only whether each one holds"));
+    const reviewPrompt = prompts.find((p) => p.includes("Independently review this changeset's code quality"));
+    expect(requirementsPrompt).toBeDefined();
+    expect(reviewPrompt).toBeDefined();
+    expect(requirementsPrompt).not.toBe(reviewPrompt);
+  });
+
+  test("one pass failing (fix) while the other passes (pass) still reports the fix — neither pass can mask the other's finding", async () => {
+    // A list of replies: the fake bin gives the nth call the nth reply. Both calls happen concurrently
+    // (Promise.all), so which pass gets which reply is not fixed by call order alone — but either assignment
+    // must land on the same composed verdict, proving neither pass's result depends on which ran "first".
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", structured_output: { verdict: "fix", findings: [{ text: "missing docs update" }] } },
+      { is_error: false, result: "r2", structured_output: { verdict: "pass" } },
+    ]);
+    const ws = gitRepo();
+    const { stdout } = await call({ port: "check", op: "run", payload: checkPayload(ws), home, workspace: ws, agentReplies });
+    expect(stdout).toMatchObject({
+      status: "ok", body: { verdict: "fix", findings: [{ text: "missing docs update" }] },
+    });
+  });
+
+  test("the requirements object reaching check is the exact one define produced — nothing dropped in between", async () => {
+    // Direct proof of the harlo-55 bug: define's full requirements (criteria AND runbook, plus an extra field
+    // no prior shape had) must arrive at check's prompt unmodified — not silently narrowed to just `criteria`.
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+    const ws = gitRepo();
+    const extended = { criteria: ["greets Ada"], runbook: ["run greet Ada"], docs: { applicable: true, paths: ["README.md"] } };
+    const payload: CheckPayload = { requirements: extended, changeset: checkPayload(ws).changeset };
+    await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+    for (const prompt of readLog(log).map(promptOf)) {
+      expect(prompt).toContain(JSON.stringify(extended));
+    }
+  });
+
   test("never passes --resume, even called twice for the same delivery", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
@@ -540,12 +600,17 @@ describe("agent-claude adapter: check", () => {
 
   test.each([
     { name: "pass", output: { verdict: "pass" }, body: { verdict: "pass" } },
-    { name: "fix", output: { verdict: "fix", findings: [{ text: "f1" }] }, body: { verdict: "fix", findings: [{ text: "f1" }] } },
+    {
+      name: "fix", output: { verdict: "fix", findings: [{ text: "f1" }] },
+      // Both passes independently report the same finding (a single reply answers every call) — both are
+      // kept, not deduplicated, since composeVerdicts never drops a pass's own findings for the other's sake.
+      body: { verdict: "fix", findings: [{ text: "f1" }, { text: "f1" }] },
+    },
     {
       name: "decide", output: { verdict: "decide", about: "scope", findings: [{ text: "f2" }] },
-      body: { verdict: "decide", about: "scope", findings: [{ text: "f2" }] },
+      body: { verdict: "decide", about: "scope", findings: [{ text: "f2" }, { text: "f2" }] },
     },
-  ])("maps verdict $name", async ({ output, body }) => {
+  ])("maps verdict $name (both passes get the same reply, so the composed result matches it exactly)", async ({ output, body }) => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: output });
@@ -553,7 +618,11 @@ describe("agent-claude adapter: check", () => {
     const payload = checkPayload(ws);
     const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
-    expect(stdout).toEqual({ status: "ok", body, evidence: [{ label: "reasoning", text: "r" }] });
+    // harlo-58: check now makes two independent calls (requirements + review); a single (non-list) reply
+    // answers every call, so both passes report the same verdict/findings and both contribute reasoning.
+    expect(stdout).toEqual({
+      status: "ok", body, evidence: [{ label: "reasoning", text: "r" }, { label: "reasoning", text: "r" }],
+    });
   });
 
   test("a 'decide' reply missing 'about' does not print a schema-violating Result (crash-worthy, not a bad ok)", async () => {
@@ -646,11 +715,11 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "r", commit: true, session_id: "sess-impl-ws" });
     await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies, log,
     });
     const [fresh, resumed] = readLog(log);
@@ -681,7 +750,7 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
     const ws = gitRepo();
     const main = gitRepo();
     const fx = tempDir("ship-agent-fx-");
-    const payload: ImplementPayload = { criteria: ["c"], findings: [] };
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const agentReplies = repliesFile(fx, reply(main));
     const result = await call({ port: "implement", op: "run", payload, home, workspace: ws, cwd: main, agentReplies });
     return { ...result, main: realpathSync(main) };
@@ -726,7 +795,7 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
-    const payload: CheckPayload = { criteria: ["c"], changeset: `ship/PROJ-1-1@${sha}` };
+    const payload: CheckPayload = { requirements: ["c"], changeset: `ship/PROJ-1-1@${sha}` };
     const { exitCode, stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "failed", info: `changeset commit ${sha} is not on branch ship/PROJ-1-1 in the workspace ${ws}` });
@@ -739,7 +808,7 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
-    const payload: CheckPayload = { criteria: ["c"], changeset: `main@${headSha(ws)}` };
+    const payload: CheckPayload = { requirements: ["c"], changeset: `main@${headSha(ws)}` };
     const { stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
     expect(stdout).toMatchObject({ status: "failed" });
     expect(() => readFileSync(log)).toThrow();
@@ -765,17 +834,20 @@ describe("agent-claude adapter: the main-line branch, never an assumed one (harl
     });
     const implementReplies = repliesFile(tempDir("ship-agent-fx-"), { is_error: false, result: "r", commit: true, session_id: "sess-impl" });
     await call({
-      port: "implement", op: "run", payload: { ...on, criteria: ["c"], findings: [] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { ...on, requirements: ["c"], findings: [] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies: implementReplies, log,
     });
     await call({
-      port: "implement", op: "run", payload: { ...on, criteria: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
+      port: "implement", op: "run", payload: { ...on, requirements: ["c"], findings: [{ text: "f" }] } satisfies ImplementPayload,
       home, workspace: ws, agentReplies: implementReplies, log,
     });
     const checkReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
     await call({ port: "check", op: "run", payload: { ...on, ...checkPayload(ws) }, home, workspace: ws, agentReplies: checkReplies, log });
     const argvs = readLog(log);
-    expect(argvs).toHaveLength(5);
+    // check now makes two independent calls (harlo-58: mechanical requirements + review, split) — 6 argv
+    // entries total, not 5. Their relative order between the two check calls is not guaranteed (Promise.all),
+    // but both share the same scope/base framing (checkFraming), so either serves as "the" check prompt here.
+    expect(argvs).toHaveLength(6);
     expect(argvs[1]).toContain("--resume");
     expect(argvs[3]).toContain("--resume");
     const [defineFresh, defineResumed, implementFresh, implementResumed, check] = argvs.map(promptOf);
@@ -838,7 +910,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
     const home = tempDir("ship-agent-home-");
     const ws = gitRepo();
     const agentReplies = repliesFile(tempDir("ship-agent-fx-"), reply);
-    const given = payload ?? (port === "define" ? {} : port === "implement" ? { criteria: ["c"], findings: [] } : checkPayload(ws));
+    const given = payload ?? (port === "define" ? {} : port === "implement" ? { requirements: ["c"], findings: [] } : checkPayload(ws));
     return { ...(await call({ port, op: "run", payload: given, home, workspace: ws, agentReplies })), ws };
   };
 
@@ -847,7 +919,8 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
       is_error: false, result: "r", structured_output: { criteria: ["c"], runbook: ["r"] }, ...CLI_USAGE,
     });
     expect(stdout).toEqual({
-      status: "ok", body: { criteria: ["c"], runbook: ["r"] }, evidence: [{ label: "reasoning", text: "r" }, usageItem()],
+      status: "ok", body: { requirements: { criteria: ["c"], runbook: ["r"] } },
+      evidence: [{ label: "reasoning", text: "r" }, usageItem()],
     });
   });
 
@@ -859,10 +932,14 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
     });
   });
 
-  test("check ok carries the reasoning, then the usage item", async () => {
+  test("check ok carries both passes' reasoning and usage (harlo-58: requirements pass then review pass)", async () => {
     const { stdout } = await run("check", { is_error: false, result: "r", structured_output: { verdict: "pass" }, ...CLI_USAGE });
     expect(stdout).toEqual({
-      status: "ok", body: { verdict: "pass" }, evidence: [{ label: "reasoning", text: "r" }, usageItem()],
+      status: "ok", body: { verdict: "pass" },
+      evidence: [
+        { label: "reasoning", text: "r" }, usageItem(),
+        { label: "reasoning", text: "r" }, usageItem(),
+      ],
     });
   });
 
@@ -879,22 +956,36 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
     expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes", evidence: [usageItem()] });
   });
 
-  test.each(["define", "implement", "check"] as const)("%s is_error with no commit is failed with the usage", async (port) => {
+  test.each(["define", "implement"] as const)("%s is_error with no commit is failed with the usage", async (port) => {
     const { exitCode, stdout } = await run(port, { is_error: true, result: "boom", ...CLI_USAGE });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "failed", info: "boom", evidence: [usageItem()] });
   });
 
-  test("a reply the adapter rejects after parsing is failed with the usage too", async () => {
+  test("check is_error with no commit is failed with both passes' reasoning and usage (harlo-58: two calls)", async () => {
+    const { exitCode, stdout } = await run("check", { is_error: true, result: "boom", ...CLI_USAGE });
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({
+      status: "failed", info: "boom",
+      evidence: [
+        { label: "reasoning", text: "boom" }, usageItem(),
+        { label: "reasoning", text: "boom" }, usageItem(),
+      ],
+    });
+  });
+
+  test("a reply the adapter rejects after parsing is failed with both passes' usage (harlo-58: two calls)", async () => {
     const { stdout } = await run("check", { is_error: false, result: "r", structured_output: { verdict: "nope" }, ...CLI_USAGE });
-    expect(stdout).toMatchObject({ status: "failed", evidence: [usageItem()] });
+    expect(stdout).toMatchObject({
+      status: "failed", evidence: [{ label: "reasoning", text: "r" }, usageItem(), { label: "reasoning", text: "r" }, usageItem()],
+    });
   });
 
   test("feedback replies: no valid outcome, or applied with no commit, are failed with the usage", async () => {
     for (const structured_output of [{ summary: "x" }, { feedback: { outcome: "applied", reason: "done" } }]) {
       const { stdout } = await run(
         "implement", { is_error: false, result: "r", structured_output, ...CLI_USAGE },
-        { criteria: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
+        { requirements: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
       );
       expect(stdout).toMatchObject({ status: "failed", evidence: [usageItem()] });
     }
@@ -911,7 +1002,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
   test("no valid feedback outcome after a commit, and a stray-workspace crash, both end stderr with the usage line", async () => {
     const feedback = await run(
       "implement", { is_error: false, result: "r", commit: true, structured_output: { summary: "x" }, ...CLI_USAGE },
-      { criteria: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
+      { requirements: ["c"], findings: [], feedback: "do it" } satisfies ImplementPayload,
     );
     expect(feedback.exitCode).not.toBe(0);
     expect(usageLine(feedback.stderr)).toBe(`ship-usage: ${JSON.stringify(USAGE)}`);
@@ -923,7 +1014,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
       is_error: false, result: "done", commit: true, commitIn: main, ...CLI_USAGE,
     });
     const stray = await call({
-      port: "implement", op: "run", payload: { criteria: ["c"], findings: [] }, home, workspace: ws, cwd: main, agentReplies,
+      port: "implement", op: "run", payload: { requirements: ["c"], findings: [] }, home, workspace: ws, cwd: main, agentReplies,
     });
     expect(stray.exitCode).not.toBe(0);
     expect(usageLine(stray.stderr)).toBe(`ship-usage: ${JSON.stringify(USAGE)}`);
@@ -968,10 +1059,10 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
     });
 
     const implement = (payload: ImplementPayload) => call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
-    expect((await implement({ criteria: ["c"], findings: [] })).stdout).toEqual({
+    expect((await implement({ requirements: ["c"], findings: [] })).stdout).toEqual({
       status: "failed", info: "agent finished without committing any changes", evidence: [usageItem({ ...USAGE, costUsd: 0.2 })],
     });
-    const crashed = await implement({ criteria: ["c"], findings: [{ text: "f" }] });
+    const crashed = await implement({ requirements: ["c"], findings: [{ text: "f" }] });
     expect(crashed.exitCode).not.toBe(0);
     expect(usageLine(crashed.stderr)).toBe(`ship-usage: ${JSON.stringify({ ...USAGE, costUsd: 0.15 })}`);
   });

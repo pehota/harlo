@@ -170,6 +170,11 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 
 **Step ports (op `run`):**
 
+> **Stale since harlo-58** (this plan is frozen, see the header — the code is current, this table is not):
+> `criteria`/`runbook` below became one opaque `requirements` field on `define`/`implement`/`check`/`verify`,
+> carried through unchanged by the core rather than two named string-array fields. See
+> `src/contracts/ports.ts` and `docs/architecture.md` for the current shape.
+
 | Port | payload | `ok` body |
 |---|---|---|
 | define | `{ base?: string; feedback?: string; answer?: string }` | `{ criteria: string[]; runbook: string[] }` |
@@ -204,6 +209,7 @@ Every adapter must also accept op `cancel` with payload `{target: CommandId}`. I
 | state.journal | `{ delivery }` | `{ entries: Entry[] }` (read, audit only) |
 
 ```ts
+// Stale since harlo-58: criteria/runbook below are now one opaque `requirements: unknown | null` field.
 type DecidePoint = "accept" | "decision" | "land" | "failure" | "blocked";  // blocked is a state, not a Gate
 type GateEvidence = {
   workItem: WorkItem; criteria: string[] | null; runbook: string[] | null;
@@ -276,6 +282,7 @@ type Snapshot = {
   blockedCount: number;                        // consecutive visits to Blocked without `node` ever succeeding
   fixRounds: number;
   workspace: string | null;
+  // Stale since harlo-58: this is now one opaque `requirements: unknown | null` field, not criteria/runbook.
   criteria: string[] | null; runbook: string[] | null; changeset: string | null;
   findings: Finding[];                         // latest verdict's findings
   evidence: EvidenceItem[];                    // appended, never read (P9)
@@ -410,6 +417,10 @@ Notation:
 | S6 | snapshots for another key sharing a prefix (`k-12-1` for key `k-1`) | not counted | | Runner filters `state.workItem.key === key` |
 
 ### 4.2 Happy path
+
+> **Stale since harlo-58:** every `criteria`/`runbook` payload field named in §4.2–§4.9's rows below is now
+> one opaque `requirements` field, carried through unchanged — the row-level transition logic they illustrate
+> is still accurate, only the literal field names in each row's command/payload column are not.
 
 | # | state | signal | → | commands | snapshot / entry |
 |---|---|---|---|---|---|

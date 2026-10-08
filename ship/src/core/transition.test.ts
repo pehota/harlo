@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { start } from "./start";
 import { transition } from "./transition";
 import type { Command, Snapshot } from "./types";
-import { awaited, changeset, criteria, policy, runbook, snapshotAt, workItem } from "./fixtures/builders.fixture";
+import { awaited, changeset, policy, requirements, snapshotAt, workItem } from "./fixtures/builders.fixture";
 import { applyTransition, ignoredRows, transitionRows } from "./fixtures/rows.fixture";
 
 describe("transition (§4)", () => {
@@ -75,7 +75,7 @@ describe("the main-line base flows from workspace.setup into every agent step (h
     const answeredDefine = decided(asked(defined1), "hi"); // a question's answer re-runs Define
     expect(run(answeredDefine)).toMatchObject({ port: "define", payload: { base: "dogfood", answer: "hi" } });
 
-    const accept = reply(answeredDefine, { criteria, runbook });
+    const accept = reply(answeredDefine, { requirements });
     const implement1 = decided(accept, "accept", "keep it short"); // Define-gate comment → Implement feedback
     expect(run(implement1)).toMatchObject({ port: "implement", payload: { base: "dogfood", feedback: "keep it short" } });
 
@@ -98,12 +98,12 @@ describe("the main-line base flows from workspace.setup into every agent step (h
   });
 
   test("a Delivery persisted before harlo-52 has no base: its payloads omit it and nothing throws", () => {
-    const implement1 = awaited("implement-1", "implement", "run", { criteria, findings: [] }, "implement", "run");
+    const implement1 = awaited("implement-1", "implement", "run", { requirements, findings: [] }, "implement", "run");
     const legacy = snapshotAt("implement", implement1);
     expect("base" in legacy).toBe(false);
     const check1 = reply({ state: legacy, commands: [] }, { changeset });
-    expect(run(check1).payload).toEqual({ criteria, changeset });
+    expect(run(check1).payload).toEqual({ requirements, changeset });
     const implement2 = reply(check1, { verdict: "fix", findings: [{ text: "f" }] });
-    expect(run(implement2).payload).toEqual({ criteria, findings: [{ text: "f" }] });
+    expect(run(implement2).payload).toEqual({ requirements, findings: [{ text: "f" }] });
   });
 });

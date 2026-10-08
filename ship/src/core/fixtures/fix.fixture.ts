@@ -1,16 +1,16 @@
 // §4.3 fix-round and Decision-gate rows (policy fixRounds N = 2).
 import type { Finding } from "../../contracts/common";
 import {
-  type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, criteria, decide, fire, gateEvidence, id, ok,
-  snapshotAt,
+  type TransitionRow, OPTIONS, answer, awaited, changeset, cmd, decide, fire, gateEvidence, id, ok,
+  requirements, snapshotAt,
 } from "./builders.fixture";
 
 const findings: Finding[] = [{ text: "empty name is not rejected", ref: "greet.ts:3" }];
 const { decision: DECISION, land: LAND } = OPTIONS;
 
 const implementRun = (n: number, extra: Record<string, unknown> = {}) =>
-  awaited(`implement-${n}`, "implement", "run", { criteria, findings, ...extra }, "implement", "run");
-const check1 = awaited("check-1", "check", "run", { criteria, changeset }, "check", "run");
+  awaited(`implement-${n}`, "implement", "run", { requirements, findings, ...extra }, "implement", "run");
+const check1 = awaited("check-1", "check", "run", { requirements, changeset }, "check", "run");
 const integrate1 = awaited("integrate-1", "integrate", "run", { changeset }, "integrate", "run");
 const decision1 = decide("decision", 1, DECISION, "person", gateEvidence({ findings }));
 const land1 = decide("land", 1, LAND, "person", gateEvidence({ findings }));

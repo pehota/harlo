@@ -51,8 +51,7 @@ export const snapshotSchema: JSONSchemaType<Snapshot> = {
     fixRounds: { type: "integer" },
     workspace: { anyOf: [{ type: "string" }, nullSchema] },
     base: { type: "string", nullable: true }, // optional: absent on a Delivery persisted before harlo-52
-    criteria: { anyOf: [stringsSchema, nullSchema] },
-    runbook: { anyOf: [stringsSchema, nullSchema] },
+    requirements: anySchema, // JSONSchemaType cannot mark an `unknown` field required; see stdinSchema's `payload`.
     changeset: { anyOf: [{ type: "string" }, nullSchema] },
     findings: findingsSchema,
     evidence: evidenceSchema,
@@ -61,7 +60,7 @@ export const snapshotSchema: JSONSchemaType<Snapshot> = {
   },
   required: [
     "v", "delivery", "workItem", "at", "blockedAt", "awaiting", "lastRun", "blockedCmd", "seq", "retries",
-    "blockedCount", "fixRounds", "workspace", "criteria", "runbook", "changeset", "findings", "evidence",
+    "blockedCount", "fixRounds", "workspace", "changeset", "findings", "evidence",
     "outcome", "reason",
   ],
   additionalProperties: false,

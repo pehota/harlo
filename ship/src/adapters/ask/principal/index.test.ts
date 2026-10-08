@@ -51,7 +51,7 @@ describe("ask-principal", () => {
   });
 
   test("verify: no answer asks pass/fail", async () => {
-    const payload: VerifyPayload = { runbook: ["run greet Ada"] };
+    const payload: VerifyPayload = { requirements: ["run greet Ada"] };
     const ran = await call("verify", "run", payload);
     expect(ran).toMatchObject({
       exit: 0,
@@ -60,13 +60,13 @@ describe("ask-principal", () => {
   });
 
   test("verify: answer pass returns ok verdict pass", async () => {
-    const payload: VerifyPayload = { runbook: ["run greet Ada"], answer: "pass" };
+    const payload: VerifyPayload = { requirements: ["run greet Ada"], answer: "pass" };
     const ran = await call("verify", "run", payload);
     expect(ran).toEqual({ exit: 0, stdout: { status: "ok", body: { verdict: "pass" } } });
   });
 
   test("verify: answer fail returns ok verdict fail with findings", async () => {
-    const payload: VerifyPayload = { runbook: ["run greet Ada"], answer: "fail" };
+    const payload: VerifyPayload = { requirements: ["run greet Ada"], answer: "fail" };
     const ran = await call("verify", "run", payload);
     expect(ran).toEqual({
       exit: 0,

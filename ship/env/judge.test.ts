@@ -52,7 +52,7 @@ const answer = (text: string, comment?: string) =>
 
 const HAPPY_NO_USAGE = {
   "workspace.setup": { status: "ok", body: { path: "/ws/whatever", base: "trunk" } },
-  "define.run": [{ status: "ok", body: { criteria: ["c"], runbook: ["r"] } }],
+  "define.run": [{ status: "ok", body: { requirements: { criteria: ["c"], runbook: ["r"] } } }],
 };
 
 const runJudge = async (
@@ -81,8 +81,8 @@ describe("env/judge", () => {
     const p = project({
       "workspace.setup": { status: "ok", body: { path: "/ws/whatever", base: "trunk" } },
       "define.run": [
-        okE({ criteria: ["c1"], runbook: ["r1"] }, "reasoning-define-1"),
-        okE({ criteria: ["c2"], runbook: ["r2"] }, "reasoning-define-2"),
+        okE({ requirements: { criteria: ["c1"], runbook: ["r1"] } }, "reasoning-define-1"),
+        okE({ requirements: { criteria: ["c2"], runbook: ["r2"] } }, "reasoning-define-2"),
       ],
       "implement.run": [okE({ changeset }, "reasoning-implement-1")],
       "check.run": [okE({ verdict: "pass" }, "reasoning-check-1")],
@@ -150,7 +150,7 @@ describe("env/judge", () => {
   test("no --root: implement's changeset is shown without attempting `git show`", async () => {
     const p = project({
       "workspace.setup": { status: "ok", body: { path: "/ws/whatever", base: "trunk" } },
-      "define.run": [{ status: "ok", body: { criteria: ["c"], runbook: ["r"] } }],
+      "define.run": [{ status: "ok", body: { requirements: { criteria: ["c"], runbook: ["r"] } } }],
       "implement.run": [{ status: "ok", body: { changeset: `ship/${D}@deadbeef` } }],
       "check.run": [{ status: "ok", body: { verdict: "pass" } }],
       "integrate.run": [{ status: "ok", body: { verdict: "landed" } }],
@@ -197,6 +197,10 @@ describe("env/judge", () => {
     };
 
     test("every step-call's usage is journaled and rendered, crashed ones included, then totalled", async () => {
+      // harlo-58: check now makes two independent callAgent calls (requirements pass, then review pass) per
+      // check step — the fake CLI's replies list is consumed in call order across BOTH, so check-1 here
+      // consumes two scripted replies, not one. Both are scripted identically (same verdict/usage) so the
+      // composed result and the per-call usage math stay easy to reason about.
       const p = project({ "workspace.setup": { status: "ok", body: { path: workspace(), base: "main" } } });
       withAgent(p, [
         // define-1: ok
@@ -205,7 +209,8 @@ describe("env/judge", () => {
         { is_error: false, result: "r-impl-1", session_id: "s-impl", ...usage(2, 0.2) },
         // implement-2: commits -> ok (a fresh session: no delta in its payload)
         { is_error: false, result: "r-impl-2", session_id: "s-impl", commit: true, ...usage(3, 0.3) },
-        // check-1: fix -> implement-3, resuming s-impl
+        // check-1: two passes, both fix -> implement-3, resuming s-impl
+        { is_error: false, result: "r-check", structured_output: { verdict: "fix", findings: [{ text: "f" }] }, ...usage(4, 0.4) },
         { is_error: false, result: "r-check", structured_output: { verdict: "fix", findings: [{ text: "f" }] }, ...usage(4, 0.4) },
         // implement-3: is_error after a commit -> crash; session total 0.75 is 0.45 for this call
         { is_error: true, result: "boom", session_id: "s-impl", commit: true, ...usage(5, 0.75) },
@@ -217,15 +222,16 @@ describe("env/judge", () => {
 
       // The journal itself: a usage item in each step-call's `result`, the usage line in the crash's info.
       const entries = await p.journal();
-      const usageIn = (id: string) => {
+      const usageOf = (id: string) => {
         const entry = entries.find((e) => e.signal.kind === "result" && e.signal.id === `${D}/${id}`);
         const result = entry?.signal.kind === "result" ? entry.signal.result : undefined;
-        return result?.evidence?.find((e) => e.label === "usage")?.usage;
+        return result?.evidence?.filter((e) => e.label === "usage").map((e) => e.usage) ?? [];
       };
-      expect(usageIn("define-1")).toMatchObject({ inputTokens: 1, costUsd: 0.1 });
-      expect(usageIn("implement-1")).toMatchObject({ inputTokens: 2, costUsd: 0.2 });
-      expect(usageIn("implement-2")).toMatchObject({ inputTokens: 3, costUsd: 0.3 });
-      expect(usageIn("check-1")).toMatchObject({ inputTokens: 4, costUsd: 0.4 });
+      expect(usageOf("define-1")).toMatchObject([{ inputTokens: 1, costUsd: 0.1 }]);
+      expect(usageOf("implement-1")).toMatchObject([{ inputTokens: 2, costUsd: 0.2 }]);
+      expect(usageOf("implement-2")).toMatchObject([{ inputTokens: 3, costUsd: 0.3 }]);
+      // check-1 carries BOTH passes' usage items, each a fresh session (costUsd: 0.4, not a delta of the other).
+      expect(usageOf("check-1")).toMatchObject([{ inputTokens: 4, costUsd: 0.4 }, { inputTokens: 4, costUsd: 0.4 }]);
       const crash = entries.find((e) => e.signal.kind === "adapter_error" && e.signal.id === `${D}/implement-3`);
       expect(crash?.info?.trimEnd().split("\n").at(-1)).toBe(
         `ship-usage: ${JSON.stringify({ inputTokens: 5, outputTokens: 10, cacheReadTokens: 15, cacheCreationTokens: 20, costUsd: 0.45, durationMs: 5000, turns: 5 })}`,
@@ -257,6 +263,9 @@ describe("env/judge", () => {
       expect(block(out, "accept-1")).toContain("-- USAGE --\n(none)");
 
       // total: every call with usage, whatever its outcome; setup-1 and the accept gate are the calls without.
+      // check-1 carries two usage items (both passes) but judge.ts's per-call usage display (and this total)
+      // only reads the first one (usageOf's `.find`) — unchanged by harlo-58, so the sums match the single-pass
+      // numbers exactly as before.
       const total = out.slice(out.indexOf(`=== TOTAL ${D} ===`));
       expect(total).toContain("input tokens: 15\noutput tokens: 30\ncache-read tokens: 45\ncache-write tokens: 60\n"
         + "cost: $1.4500\nduration: 15.0s\nturns: 15");
@@ -312,7 +321,7 @@ describe("env/judge from a set-up repo (no plumbing flags)", () => {
   };
 
   test("no delivery: lists every Delivery, closed/abandoned included, most recent first, exit 0", async () => {
-    const defined = { status: "ok", body: { criteria: ["c"], runbook: ["r"] } };
+    const defined = { status: "ok", body: { requirements: { criteria: ["c"], runbook: ["r"] } } };
     const p = project({ ...HAPPY_NO_USAGE, "define.run": [defined, defined] }); // one Define per Delivery
     gitInit(p);
     await p.ship("start", "k"); // k-1, parked at accept-1

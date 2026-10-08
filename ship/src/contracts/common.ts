@@ -48,10 +48,12 @@ export type RunnerStdin = Omit<Stdin, "id" | "delivery" | "workItem"> & {
 };
 
 export type DecidePoint = "accept" | "decision" | "land" | "failure" | "blocked"; // blocked is a state, not a Gate
+/** Whatever a configured Define adapter emits (harlo-58): the core never names or requires a shape inside it —
+ *  only that it exists and is carried unchanged from Define's output to every later step/gate that needs it. */
+export type Requirements = unknown;
 export type GateEvidence = {
   workItem: WorkItem;
-  criteria: string[] | null;
-  runbook: string[] | null;
+  requirements: Requirements | null;
   changeset: string | null;
   findings: Finding[];
   evidence: EvidenceItem[];
@@ -133,14 +135,13 @@ export const gateEvidenceSchema: JSONSchemaType<GateEvidence> = {
   type: "object",
   properties: {
     workItem: workItemSchema,
-    criteria: { anyOf: [stringsSchema, nullSchema] },
-    runbook: { anyOf: [stringsSchema, nullSchema] },
+    requirements: anySchema, // JSONSchemaType cannot mark an `unknown` field required; see stdinSchema's `payload`.
     changeset: { anyOf: [{ type: "string" }, nullSchema] },
     findings: findingsSchema,
     evidence: evidenceSchema,
     note: { type: "string", nullable: true },
   },
-  required: ["workItem", "criteria", "runbook", "changeset", "findings", "evidence"],
+  required: ["workItem", "changeset", "findings", "evidence"],
   additionalProperties: false,
 };
 

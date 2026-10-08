@@ -141,7 +141,7 @@ export class Sim {
       case "workspace.teardown": return r === 0 ? failed : ok({});
       case "tracker.update": return r === 0 ? failed : ok({});
       case "define.run":
-        return r === 0 ? failed : r === 1 ? question("clarify") : ok({ criteria: ["greets"], runbook: ["run greet"] });
+        return r === 0 ? failed : r === 1 ? question("clarify") : ok({ requirements: { criteria: ["greets"], runbook: ["run greet"] } });
       case "implement.run": return r === 0 ? failed : r === 1 ? question("clarify") : ok({ changeset: "cs" });
       case "check.run":
         if (r === 0) return failed;

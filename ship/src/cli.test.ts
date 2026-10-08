@@ -175,7 +175,7 @@ describe("ship signal", () => {
     const p = project();
     await p.ship("start", "k");
     expect((await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }))).out).toMatchObject({ awaiting: "k-1/define-1" });
-    const defined = await p.ship("signal", "k-1", "k-1/define-1", ok({ criteria: ["greets"], runbook: ["greet Ada"] }));
+    const defined = await p.ship("signal", "k-1", "k-1/define-1", ok({ requirements: { criteria: ["greets"], runbook: ["greet Ada"] } }));
     expect(defined.out).toMatchObject({ awaiting: "k-1/accept-1" });
     const ran = await p.ship("signal", "k-1", "k-1/accept-1", ok({ answer: "maybe", by: "person" }));
     expect(ran.exit).toBe(0);
@@ -323,7 +323,7 @@ describe("telemetry", () => {
     p.configure({ telemetry: ["bash", RECORDING_TELEMETRY] });
     await p.ship("start", "k");
     await p.ship("signal", "k-1", "k-1/setup-1", ok({ path: "/ws/k-1", base: "trunk" }));
-    await p.ship("signal", "k-1", "k-1/define-1", ok({ criteria: ["greets"], runbook: ["greet Ada"] }));
+    await p.ship("signal", "k-1", "k-1/define-1", ok({ requirements: { criteria: ["greets"], runbook: ["greet Ada"] } }));
     const events = p.telemetryEvents();
     const setup = events.filter((e) => e.name === "setup");
     expect(setup.map((e) => e.phase)).toEqual(["start", "resolved"]);

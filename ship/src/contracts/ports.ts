@@ -1,9 +1,9 @@
 // Port → op → {stdin, payload, result, stdout} schemas (plan §3.2). Each payload and `ok` body is written once as
 // a TS type and once as a JSONSchemaType of it; `entry` composes the Result/Stdout variants per kind of call.
 import type { JSONSchemaType, SchemaObject } from "ajv";
-import type { CommandId, DeliveryId, Finding, GateEvidence, Port, PrincipalKind, WorkItem } from "./common";
+import type { CommandId, DeliveryId, Finding, GateEvidence, Port, PrincipalKind, Requirements, WorkItem } from "./common";
 import {
-  PORTS, acceptedSchema, decideSchema, failedSchema, findingsSchema, gateEvidenceSchema, okSchema,
+  PORTS, acceptedSchema, anySchema, decideSchema, failedSchema, findingsSchema, gateEvidenceSchema, okSchema,
   principalKindSchema, questionSchema, runnerStdinSchema, stdinSchema, stringsSchema, workItemSchema, nullSchema,
 } from "./common";
 import type { Snapshot } from "../core/types";
@@ -12,12 +12,15 @@ import { snapshotSchema, timedEntrySchema, type TimedEntry } from "./snapshot";
 // ── Step ports (op `run`) ──
 // base: the main-line branch the Delivery branched off (SetupBody.base); absent only for a Delivery set up before it.
 export type DefinePayload = { base?: string; feedback?: string; answer?: string };
-export type DefineBody = { criteria: string[]; runbook: string[] };
-export type ImplementPayload = { base?: string; criteria: string[]; findings: Finding[]; feedback?: string; answer?: string };
+// requirements: whatever the Define adapter emits (harlo-58) — the core carries it unchanged, never interprets it.
+export type DefineBody = { requirements: Requirements };
+export type ImplementPayload = {
+  base?: string; requirements: Requirements; findings: Finding[]; feedback?: string; answer?: string;
+};
 /** `feedback` is present exactly when the payload carried `feedback`: what the agent did with the Principal's comment. */
 export type ImplementFeedback = { outcome: "applied" | "declined"; reason: string };
 export type ImplementBody = { changeset: string; feedback?: ImplementFeedback }; // changeset: opaque ref
-export type CheckPayload = { base?: string; criteria: string[]; changeset: string; answer?: string };
+export type CheckPayload = { base?: string; requirements: Requirements; changeset: string; answer?: string };
 export type CheckBody =
   | { verdict: "pass" }
   | { verdict: "fix"; findings: Finding[] }
@@ -26,7 +29,7 @@ export type IntegratePayload = { changeset: string; answer?: string };
 export type IntegrateBody = { verdict: "landed" } | { verdict: "fix"; findings: Finding[] }; // conflict: question{about:"conflict"}
 export type DeployPayload = { changeset: string; answer?: string };
 export type DeployBody = { verdict: "live" } | { verdict: "not_live"; findings?: Finding[] };
-export type VerifyPayload = { runbook: string[]; answer?: string };
+export type VerifyPayload = { requirements: Requirements; answer?: string };
 export type VerifyBody = { verdict: "pass" } | { verdict: "fail"; findings: Finding[] };
 
 // ── Service ports ──
@@ -81,12 +84,14 @@ const emptySchema: JSONSchemaType<Empty> = { type: "object", properties: {}, req
 const definePayload: JSONSchemaType<DefinePayload> = { type: "object", additionalProperties: false,
   properties: { base: answer, feedback: answer, answer }, required: [],
 };
+// JSONSchemaType cannot mark an `unknown` field required (see stdinSchema's `payload`); `requirements` is left
+// out of `required` below for the same reason even though it is not optional at the TS level.
 const defineBody: JSONSchemaType<DefineBody> = { type: "object", additionalProperties: false,
-  properties: { criteria: stringsSchema, runbook: stringsSchema }, required: ["criteria", "runbook"],
+  properties: { requirements: anySchema }, required: [],
 };
 const implementPayload: JSONSchemaType<ImplementPayload> = { type: "object", additionalProperties: false,
-  properties: { base: answer, criteria: stringsSchema, findings: findingsSchema, feedback: answer, answer },
-  required: ["criteria", "findings"],
+  properties: { base: answer, requirements: anySchema, findings: findingsSchema, feedback: answer, answer },
+  required: ["findings"],
 };
 const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additionalProperties: false,
   properties: {
@@ -99,7 +104,7 @@ const implementBody: JSONSchemaType<ImplementBody> = { type: "object", additiona
   required: ["changeset"],
 };
 const checkPayload: JSONSchemaType<CheckPayload> = { type: "object", additionalProperties: false,
-  properties: { base: answer, criteria: stringsSchema, changeset: str, answer }, required: ["criteria", "changeset"],
+  properties: { base: answer, requirements: anySchema, changeset: str, answer }, required: ["changeset"],
 };
 const checkBody: JSONSchemaType<CheckBody> = {
   oneOf: [
@@ -134,7 +139,7 @@ const deployBody: JSONSchemaType<DeployBody> = {
   ],
 };
 const verifyPayload: JSONSchemaType<VerifyPayload> = { type: "object", additionalProperties: false,
-  properties: { runbook: stringsSchema, answer }, required: ["runbook"],
+  properties: { requirements: anySchema, answer }, required: [],
 };
 const verifyBody: JSONSchemaType<VerifyBody> = {
   oneOf: [

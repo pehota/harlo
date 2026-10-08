@@ -111,7 +111,9 @@ back to generic wording ("the main-line branch").
 
 ## `implement.run` and Principal feedback
 
-Payload: `{base?, criteria, findings, feedback?, answer?}`. `feedback` is the Principal's
+Payload: `{base?, requirements, findings, feedback?, answer?}` (harlo-58: `requirements` is
+whatever the Define adapter's own `ok` body returned, carried through unchanged — the core
+never names or constrains its shape, only that it exists). `feedback` is the Principal's
 comment, verbatim, from any gate answer that sends the Delivery back to Implement
 with one: Accept `accept`, Land `rework`, Decision `keep_going`, Failure
 `fix_forward`. No comment, no `feedback` key. Which answers carry a comment, and
@@ -155,7 +157,12 @@ a `dropped` option and says so.
 
 ## Coding-agent CLI spike (M1.8, `claude` 2.1.283)
 
-Real, timeboxed calls against the installed `claude` CLI, for `src/adapters/agent/claude/index.ts` (M1.9–M1.11):
+Real, timeboxed calls against the installed `claude` CLI, for `src/adapters/agent/claude/index.ts` (M1.9–M1.11).
+A historical record of what was tested, kept as-is below: the agent's own `defineSchema` still asks the model
+for `criteria`/`runbook` fields exactly as described here — that part is unchanged by harlo-58. What changed is
+only how `defineRun` wraps that reply into the port's `ok` body: `{requirements: {criteria, runbook}}`, not
+`{criteria, runbook}` directly — the adapter's own choice of what the opaque `requirements` field holds, not a
+change to what the model is asked for.
 
 - **Structured output.** `-p/--print --output-format json --json-schema '<inline
   JSON Schema>'` works, but `--json-schema` takes the schema **inline**, not a
