@@ -815,9 +815,11 @@ const declaredPathsVerdict = (
 ): { ok: true; verdict: PassVerdict } | { ok: false; info: string } => {
   const { workspace, base, sha, paths } = options;
   const range = `${base}...${sha}`;
-  const diff = git(workspace, ["diff", "--name-only", range]);
+  // -z: NUL-separated and never C-quoted, so a non-ASCII (or quote/backslash) path compares as written, not as
+  // core.quotePath's `"docs/caf\303\251.md"`.
+  const diff = git(workspace, ["diff", "-z", "--name-only", range]);
   if (diff.code !== 0) return { ok: false, info: `git diff --name-only ${range} failed in ${workspace}: ${diff.stderr.trim()}` };
-  const changed = new Set(diff.stdout.split("\n").filter((line) => line !== ""));
+  const changed = new Set(diff.stdout.split("\0").filter((path) => path !== ""));
   const missing = paths.filter((path) => !changed.has(path));
   if (missing.length === 0) return { ok: true, verdict: { verdict: "pass" } };
   return {
@@ -909,7 +911,9 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const paths = declaredPaths(payload.requirements);
   let files: PassVerdict = { verdict: "pass" };
   if (paths.length > 0) {
-    if (payload.base === undefined) {
+    // The schema lets `base` be null, and an empty one would diff from HEAD: both are as missing as an absent one.
+    const base: unknown = payload.base;
+    if (typeof base !== "string" || base === "") {
       return {
         status: "failed",
         info: `requirements declare files (${paths.join(", ")}) but the check payload has no base (the Delivery's `
@@ -917,7 +921,7 @@ const checkRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
       };
     }
     const sha = payload.changeset.slice(payload.changeset.lastIndexOf("@") + 1);
-    const declared = declaredPathsVerdict({ workspace, base: payload.base, sha, paths });
+    const declared = declaredPathsVerdict({ workspace, base, sha, paths });
     if (!declared.ok) return { status: "failed", info: declared.info };
     files = declared.verdict;
   }

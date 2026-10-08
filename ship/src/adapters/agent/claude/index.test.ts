@@ -1437,6 +1437,31 @@ describe("agent-claude adapter: Check verifies declared doc_paths against the ba
     expect(existsSync(log)).toBe(false);
   });
 
+  for (const [name, base] of [["null", null], ["empty", ""]] as const) {
+    test(`harlo-61: declared files with a ${name} base is failed saying the base is missing, without calling the agent`, async () => {
+      const home = tempDir("ship-agent-home-");
+      const fx = tempDir("ship-agent-fx-");
+      const log = join(fx, "log.jsonl");
+      const agentReplies = repliesFile(fx, { is_error: false, result: "r", structured_output: { verdict: "pass" } });
+      const ws = gitRepo();
+      const sha = commitFiles(ws, { "README.md": "x\n", "docs/greet.md": "x\n" });
+      const payload = { requirements: dodContract(), changeset: `ship/PROJ-1-1@${sha}`, base };
+      const { stdout } = await call({ port: "check", op: "run", payload, home, workspace: ws, agentReplies, log });
+      expect(stdout).toMatchObject({ status: "failed" });
+      expect((stdout as { info: string }).info).toContain("no base");
+      expect(existsSync(log)).toBe(false);
+    });
+  }
+
+  test("harlo-61: a non-ASCII declared path the changeset changed matches, not a false fix from git's path quoting", async () => {
+    const requirements = { docs: { applicable: true, doc_paths: ["docs/café.md", "notes/\"quoted\".md"] } };
+    const changed = await checkWith({ requirements, base: "main", files: { "docs/café.md": "x\n", "notes/\"quoted\".md": "x\n" } });
+    expect(changed.stdout).toMatchObject({ status: "ok", body: { verdict: "pass" } });
+    const untouched = await checkWith({ requirements, base: "main", files: { "docs/café.md": "x\n" } });
+    const findings = (untouched.stdout as { body: { findings: { ref?: string }[] } }).body.findings;
+    expect(findings.map((f) => f.ref)).toEqual(['notes/"quoted".md']);
+  });
+
   test("harlo-61: no declared files and no base changes nothing", async () => {
     const { stdout } = await checkWith({ requirements: { criteria: ["c"], runbook: ["r"] }, files: { "src/greet.ts": "x\n" } });
     expect(stdout).toMatchObject({ status: "ok", body: { verdict: "pass" } });
