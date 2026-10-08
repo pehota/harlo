@@ -1325,6 +1325,12 @@ describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)
     ["an applicable check without cmd", (c) => { delete entry(c, "tests").cmd; }, '"tests" is an applicable check without cmd and expect_exit'],
     ["an applicable check without expect_exit", (c) => { entry(c, "e2e").expect_exit = null; }, '"e2e" is an applicable check without cmd and expect_exit'],
     ["an extra check with absent applicable and no cmd", (c) => { entry(c, "lint").cmd = null; }, '"lint" is an applicable check without cmd and expect_exit'],
+    ["an inapplicable tests check with a null cmd", (c) => {
+      Object.assign(entry(c, "tests"), { cmd: null, expect_exit: null, applicable: false, reason: "r" });
+    }, '"tests" is an inapplicable check without cmd and expect_exit'],
+    ["an inapplicable extra check with a null cmd", (c) => {
+      c.requirements.push({ id: "x", type: "check", cmd: null, expect_exit: null, source: "task", proves: "p", applicable: false, reason: "r" });
+    }, '"x" is an inapplicable check without cmd and expect_exit'],
     ...["e2e", "scenario", "docs"].map((id): [string, (c: DodContract) => void, string] => [
       `${id} without an explicit applicable`, (c) => { delete entry(c, id).applicable; }, `"${id}" needs an explicit applicable true or false`,
     ]),
@@ -1340,6 +1346,16 @@ describe("agent-claude adapter: --requirements selects Define's shape (harlo-61)
       expect((stdout as { info: string }).info).toContain(why);
     });
   }
+
+  test("harlo-61: dod mode accepts an inapplicable check that keeps its cmd, and an inapplicable judgement", async () => {
+    const contract = dodContract();
+    contract.requirements.push(
+      { id: "x", type: "check", cmd: "true", expect_exit: 0, source: "task", proves: "p", applicable: false, reason: "r" },
+      { id: "y", type: "judgement", source: "task", proves: "p", applicable: false, reason: "r" },
+    );
+    const { stdout } = await defineWith("dod", contract);
+    expect(stdout).toMatchObject({ status: "ok", body: { requirements: contract } });
+  });
 
   test("harlo-61: dod mode accepts an absent applicable on a non-protocol entry (applicable by default)", async () => {
     const contract = dodContract();

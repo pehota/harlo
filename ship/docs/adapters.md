@@ -130,7 +130,7 @@ agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requiremen
     requirements: {
       id: string;                  // tests, e2e, scenario, docs, review must all be present; extra ids pass through as-is
       type: "check" | "judgement";
-      cmd?: string | null;         // check: the command; null for docs and for applicable:false
+      cmd?: string | null;         // check: the command; null only on docs and on an inapplicable e2e/scenario
       expect_exit?: number | null;
       source: string;              // protocol | task | auto-detected | …
       proves: string;              // non-empty: which part of works_when it proves
@@ -144,8 +144,9 @@ agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requiremen
 
   A reply that breaks any `contract.sh` write rule is `failed`, never `ok`. The rules:
   `works_when` missing or empty; a protocol id missing; an empty or missing `proves`;
-  `applicable:false` without a non-empty `reason`; an applicable `check` without
-  `cmd`/`expect_exit` (`docs` is exempt); `e2e`/`scenario`/`docs` without an explicit
+  `applicable:false` without a non-empty `reason`; a `check` without
+  `cmd`/`expect_exit` (only `docs`, and `e2e`/`scenario` when `applicable:false`, are
+  exempt — any other check entry needs them even when `applicable:false`); `e2e`/`scenario`/`docs` without an explicit
   `applicable`; an applicable `docs` without non-empty `doc_paths`.
   [`../test/fixtures/dod-requirements.json`](../test/fixtures/dod-requirements.json) is
   a valid example.

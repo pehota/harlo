@@ -319,7 +319,7 @@ const dodRequirementSchema = {
   properties: {
     id: { type: "string", description: "tests, e2e, scenario, docs, review, or your own id for an extra requirement." },
     type: { type: "string", enum: ["check", "judgement"], description: "check: a command with an expected exit. judgement: a reviewer's call." },
-    cmd: { type: ["string", "null"], description: "check only: the command, run from the Delivery workspace. null for docs and for an inapplicable entry." },
+    cmd: { type: ["string", "null"], description: "check only: the command, run from the Delivery workspace. null only for docs and for an inapplicable e2e or scenario; every other check entry, applicable or not, has one." },
     expect_exit: { type: ["integer", "null"], description: "check only: the exit code cmd must return. null where cmd is null." },
     source: { type: "string", description: "Where it came from: protocol, task, auto-detected." },
     proves: { type: "string", description: "Which part of works_when this requirement proves. Never empty." },
@@ -380,10 +380,7 @@ const dodContractErrors = (out: { works_when?: unknown; requirements?: unknown }
     if (entry.applicable !== undefined && !explicit) errors.push(`${name} has a non-boolean applicable`);
     const decided = entry.id === "e2e" || entry.id === "scenario" || entry.id === "docs";
     if (decided && !explicit) errors.push(`${name} needs an explicit applicable true or false`);
-    if (entry.applicable === false) {
-      if (!nonEmpty(entry.reason)) errors.push(`${name} is applicable:false without a non-empty reason`);
-      return;
-    }
+    if (entry.applicable === false && !nonEmpty(entry.reason)) errors.push(`${name} is applicable:false without a non-empty reason`);
     // docs is never machine-run (contract.sh exempts it from the cmd rule); its proof is doc_paths instead.
     if (entry.id === "docs") {
       const paths = entry.doc_paths;
@@ -392,9 +389,14 @@ const dodContractErrors = (out: { works_when?: unknown; requirements?: unknown }
       }
       return;
     }
+    // contract.sh exempts only an inapplicable e2e/scenario from the cmd rule: any other check entry, applicable or
+    // not, still carries cmd and expect_exit (an inapplicable extra requirement is better written as a judgement).
+    if ((entry.id === "e2e" || entry.id === "scenario") && entry.applicable === false) return;
     const runnable = entry.type === "check" || (decided && entry.applicable === true);
     if (runnable && (!nonEmpty(entry.cmd) || typeof entry.expect_exit !== "number")) {
-      errors.push(`${name} is an applicable check without cmd and expect_exit`);
+      errors.push(entry.applicable === false
+        ? `${name} is an inapplicable check without cmd and expect_exit (only e2e and scenario may omit them)`
+        : `${name} is an applicable check without cmd and expect_exit`);
     }
   });
   return errors;
@@ -408,8 +410,10 @@ const DOD_DEFINE_INSTRUCTIONS = [
     + "own. Every entry has a non-empty proves naming the part of works_when it proves.",
   "A check entry (type check) carries cmd and expect_exit. A judgement entry (type judgement, e.g. review) names "
     + "its agent instead.",
-  "e2e, scenario and docs each set applicable explicitly. applicable:false always needs a non-empty reason "
-    + "(cmd and expect_exit null). An applicable docs entry lists the doc files this change must update in "
+  "e2e, scenario and docs each set applicable explicitly. applicable:false always needs a non-empty reason. "
+    + "An inapplicable e2e or scenario has cmd and expect_exit null; every other check entry, applicable or not, "
+    + "keeps its cmd and expect_exit, so an extra requirement that does not apply is better written as a judgement. "
+    + "An applicable docs entry lists the doc files this change must update in "
     + "doc_paths (repo-relative) and has cmd and expect_exit null.",
 ].join("\n");
 
