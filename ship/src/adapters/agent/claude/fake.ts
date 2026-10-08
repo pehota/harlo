@@ -27,6 +27,7 @@ type Reply = {
   commit?: boolean; // when true, `git commit --allow-empty` in cwd before printing the reply
   commitIn?: string; // a repo OUTSIDE cwd to also commit in: a stray agent that cd'd elsewhere (harlo-53)
   dirty?: string; // a tracked file to append to without committing (harlo-53)
+  reportHead?: boolean; // when true, structured_output.commit = cwd's HEAD after any commit (harlo-60)
   usage?: Record<string, unknown>; // e.g. { input_tokens, output_tokens, cache_read_input_tokens, ... }
   total_cost_usd?: unknown;
   duration_ms?: unknown;
@@ -74,9 +75,16 @@ if (reply.commit) commitAt(process.cwd());
 if (reply.commitIn) commitAt(reply.commitIn);
 if (reply.dirty) appendFileSync(reply.dirty, "stray edit\n");
 
+// harlo-60: a real agent attests its own post-commit HEAD; this one reads it the same way.
+const headOf = (dir: string): string =>
+  Bun.spawnSync(["git", "-C", dir, "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
+const structuredOutput = reply.reportHead
+  ? { ...(reply.structured_output as Record<string, unknown> | undefined), commit: headOf(process.cwd()) }
+  : reply.structured_output;
+
 // JSON.stringify drops undefined fields, so a reply with no usage fields prints exactly as before harlo-56.
 console.log(JSON.stringify({
-  is_error: reply.is_error, result: reply.result, structured_output: reply.structured_output, session_id: reply.session_id,
+  is_error: reply.is_error, result: reply.result, structured_output: structuredOutput, session_id: reply.session_id,
   usage: reply.usage, total_cost_usd: reply.total_cost_usd, duration_ms: reply.duration_ms, num_turns: reply.num_turns,
 }));
 process.exit(reply.exitCode ?? 0);

@@ -35,6 +35,7 @@ type Reply = {
   commit?: boolean;
   commitIn?: string;
   dirty?: string;
+  reportHead?: boolean;
   usage?: Record<string, unknown>;
   total_cost_usd?: unknown;
   duration_ms?: unknown;
@@ -285,7 +286,7 @@ describe("agent-claude adapter: implement", () => {
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
-    const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, session_id: "sess-impl-1" });
+    const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, reportHead: true, session_id: "sess-impl-1" });
     const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
     expect(exitCode).toBe(0);
@@ -308,7 +309,7 @@ describe("agent-claude adapter: implement", () => {
     const home = tempDir("ship-agent-home-");
     const ws = gitRepo();
     const fx = tempDir("ship-agent-fx-");
-    const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, session_id: "sess-impl-2" });
+    const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, reportHead: true, session_id: "sess-impl-2" });
     const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).toBe(0);
@@ -377,7 +378,7 @@ describe("agent-claude adapter: implement", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, [
-      { is_error: false, result: "r1", commit: true, session_id: "sess-impl-fb" },
+      { is_error: false, result: "r1", commit: true, reportHead: true, session_id: "sess-impl-fb" },
       { session_id: "sess-impl-fb", ...second },
     ]);
     await call({
@@ -391,7 +392,8 @@ describe("agent-claude adapter: implement", () => {
 
   test("feedback resumes the stored session and reaches the prompt verbatim, framed as a Principal directive", async () => {
     const { exitCode, stdout, ws, argv } = await feedbackRound({
-      is_error: false, result: "r2", commit: true, structured_output: { feedback: { outcome: "applied", reason: "added the throw" } },
+      is_error: false, result: "r2", commit: true, reportHead: true,
+      structured_output: { feedback: { outcome: "applied", reason: "added the throw" } },
     });
     expect(exitCode).toBe(0);
     expect(argv[argv.indexOf("--resume") + 1]).toBe("sess-impl-fb");
@@ -402,7 +404,7 @@ describe("agent-claude adapter: implement", () => {
     expect(prompt).toContain("explicitly decline it with a stated reason");
     expect(prompt).toContain("Re-explaining or defending the existing code is not an acceptable response");
     expect(prompt).not.toContain("Feedback: ");
-    expect(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).required).toEqual(["feedback"]);
+    expect(JSON.parse(argv[argv.indexOf("--json-schema") + 1]!).required).toEqual(["commit", "feedback"]);
     expect(stdout).toEqual({
       status: "ok",
       body: { changeset: `ship/PROJ-1-1@${headSha(ws)}`, feedback: { outcome: "applied", reason: "added the throw" } },
@@ -416,7 +418,7 @@ describe("agent-claude adapter: implement", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, {
-      is_error: false, result: "r1", commit: true, session_id: "sess-impl-new",
+      is_error: false, result: "r1", commit: true, reportHead: true, session_id: "sess-impl-new",
       structured_output: { feedback: { outcome: "applied", reason: "kept it short" } },
     });
     const payload: ImplementPayload = { requirements: { criteria: ["greets the given name"], runbook: [] }, findings: [], feedback };
@@ -430,13 +432,14 @@ describe("agent-claude adapter: implement", () => {
     expect(prompt).toContain("PRINCIPAL DIRECTIVE");
     expect(prompt).toContain(feedback);
     expect(prompt).not.toContain("Continue implementing");
-    expect(JSON.parse(argv![argv!.indexOf("--json-schema") + 1]!).required).toEqual(["feedback"]);
+    expect(JSON.parse(argv![argv!.indexOf("--json-schema") + 1]!).required).toEqual(["commit", "feedback"]);
     expect(stdout).toMatchObject({ status: "ok", body: { feedback: { outcome: "applied", reason: "kept it short" } } });
   });
 
   test("an explicit decline with a reason is ok even without a new commit", async () => {
     const { stdout, ws } = await feedbackRound({
-      is_error: false, result: "r2", structured_output: { feedback: { outcome: "declined", reason: "the caller validates" } },
+      is_error: false, result: "r2", reportHead: true,
+      structured_output: { feedback: { outcome: "declined", reason: "the caller validates" } },
     });
     expect(stdout).toEqual({
       status: "ok",
@@ -476,7 +479,8 @@ describe("agent-claude adapter: implement", () => {
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, {
-      is_error: false, result: "done", commit: true, structured_output: { feedback: { outcome: "applied", reason: "x" } },
+      is_error: false, result: "done", commit: true, reportHead: true,
+      structured_output: { feedback: { outcome: "applied", reason: "x" } },
     });
     const payload: ImplementPayload = { requirements: ["c"], findings: [] };
     const { stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
@@ -505,6 +509,147 @@ describe("agent-claude adapter: implement", () => {
     const { exitCode, stdout } = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies });
     expect(exitCode).not.toBe(0);
     expect(stdout).toBeUndefined(); // no stdout Result line was printed: a crash, not a swallowed `failed`
+  });
+});
+
+describe("agent-claude adapter: implement attests its commit SHA (harlo-60)", () => {
+  /** One fresh implement call; `reply` gets the workspace's starting HEAD, so a test can claim it. */
+  const implementOnce = async (reply: (start: string) => Reply, payload: ImplementPayload = { requirements: ["c"], findings: [] }) => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const start = headSha(ws);
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, reply(start));
+    const result = await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    return { ...result, ws, start, argv: readLog(log)[0]! };
+  };
+  const withFeedback: ImplementPayload = { requirements: ["c"], findings: [], feedback: "rename it" };
+
+  test("harlo-60: both reply schemas require a hex-patterned `commit` alongside summary", async () => {
+    for (const payload of [undefined, withFeedback]) {
+      const { argv } = await implementOnce(() => ({ is_error: false, result: "r", commit: true, reportHead: true }), payload);
+      const schema = JSON.parse(argv[argv.indexOf("--json-schema") + 1]!);
+      expect(schema.required).toContain("commit");
+      expect(schema.properties.commit.type).toBe("string");
+      expect(schema.properties.commit.description).toContain("git rev-parse HEAD");
+      const pattern = new RegExp(schema.properties.commit.pattern);
+      expect(pattern.test("a".repeat(40))).toBe(true);
+      expect(pattern.test("done, committed")).toBe(false);
+    }
+  });
+
+  test("harlo-60: fresh and resumed prompts both ask for the commit SHA in the `commit` field", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "r", commit: true, reportHead: true, session_id: "sess-60" });
+    for (const findings of [[], [{ text: "f" }]]) {
+      const payload: ImplementPayload = { requirements: ["c"], findings };
+      await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log });
+    }
+    const [fresh, resumed] = readLog(log);
+    expect(resumed).toContain("--resume");
+    expect(promptOf(resumed!)).toContain("Continue implementing");
+    for (const argv of [fresh!, resumed!]) {
+      expect(promptOf(argv)).toContain("report the SHA of your commit in the `commit` field");
+      expect(promptOf(argv)).toContain("git rev-parse HEAD");
+    }
+  });
+
+  test("harlo-60 (a): a commit with no `commit` field is a crash naming the field", async () => {
+    const { exitCode, stdout, stderr } = await implementOnce(() => ({ is_error: false, result: "done", commit: true }));
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBeUndefined();
+    expect(stderr).toContain("no valid `commit` field");
+  });
+
+  test("harlo-60 (b): a commit whose claimed SHA is not HEAD is a crash naming both SHAs", async () => {
+    const { exitCode, stdout, stderr, ws, start } = await implementOnce((start) => ({
+      is_error: false, result: "done", commit: true, structured_output: { commit: start },
+    }));
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBeUndefined();
+    expect(stderr).toContain(start);
+    expect(stderr).toContain(headSha(ws));
+  });
+
+  test("harlo-60 (c): no commit but the unchanged HEAD claimed is failed, never ok", async () => {
+    const { exitCode, stdout } = await implementOnce((start) => ({
+      is_error: false, result: "done", structured_output: { commit: start },
+    }));
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes" });
+  });
+
+  test("harlo-60 (c): no commit and a well-formed SHA that is not HEAD is failed, showing both SHAs", async () => {
+    const claimed = "b".repeat(40);
+    const { stdout, start } = await implementOnce(() => ({ is_error: false, result: "done", structured_output: { commit: claimed } }));
+    expect(stdout).toMatchObject({ status: "failed" });
+    expect((stdout as { info: string }).info).toContain(claimed);
+    expect((stdout as { info: string }).info).toContain(start);
+  });
+
+  for (const [name, commit] of [["missing", undefined], ["empty", ""], ["non-string", 42], ["not SHA-shaped", "committed it"]] as const) {
+    test(`harlo-60 (d): no commit and a ${name} \`commit\` field is failed naming the field`, async () => {
+      const { exitCode, stdout } = await implementOnce(() => ({ is_error: false, result: "done", structured_output: { commit } }));
+      expect(exitCode).toBe(0);
+      expect(stdout).toMatchObject({ status: "failed" });
+      expect((stdout as { info: string }).info).toContain("no valid `commit` field");
+    });
+  }
+
+  test("harlo-60 (e): a commit with its matching SHA is ok with an unchanged body", async () => {
+    const { exitCode, stdout, ws } = await implementOnce(() => ({ is_error: false, result: "done", commit: true, reportHead: true }));
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual({
+      status: "ok", body: { changeset: `ship/PROJ-1-1@${headSha(ws)}` }, evidence: [{ label: "reasoning", text: "done" }],
+    });
+  });
+
+  test("harlo-60: an abbreviated SHA counts only as a 7+ char prefix of HEAD", async () => {
+    const declined = { outcome: "declined", reason: "out of scope" } as const;
+    const prefix = await implementOnce((start) => ({
+      is_error: false, result: "r", structured_output: { commit: start.slice(0, 7), feedback: declined },
+    }), withFeedback);
+    expect(prefix.stdout).toMatchObject({ status: "ok", body: { feedback: declined } });
+    const tooShort = await implementOnce((start) => ({
+      is_error: false, result: "r", structured_output: { commit: start.slice(0, 6), feedback: declined },
+    }), withFeedback);
+    expect((tooShort.stdout as { info: string }).info).toContain("no valid `commit` field");
+    const notPrefix = await implementOnce((start) => ({
+      is_error: false, result: "r", structured_output: { commit: start.slice(1, 9), feedback: declined },
+    }), withFeedback);
+    expect(notPrefix.stdout).toMatchObject({ status: "failed" });
+    expect((notPrefix.stdout as { info: string }).info).toContain("does not match the workspace HEAD");
+  });
+
+  test("harlo-60 (f): feedback declined with the unchanged HEAD reported is ok", async () => {
+    const { stdout, start } = await implementOnce((start) => ({
+      is_error: false, result: "r", structured_output: { commit: start, feedback: { outcome: "declined", reason: "out of scope" } },
+    }), withFeedback);
+    expect(stdout).toEqual({
+      status: "ok",
+      body: { changeset: `ship/PROJ-1-1@${start}`, feedback: { outcome: "declined", reason: "out of scope" } },
+      evidence: [{ label: "reasoning", text: "r" }],
+    });
+  });
+
+  test("harlo-60: feedback applied needs both a new commit and the new HEAD reported", async () => {
+    const stale = await implementOnce((start) => ({
+      is_error: false, result: "r", commit: true, structured_output: { commit: start, feedback: { outcome: "applied", reason: "done" } },
+    }), withFeedback);
+    expect(stale.exitCode).not.toBe(0);
+    expect(stale.stderr).toContain(stale.start);
+    const uncommitted = await implementOnce((start) => ({
+      is_error: false, result: "r", structured_output: { commit: start, feedback: { outcome: "applied", reason: "done" } },
+    }), withFeedback);
+    expect(uncommitted.stdout).toEqual({ status: "failed", info: "agent reported feedback applied but committed no changes" });
+    const good = await implementOnce(() => ({
+      is_error: false, result: "r", commit: true, reportHead: true, structured_output: { feedback: { outcome: "applied", reason: "done" } },
+    }), withFeedback);
+    expect(good.stdout).toMatchObject({ status: "ok", body: { feedback: { outcome: "applied", reason: "done" } } });
   });
 });
 
@@ -782,7 +927,7 @@ describe("agent-claude adapter: Delivery workspace, never the main-line checkout
   });
 
   test("implement stays ok when the main-line checkout is untouched", async () => {
-    const { stdout } = await strayImplement(() => ({ is_error: false, result: "done", commit: true }));
+    const { stdout } = await strayImplement(() => ({ is_error: false, result: "done", commit: true, reportHead: true }));
     expect(stdout).toMatchObject({ status: "ok" });
   });
 
@@ -925,7 +1070,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
   });
 
   test("implement ok carries the reasoning, then the usage item", async () => {
-    const { stdout, ws } = await run("implement", { is_error: false, result: "done", commit: true, ...CLI_USAGE });
+    const { stdout, ws } = await run("implement", { is_error: false, result: "done", commit: true, reportHead: true, ...CLI_USAGE });
     expect(stdout).toEqual({
       status: "ok", body: { changeset: `ship/PROJ-1-1@${headSha(ws)}` },
       evidence: [{ label: "reasoning", text: "done" }, usageItem()],
@@ -951,7 +1096,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
   });
 
   test("implement finishing without a commit stays failed, with the usage as its evidence", async () => {
-    const { exitCode, stdout } = await run("implement", { is_error: false, result: "done", ...CLI_USAGE });
+    const { exitCode, stdout } = await run("implement", { is_error: false, result: "done", reportHead: true, ...CLI_USAGE });
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes", evidence: [usageItem()] });
   });
@@ -1021,7 +1166,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
   });
 
   test("a reply without usage fields gives exactly today's Result, and a crash writes no usage line", async () => {
-    const { stdout } = await run("implement", { is_error: false, result: "done" });
+    const { stdout } = await run("implement", { is_error: false, result: "done", reportHead: true });
     expect(stdout).toEqual({ status: "failed", info: "agent finished without committing any changes" });
     const asked = await run("define", { is_error: false, result: "r", structured_output: { question: "Which?" } });
     expect(asked.stdout).toEqual({ status: "question", about: "clarify", prompt: "Which?" });
@@ -1048,7 +1193,7 @@ describe("agent-claude adapter: usage per call (harlo-56)", () => {
         ...CLI_USAGE, total_cost_usd: 0.0762618,
       },
       // implement's own fresh session: its cost never includes define's.
-      { is_error: false, result: "r3", session_id: "s-impl", ...CLI_USAGE, total_cost_usd: 0.2 },
+      { is_error: false, result: "r3", session_id: "s-impl", reportHead: true, ...CLI_USAGE, total_cost_usd: 0.2 },
       // a resumed implement that crashes after a commit: the crash line carries the delta too.
       { is_error: true, result: "boom", session_id: "s-impl", commit: true, ...CLI_USAGE, total_cost_usd: 0.35 },
     ]);

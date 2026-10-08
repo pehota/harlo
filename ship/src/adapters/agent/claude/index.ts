@@ -384,10 +384,21 @@ const defineRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
 };
 
 // ── implement ──
+/** harlo-60: the commit the agent says it made, so a reply is an attestation checked against the workspace's
+ *  real HEAD rather than free text. Lowercase hex as `git rev-parse` prints it; 7+ chars so an abbreviation
+ *  is still a usable prefix, up to 64 for SHA-256 repositories. */
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/;
+const commitProperty = {
+  type: "string",
+  pattern: COMMIT_SHA.source,
+  description: "The full SHA of the workspace's HEAD after you committed: the output of `git rev-parse HEAD` "
+    + "run in the Delivery workspace.",
+} as const;
+
 const implementSchema = {
   type: "object",
-  properties: { summary: { type: "string" } },
-  required: [],
+  properties: { summary: { type: "string" }, commit: commitProperty },
+  required: ["commit"],
   additionalProperties: false,
 } as const;
 
@@ -397,6 +408,7 @@ const implementFeedbackSchema = {
   type: "object",
   properties: {
     summary: { type: "string" },
+    commit: commitProperty,
     feedback: {
       type: "object",
       properties: { outcome: { type: "string", enum: ["applied", "declined"] }, reason: { type: "string" } },
@@ -404,7 +416,7 @@ const implementFeedbackSchema = {
       additionalProperties: false,
     },
   },
-  required: ["feedback"],
+  required: ["commit", "feedback"],
   additionalProperties: false,
 } as const;
 
@@ -430,6 +442,10 @@ type ImplementPromptArgs = {
   delivery: string;
 };
 
+/** harlo-60: every Implement prompt, fresh or resumed, asks for the commit attestation the schema requires. */
+const REPORT_COMMIT = "After you commit your changes, report the SHA of your commit in the `commit` field: the full output of "
+  + "`git rev-parse HEAD` in the Delivery workspace.";
+
 const implementPrompt = ({ workItem, payload, resume, workspace, mainLine, delivery }: ImplementPromptArgs): string => {
   const rule = workspaceRule(workspace, mainLine, delivery, payload.base);
   const delta: string[] = [];
@@ -438,10 +454,13 @@ const implementPrompt = ({ workItem, payload, resume, workspace, mainLine, deliv
   }
   if (payload.feedback !== undefined) delta.push(...feedbackDirective(payload.feedback));
   if (payload.answer !== undefined) delta.push(`Answer to your previous question: ${payload.answer}`);
-  if (resume) return [...rule, ...delta, "Continue implementing and commit your changes — no further questions."].join("\n");
+  if (resume) {
+    return [...rule, ...delta, "Continue implementing and commit your changes — no further questions.", REPORT_COMMIT].join("\n");
+  }
   return [
     `WorkItem ${workItem.key}: ${workItem.title}`,
     "Implement it in this working directory and commit your changes.",
+    REPORT_COMMIT,
     ...rule,
     ...requirementsLines(payload.requirements),
     ...delta,
@@ -455,6 +474,21 @@ const feedbackOutcome = (out: unknown): ImplementFeedback | undefined => {
   if (fb?.outcome !== "applied" && fb?.outcome !== "declined") return undefined;
   if (typeof fb.reason !== "string" || fb.reason.trim() === "") return undefined;
   return { outcome: fb.outcome, reason: fb.reason };
+};
+
+/** Why the reply's `commit` attestation does not hold for the workspace's actual HEAD, or undefined when it
+ *  does (harlo-60). Checked against `git rev-parse HEAD`, never the reply alone: a full SHA must equal HEAD, an
+ *  abbreviated one (7+ hex chars) must be a prefix of it. */
+const commitClaimError = (out: unknown, head: string): string | undefined => {
+  const claimed = (out as { commit?: unknown } | null | undefined)?.commit;
+  if (typeof claimed !== "string" || !COMMIT_SHA.test(claimed)) {
+    const got = claimed === undefined ? "missing" : `got ${JSON.stringify(claimed)}`;
+    return `agent reply has no valid \`commit\` field (the SHA from \`git rev-parse HEAD\` after committing): ${got}`;
+  }
+  if (!head.startsWith(claimed)) {
+    return `agent reply's \`commit\` ${claimed} does not match the workspace HEAD ${head}`;
+  }
+  return undefined;
 };
 
 const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
@@ -505,7 +539,17 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     return failed(ctx, reply.result); // nothing committed: safe, changed nothing
   }
   const changeset = `ship/${stdin.delivery}@${after}`;
+  /** harlo-60: the reply's `commit` must name the real HEAD before any `ok`; it adds to the before/after check
+   *  below, never replaces it. Same crash-vs-`failed` rule as a bad feedback.outcome. */
+  const claimResult = (): unknown => {
+    const claimError = commitClaimError(reply.structured_output, after);
+    if (claimError === undefined) return undefined;
+    if (committed) throw new Crash(claimError);
+    return failed(ctx, claimError);
+  };
   if (!withFeedback) {
+    const claim = claimResult();
+    if (claim !== undefined) return claim;
     if (!committed) return failed(ctx, "agent finished without committing any changes");
     return { status: "ok", body: { changeset }, ...evidenceOf(ctx, reply) };
   }
@@ -519,6 +563,8 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
     if (committed) throw new Crash(info);
     return failed(ctx, info);
   }
+  const claim = claimResult();
+  if (claim !== undefined) return claim;
   // A stated decline is a real answer, so it may leave HEAD where it was; an "applied" with no commit is not.
   if (!committed && outcome.outcome === "applied") {
     return failed(ctx, "agent reported feedback applied but committed no changes");

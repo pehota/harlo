@@ -137,6 +137,15 @@ where it goes, is the `comments` map of each `principal.decide` payload (see bel
   rejects a bad outcome or an empty `reason` as a backstop. An `applied` with no
   new commit is `failed`. A `declined` may leave HEAD unchanged; then the changeset
   is the current HEAD.
+- harlo-60: `agent/claude/index.ts` also asks every Implement reply, with or without
+  feedback, for a `commit` attestation: the SHA from `git rev-parse HEAD` after the
+  agent commits. The adapter checks it against the workspace's real HEAD. A full SHA
+  must equal HEAD; an abbreviated one needs 7+ hex chars and must be a prefix of HEAD.
+  A missing, malformed or mismatched `commit` is never `ok`. It is `failed` if nothing
+  was committed and a crash once a commit happened. This check is added to the
+  before/after HEAD comparison and does not replace it. A correct `commit` with no
+  new commit is still `failed`, unless it is a `declined` feedback reply. The `ok`
+  body does not change.
 
 ## `principal.decide` and comments
 

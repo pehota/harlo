@@ -206,9 +206,9 @@ describe("env/judge", () => {
         // define-1: ok
         { is_error: false, result: "r-define", session_id: "s-def", structured_output: { criteria: ["c"], runbook: ["r"] }, ...usage(1, 0.1) },
         // implement-1: finished without a commit -> failed, retried as implement-2
-        { is_error: false, result: "r-impl-1", session_id: "s-impl", ...usage(2, 0.2) },
+        { is_error: false, result: "r-impl-1", session_id: "s-impl", reportHead: true, ...usage(2, 0.2) },
         // implement-2: commits -> ok (a fresh session: no delta in its payload)
-        { is_error: false, result: "r-impl-2", session_id: "s-impl", commit: true, ...usage(3, 0.3) },
+        { is_error: false, result: "r-impl-2", session_id: "s-impl", commit: true, reportHead: true, ...usage(3, 0.3) },
         // check-1: two passes, both fix -> implement-3, resuming s-impl
         { is_error: false, result: "r-check", structured_output: { verdict: "fix", findings: [{ text: "f" }] }, ...usage(4, 0.4) },
         { is_error: false, result: "r-check", structured_output: { verdict: "fix", findings: [{ text: "f" }] }, ...usage(4, 0.4) },
