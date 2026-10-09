@@ -81,22 +81,22 @@ type CallOpts = {
   delivery?: string;
   workspace?: string | null;
   log?: string;
-  pluginDirs?: string[];
+  agentArgs?: string[]; // harlo-64: each passed as one `--agent-arg=<token>`
   cwd?: string; // the adapter's own cwd (the main-line checkout); defaults to a fresh non-repo dir
   cwdLog?: string;
   requirementsMode?: string; // harlo-61: passed as `--requirements <mode>` when set; absent means the default
 };
 
-/** Run `agent/claude/index.ts --agent-bin <fake> [--plugin-dir <dir>]... <port> <op>` with a Stdin envelope, as the Runner does. */
+/** Run `agent/claude/index.ts --agent-bin <fake> [--agent-arg=<token>]... <port> <op>` with a Stdin envelope, as the Runner does. */
 const call = async (opts: CallOpts): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
   const delivery = opts.delivery ?? "PROJ-1-1";
   const stdin: Stdin = {
     id: `${delivery}/${opts.port}-1`, delivery, port: opts.port, op: opts.op,
     workItem, workspace: opts.workspace === undefined ? gitRepo() : opts.workspace, payload: opts.payload, tools: [],
   };
-  const pluginDirArgs = (opts.pluginDirs ?? []).flatMap((dir) => ["--plugin-dir", dir]);
+  const agentArgArgs = (opts.agentArgs ?? []).map((token) => `--agent-arg=${token}`);
   const modeArgs = opts.requirementsMode === undefined ? [] : ["--requirements", opts.requirementsMode];
-  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, ...modeArgs, opts.port, opts.op], {
+  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...agentArgArgs, ...modeArgs, opts.port, opts.op], {
     stdin: new Blob([JSON.stringify(stdin)]),
     // Never the repo running these tests: the implement guard would watch it as the main-line checkout.
     cwd: opts.cwd ?? tempDir("ship-agent-cwd-"),
@@ -196,7 +196,7 @@ describe("agent-claude adapter: define", () => {
     expect(prompt(second!)).toContain("formal");
   });
 
-  test("always passes --safe-mode to the agent bin", async () => {
+  test("harlo-64: with no --agent-arg the exact argv is protocol + isolation set + --disallowedTools, no --safe-mode", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
@@ -204,7 +204,13 @@ describe("agent-claude adapter: define", () => {
       is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
     });
     await call({ port: "define", op: "run", payload: {}, home, agentReplies, log });
-    expect(readLog(log)[0]).toContain("--safe-mode");
+    const argv = readLog(log)[0]!;
+    expect(argv).toEqual([
+      "-p", promptOf(argv), "--output-format", "json", "--json-schema", argv[argv.indexOf("--json-schema") + 1]!,
+      "--setting-sources", "project", "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
+      "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "bypassPermissions",
+      "--disallowedTools", "Edit", "Write", "NotebookEdit",
+    ]);
   });
 
   test("fails instead of looping when the agent repeats the same question after being answered", async () => {
@@ -253,14 +259,14 @@ describe("agent-claude adapter: define", () => {
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
   });
 
-  test("forwards configured --plugin-dir entries to the agent bin, in order", async () => {
+  test("harlo-64: forwards --agent-arg=--plugin-dir entries to the agent bin, in order", async () => {
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, {
       is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] },
     });
-    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, pluginDirs: ["/a/dod", "/b/other"] });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, agentArgs: ["--plugin-dir=/a/dod", "--plugin-dir=/b/other"] });
     const argv = readLog(log)[0]!;
     expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(2);
     expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
@@ -1564,5 +1570,89 @@ describe("agent-claude adapter: Check verifies declared doc_paths against the ba
     const bad = await call({ port: "check", op: "run", payload: { ...payload, base: "no-such-branch" }, home, workspace: ws, agentReplies });
     expect(bad.stdout).toMatchObject({ status: "failed" });
     expect((bad.stdout as { info: string }).info).toContain("no-such-branch...");
+  });
+});
+
+describe("agent-claude adapter: --agent-arg (harlo-64)", () => {
+  /** Spawns the adapter with raw `flags` and no stdin, as the startup-error tests for --requirements do. */
+  const startWith = async (flags: string[]) => {
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] } });
+    const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...flags, "define", "run"], {
+      stdin: new Blob(["{}"]), cwd: tempDir("ship-agent-cwd-"), stdout: "pipe", stderr: "pipe",
+      env: { PATH: process.env.PATH ?? "", HOME: tempDir("ship-agent-home-"), FAKE_AGENT_REPLIES: agentReplies, FAKE_AGENT_LOG: log },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, exitCode, called: existsSync(log) };
+  };
+
+  for (const flag of ["--print", "--output-format", "--json-schema", "--resume", "--disallowedTools", "--disallowed-tools"]) {
+    test(`harlo-64: --agent-arg=${flag} fails at startup naming ${flag}`, async () => {
+      const { stdout, stderr, exitCode, called } = await startWith([`--agent-arg=${flag}=x`]);
+      expect(exitCode).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(flag);
+      expect(called).toBe(false);
+    });
+  }
+
+  for (const [name, flags, named] of [
+    ["a token not starting with --", ["--agent-arg=-p"], '"-p"'],
+    ["the removed adapter --plugin-dir option", ["--plugin-dir", "/a/dod"], "--plugin-dir"],
+    ["a dash-leading --agent-arg token given separately", ["--agent-arg", "--plugin-dir=/a"], "--agent-arg"],
+  ] as const) {
+    test(`harlo-64: ${name} fails at startup, naming it`, async () => {
+      const { stdout, stderr, exitCode, called } = await startWith([...flags]);
+      expect(exitCode).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(named);
+      expect(called).toBe(false);
+    });
+  }
+
+  test("harlo-64: a configured --mcp-config replaces the empty default; an unknown flag is appended", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] } });
+    const mcp = '{"mcpServers":{"docs":{"command":"npx","args":["some-mcp"]}}}';
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, agentArgs: [`--mcp-config=${mcp}`, "--verbose"] });
+    const argv = readLog(log)[0]!;
+    expect(argv.filter((a) => a === "--mcp-config")).toHaveLength(1);
+    expect(argv[argv.indexOf("--mcp-config") + 1]).toBe(mcp);
+    expect(argv).toContain("--verbose");
+    expect(argv).toContain("--strict-mcp-config");
+  });
+
+  test("harlo-64: with --agent-args set, define still resumes and keeps --disallowedTools", async () => {
+    const home = tempDir("ship-agent-home-");
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, [
+      { is_error: false, result: "r1", session_id: "sess-64", structured_output: { question: "Which?" } },
+      { is_error: false, result: "r2", session_id: "sess-64", structured_output: { criteria: ["c"], runbook: ["r"] } },
+    ]);
+    const agentArgs = ["--plugin-dir=/a/dod"];
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, agentArgs });
+    await call({ port: "define", op: "run", payload: { answer: "this" } satisfies DefinePayload, home, agentReplies, log, agentArgs });
+    const second = readLog(log)[1]!;
+    expect(second[second.indexOf("--resume") + 1]).toBe("sess-64");
+    expect(second[second.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
+    expect(second.slice(second.indexOf("--disallowedTools") + 1)).toEqual(["Edit", "Write", "NotebookEdit"]);
+  });
+
+  test("harlo-64: with --agent-args set, implement passes them and no --disallowedTools", async () => {
+    const home = tempDir("ship-agent-home-");
+    const ws = gitRepo();
+    const fx = tempDir("ship-agent-fx-");
+    const log = join(fx, "log.jsonl");
+    const agentReplies = repliesFile(fx, { is_error: false, result: "done", commit: true, reportHead: true, session_id: "sess-impl-64" });
+    const payload: ImplementPayload = { requirements: ["c"], findings: [] };
+    await call({ port: "implement", op: "run", payload, home, workspace: ws, agentReplies, log, agentArgs: ["--plugin-dir=/a/dod"] });
+    const argv = readLog(log)[0]!;
+    expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
+    expect(argv).toContain("--setting-sources");
+    expect(argv).not.toContain("--disallowedTools");
   });
 });

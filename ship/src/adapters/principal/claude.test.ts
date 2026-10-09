@@ -3,7 +3,7 @@
 // with no human interaction — the whole point of an unattended queue.
 import { afterEach, describe, expect, test } from "bun:test";
 import Ajv from "ajv";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommentRoute, Decide, GateEvidence, Stdin } from "../../../src/contracts/common";
@@ -39,16 +39,16 @@ const repliesFile = (dir: string, replies: Reply | Reply[]): string => {
   return file;
 };
 
-/** Run `principal/claude.ts --agent-bin <fake> [--plugin-dir <dir>]... principal <op>` with a Stdin envelope, as
+/** Run `principal/claude.ts --agent-bin <fake> [--agent-arg=<token>]... principal <op>` with a Stdin envelope, as
  *  the Runner does. `log`, when given, is where the fake CLI's own argv (the real `-p <prompt>` text included)
  *  is captured — for a test asserting what the adapter put in the prompt, not just what it returned. */
 const call = async (
-  op: string, payload: unknown, reply: Reply | Reply[], log?: string, pluginDirs?: string[],
+  op: string, payload: unknown, reply: Reply | Reply[], log?: string, agentArgs?: string[],
 ): Promise<{ exitCode: number; stdout: unknown; stderr: string }> => {
   const dir = tempDir("ship-principal-claude-");
   const stdin: Stdin = { id: "k-1/land-1", delivery: "k-1", port: "principal", op, workItem, workspace: "/ws/k-1", payload, tools: [] };
-  const pluginDirArgs = (pluginDirs ?? []).flatMap((d) => ["--plugin-dir", d]);
-  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...pluginDirArgs, "principal", op], {
+  const agentArgArgs = (agentArgs ?? []).map((token) => `--agent-arg=${token}`);
+  const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...agentArgArgs, "principal", op], {
     stdin: new Blob([JSON.stringify(stdin)]),
     cwd: dir,
     stdout: "pipe",
@@ -178,42 +178,67 @@ describe("principal/claude", () => {
     expect(stdout).toEqual({ status: "ok", body: {} });
   });
 
-  test("decide: forwards configured --plugin-dir entries to the agent bin, in order", async () => {
+  test("harlo-64: decide forwards --agent-arg=--plugin-dir entries to the agent bin, in order", async () => {
     const dir = tempDir("ship-principal-claude-log-");
     const log = join(dir, "log.jsonl");
     const payload = land(["approve", "rework"]);
-    await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, log, ["/a/dod", "/b/other"]);
+    await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, log, ["--plugin-dir=/a/dod", "--plugin-dir=/b/other"]);
     const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
     expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(2);
     expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
     expect(argv[argv.lastIndexOf("--plugin-dir") + 1]).toBe("/b/other");
   });
 
-  test("ask: forwards configured --plugin-dir entries to the agent bin", async () => {
+  test("harlo-64: ask forwards an --agent-arg=--plugin-dir entry to the agent bin", async () => {
     const dir = tempDir("ship-principal-claude-log-");
     const log = join(dir, "log.jsonl");
     const payload: AskPayload = { prompt: "which env?", min: "model", options: ["staging", "prod"], evidence };
-    await call("ask", payload, { is_error: false, result: "", structured_output: { answer: "staging" } }, log, ["/a/dod"]);
+    await call("ask", payload, { is_error: false, result: "", structured_output: { answer: "staging" } }, log, ["--plugin-dir=/a/dod"]);
     const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
     expect(argv.filter((a) => a === "--plugin-dir")).toHaveLength(1);
     expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe("/a/dod");
   });
 
-  test("decide: with no --plugin-dir given, the CLI argv carries no --plugin-dir flags", async () => {
+  test("harlo-64: decide with no --agent-arg passes exactly the protocol part + the isolation set, no --safe-mode", async () => {
     const dir = tempDir("ship-principal-claude-log-");
     const log = join(dir, "log.jsonl");
     const payload = land(["approve", "rework"]);
     await call("decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, log);
     const argv = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]!) as string[];
-    expect(argv).not.toContain("--plugin-dir");
+    expect(argv).toEqual([
+      "-p", argv[1]!, "--output-format", "json", "--json-schema", argv[argv.indexOf("--json-schema") + 1]!,
+      "--setting-sources", "project", "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
+      "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "bypassPermissions",
+    ]);
   });
 
-  test("decide: --plugin-dir ahead of port/op does not get absorbed into positional parsing", async () => {
+  test("harlo-64: --agent-arg ahead of port/op does not get absorbed into positional parsing", async () => {
     const payload = land(["approve", "rework"]);
     const { exitCode, stdout } = await call(
-      "decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, undefined, ["/a/dod"],
+      "decide", payload, { is_error: false, result: "", structured_output: { answer: "approve" } }, undefined, ["--plugin-dir=/a/dod"],
     );
     expect(exitCode).toBe(0);
     expect(stdout).toEqual({ status: "ok", body: { answer: "approve", by: "model" } });
   });
+});
+
+describe("principal/claude adapter: startup flags (harlo-64)", () => {
+  for (const [name, flags, named] of [
+    ["a protected --agent-arg", ["--agent-arg=--json-schema={}"], "--json-schema"],
+    ["the removed adapter --plugin-dir option", ["--plugin-dir", "/a/dod"], "--plugin-dir"],
+  ] as const) {
+    test(`harlo-64: ${name} fails at startup, naming it`, async () => {
+      const dir = tempDir("ship-principal-claude-");
+      const log = join(dir, "log.jsonl");
+      const proc = Bun.spawn(["bun", ADAPTER, "--agent-bin", FAKE, ...flags, "principal", "decide"], {
+        stdin: new Blob(["{}"]), cwd: dir, stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, FAKE_AGENT_REPLIES: repliesFile(dir, { is_error: true, result: "never" }), FAKE_AGENT_LOG: log },
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(exitCode).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(named);
+      expect(existsSync(log)).toBe(false);
+    });
+  }
 });

@@ -114,10 +114,10 @@ back to generic wording ("the main-line branch").
 The requirements object is opaque to the core (harlo-58). The core carries Define's
 `body.requirements` unchanged to Implement, Check and Verify. Its shape is the Define
 adapter's choice, and `agent/claude/index.ts` offers two, picked by an argv flag
-parsed next to `--agent-bin` and `--plugin-dir`:
+parsed next to `--agent-bin` and `--agent-arg` (see the next section):
 
 ```
-agent/claude/index.ts [--agent-bin <path>] [--plugin-dir <dir>]... [--requirements plain|dod] <port> <op>
+agent/claude/index.ts [--agent-bin=<path>] [--requirements=plain|dod] [--agent-arg=<--flag[=value]>]... <port> <op>
 ```
 
 - **`plain`** (the default, also what you get with no flag):
@@ -178,6 +178,77 @@ where `<base>` is the payload's `base` (the Delivery's main line, see above) and
   missing, and no agent call is made. The adapter never assumes a branch name.
   With no declared paths, a missing `base` changes nothing.
 
+## How the claude adapters run `claude`: isolation defaults and `--agent-arg` (harlo-64)
+
+`agent/claude/index.ts` and `principal/claude.ts` run the CLI the same way, through
+one shared module, `agent/claude/cli.ts`: the same argv parser, the same argv and
+the same spawn. Each adapter keeps only how it reads the reply.
+
+**argv of every call:**
+
+```
+<agent-bin> -p <prompt> --output-format json --json-schema <schema> [--resume <session>]
+  <agent args> [--disallowedTools Edit Write NotebookEdit]
+```
+
+The protocol part (`-p`, `--output-format`, `--json-schema`, `--resume`,
+`--disallowedTools`) is adapter-owned. `<agent args>` is the default set below,
+merged with the adapter's configured `--agent-arg`s.
+
+**Default set:**
+
+| Flag | Why |
+|---|---|
+| `--setting-sources project` | only the repo's own settings load, never the user's (their plugins, hooks, MCP servers) |
+| `--settings '{"disableAllHooks":true}'` | no hook fires: a Stop-gate hook (e.g. dod's) would block a non-interactive turn |
+| `--strict-mcp-config` | only MCP servers from `--mcp-config` load |
+| `--mcp-config '{"mcpServers":{}}'` | so, by default, none |
+| `--permission-mode bypassPermissions` | unattended: nobody can approve a prompt (see ADR 0006) |
+
+Why not `--safe-mode` (used until harlo-64): dogfooding harlo-62 (2026-10-08)
+found it disables every plugin skill and agent, `--plugin-dir` ones included, so a
+Delivery could never use the project's own skills. `--bare` loads them but cannot
+authenticate with OAuth/keychain. Probed with claude 2.1.295: the default set plus
+`--plugin-dir <harlo>/dod` loads dod's skills and agents, no user-installed
+plugin, no hook, and the repo's CLAUDE.md; auth works. Always loaded, whatever the
+flags: the four built-in `cc-plugin-*` plugins, the user's global CLAUDE.md header
+(not its `@` imports), and plugins the repo enables in its own `.claude/settings.json`.
+
+**`--agent-arg=<token>`** (repeatable) passes one claude flag through:
+
+- Give it as ONE argv entry, `--agent-arg=<token>`. The parser is strict
+  (`node:util` `parseArgs`): `--agent-arg <token>` with a token starting with `-`
+  is rejected as ambiguous.
+- `<token>` must start with `--`. `--flag=value` splits on the FIRST `=`, so the
+  value may contain `=`. `--flag` alone is a boolean flag.
+- **Replace rule:** a flag given in any `--agent-arg` drops EVERY default
+  occurrence of that flag; all its configured occurrences are kept, in order. A
+  flag with no default is appended. So two `--agent-arg=--plugin-dir=…` both pass.
+- Replacing `--settings` drops the default `disableAllHooks`: include it in your
+  own value if you still want hooks off.
+- `--permission-mode` is overridable (at your own risk).
+- **Protected**, rejected: `--print` (and `-p`, which fails the `--` rule),
+  `--output-format`, `--json-schema`, `--resume`, `--disallowedTools`,
+  `--disallowed-tools`. The adapter's own protocol depends on them.
+
+**Failure:** a bad token, a protected flag, or an unknown adapter option (e.g. the
+pre-harlo-64 `--plugin-dir <dir>`) fails at startup: exit 2, before stdin is read,
+nothing on stdout, the reason on stderr naming the offending value.
+
+**Example**, in `ship.config.json` (edit it by hand; `env/setup.ts` writes the bare
+adapter): give Define and Check the dod plugin, and Check one MCP server:
+
+```json
+"define": ["bun", "<ship>/src/adapters/agent/claude/index.ts", "--requirements=dod",
+  "--agent-arg=--plugin-dir=<harlo>/dod"],
+"check": ["bun", "<ship>/src/adapters/agent/claude/index.ts",
+  "--agent-arg=--plugin-dir=<harlo>/dod",
+  "--agent-arg=--mcp-config={\"mcpServers\":{\"docs\":{\"command\":\"npx\",\"args\":[\"some-mcp\"]}}}"]
+```
+
+The `--mcp-config` replaces the empty default; `--strict-mcp-config` stays, so
+only `docs` loads.
+
 ## `implement.run` and Principal feedback
 
 Payload: `{base?, requirements, findings, feedback?, answer?}` (harlo-58: `requirements` is
@@ -220,6 +291,10 @@ where it goes, is the `comments` map of each `principal.decide` payload (see bel
   body does not change.
 
 ## `principal.decide` and comments
+
+`principal/claude.ts` takes `[--agent-bin=<path>] [--agent-arg=<token>]...
+principal <op>` and runs `claude` exactly as described in "How the claude adapters
+run `claude`" above (no `--resume`, no `--disallowedTools`).
 
 Payload: `{on, options, comments, min, evidence}`. `comments` has one entry per
 option, saying where a comment on that answer goes:
@@ -333,30 +408,23 @@ change to what the model is asked for.
   OAuth/keychain auth, so it only works when the adapter's capability-profile
   env supplies `ANTHROPIC_API_KEY` directly. **[verified]** the tradeoff
   exists; **resolved by M1.12 dogfooding**, see the next bullet.
-- **Skill/plugin contamination, and `--safe-mode` as the fix (M1.12
-  dogfood finding).** Running the real agent WITHOUT `--bare`/`--safe-mode`
-  (to keep OAuth auth working, per the bullet above) let it auto-discover
-  this machine's own installed skills/plugins — including an unrelated
-  project's `dod:dod-define` skill, whose "MANDATORY self-invoke before any
-  edit" rule the agent then applied to the WorkItem it was merely asked to
-  *define*. It spontaneously opened its own DoD contract, tried to spawn a
-  context-collector sub-agent (denied, no permission mode configured), and
-  got stuck referencing an internal "verification table" that never reached
-  the `question` field's schema — the ship Principal saw a dangling
-  reference with no way to see the table. **[verified]** real, reproducible:
-  the exact same host machine, same install, contaminates a plain `-p`
-  call. **Fix:** always pass `--safe-mode` (not `--bare`) — it disables the
-  same ambient CLAUDE.md/skills/plugins/hooks but, unlike `--bare`, leaves
-  OAuth/keychain auth working normally. A project that wants specific
-  skills/plugins available during define/implement/check opts in
-  explicitly via repeatable `--plugin-dir <path>`, never by ambient
-  accident. **[verified]** `--safe-mode` is documented to keep "auth, model
-  selection, built-in tools and plugins, and permissions" working; adopted
-  in `agent/claude/index.ts` (M1.9-M1.11) accordingly.
+- **Skill/plugin contamination (M1.12 dogfood finding).** Running the real
+  agent WITHOUT `--bare`/`--safe-mode` (to keep OAuth auth working, per the
+  bullet above) let it auto-discover this machine's own installed
+  skills/plugins — including an unrelated project's `dod:dod-define` skill,
+  whose "MANDATORY self-invoke before any edit" rule the agent then applied to
+  the WorkItem it was merely asked to *define*. It spontaneously opened its own
+  DoD contract, tried to spawn a context-collector sub-agent (denied, no
+  permission mode configured), and got stuck referencing an internal
+  "verification table" that never reached the `question` field's schema — the
+  ship Principal saw a dangling reference with no way to see the table.
+  **[verified]** real, reproducible. M1.12's fix was `--safe-mode`; harlo-64
+  replaced it, because `--safe-mode` also disables `--plugin-dir` skills. The
+  current fix is the isolation default set: see "How the claude adapters run
+  `claude`" above.
 
-Net for `agent/claude/index.ts`: build the payload → prompt text, call `claude -p
---output-format json --json-schema '<schema for the op>' --safe-mode
-[--plugin-dir <dir>]... [--resume <stored-session-id>]`, parse stdout as
+Net for `agent/claude/index.ts`: build the payload → prompt text, call `claude`
+with the argv in "How the claude adapters run `claude`", parse stdout as
 JSON unconditionally, and branch on `is_error` (→ `failed`, nothing
 committed yet, or a crash if a commit already happened per the
 crash-vs-`failed` rule above) vs. `structured_output` present (→ map its

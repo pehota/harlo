@@ -3,31 +3,36 @@
 // `implement` and `check` (plan §6 amendment), so it lives in its own module folder (adapters/agent/claude/)
 // rather than a per-port folder — it isn't split into port-specific variants.
 //
-// argv: [--agent-bin <path>] [--plugin-dir <path>]... [--requirements plain|dod] <port> <op>, port one of "define" |
-// "implement" | "check"; --agent-bin defaults to `claude` on PATH (a fake executable in tests, per M1.9's own test
-// spec); --requirements picks the shape Define emits (harlo-61), default `plain`; an unknown mode is a startup error.
+// argv: [--agent-bin=<path>] [--requirements=plain|dod] [--agent-arg=<--flag[=value]>]... <port> <op>, port one of
+// "define" | "implement" | "check"; --agent-bin defaults to `claude` on PATH (a fake executable in tests, per M1.9's
+// own test spec); --requirements picks the shape Define emits (harlo-61), default `plain`; --agent-arg passes one
+// claude flag through (harlo-64). An unknown option or mode, or a protected --agent-arg, is a startup error.
 // stdin: Stdin (§3.1); stdout: one Result JSON line.
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
-// --safe-mode --permission-mode bypassPermissions [--plugin-dir <dir>]... [--resume <session-id>]
-// [--disallowedTools Edit Write NotebookEdit]` (M1.8 spike shape), parses stdout as JSON unconditionally, and
-// branches on `is_error` vs `.structured_output`. `--permission-mode bypassPermissions` is always passed,
-// unconditionally, on every call: these are unattended calls with no person at a terminal to approve
-// anything, so the loosest mode is simply always correct — found by dogfooding M1.12, headless `-p` mode with
-// no permission mode set silently DENIES every Edit/Write prompt, so Implement kept "finishing without
-// committing" no matter how clear the criteria were, until this was added. What actually keeps Define/Check
-// read-only is `--disallowedTools Edit Write NotebookEdit`, not the permission mode: found by dogfooding
-// M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during Define (or poke at
-// files during Check) rather than stay in its planning/review role. Implement is the only step allowed to
-// touch files. `--safe-mode` is always passed too: found
-// by dogfooding M1.12, a real agent invoked WITHOUT it auto-discovers the host machine's own CLAUDE.md and
-// installed skills/plugins/hooks and can apply the invoking session's own operational rules (e.g. another
-// project's "always self-invoke this before editing" skill) to the WorkItem it is meant to just define/
-// implement/check — contamination from whatever happens to be on the machine, not the project. `--safe-mode`
-// (not `--bare`) is the fix: it disables the same ambient customizations but leaves OAuth/keychain auth
-// working, unlike `--bare` (auth-only, see docs/adapters.md's spike section). A project that WANTS the agent
-// to have specific skills/plugins during these steps opts in explicitly via repeatable `--plugin-dir <path>`
-// in its own adapter config, never by ambient accident. `define` and `implement` each keep their OWN session
+// [--resume <session-id>] <agent args> [--disallowedTools Edit Write NotebookEdit]` (M1.8 spike shape) via
+// cli.ts's runClaude — the same parser, argv and spawn principal/claude.ts uses — and branches on `is_error` vs
+// `.structured_output`. The protocol part (`-p`, `--output-format`, `--json-schema`, `--resume`,
+// `--disallowedTools`) is adapter-owned; `<agent args>` is the isolation default set merged with the configured
+// `--agent-arg`s. By default `--permission-mode bypassPermissions` is passed on every call: these are unattended
+// calls with no person at a terminal to approve anything, so the loosest mode is simply always correct — found by
+// dogfooding M1.12, headless `-p` mode with no permission mode set silently DENIES every Edit/Write prompt, so
+// Implement kept "finishing without committing" no matter how clear the criteria were, until this was added. What
+// actually keeps Define/Check read-only is `--disallowedTools Edit Write NotebookEdit`, not the permission mode:
+// found by dogfooding M1.12, a fully-tooled real agent will otherwise just try to make the edit itself during
+// Define (or poke at files during Check) rather than stay in its planning/review role. Implement is the only step
+// allowed to touch files. Isolation is in the default set too: found by dogfooding M1.12, a real agent invoked
+// without it auto-discovers the host machine's own CLAUDE.md and installed skills/plugins/hooks and can apply the
+// invoking session's own operational rules (e.g. another project's "always self-invoke this before editing" skill)
+// to the WorkItem it is meant to just define/implement/check — contamination from whatever happens to be on the
+// machine, not the project. M1.12 fixed that with `--safe-mode`, but dogfooding harlo-62 (2026-10-08) found it
+// disables every plugin skill, `--plugin-dir` ones included, so a project could never give the agent its own
+// skills; `--bare` cannot authenticate with OAuth/keychain. So isolation now comes from `--setting-sources
+// project`, `--settings {"disableAllHooks":true}` and `--strict-mcp-config --mcp-config {"mcpServers":{}}`
+// (harlo-64): the repo's own settings only, no hooks, no ambient MCP server, auth intact. A project that WANTS the
+// agent to have specific plugins or MCP servers opts in explicitly via `--agent-arg=--plugin-dir=<path>` /
+// `--agent-arg=--mcp-config=<json>` in its own adapter
+// config, never by ambient accident. `define` and `implement` each keep their OWN session
 // id, keyed by Delivery, in their own small state file (P5: adapters own their state, never read another's —
 // `implement` never reads `define`'s file, and vice versa). `check` never stores or reads a session id: P8
 // requires a fresh session on every call, so it simply never touches either state file.
@@ -57,9 +62,11 @@ import type { CheckPayload, DefinePayload, ImplementFeedback, ImplementPayload }
 import { schemaFor } from "../../../../src/contracts/ports";
 import { check } from "../../../../src/contracts/validate";
 import { STEP_PORTS, type StepPort } from "../../../../src/core/ports/agent";
+import { type ClaudeReply, parseAgentArgv, runClaude } from "./cli";
 
-/** `usage` is set by callAgent once this run's CLI reply has parsed; every Result (and crash) after that carries it. */
-type Ctx = { agentBin: string; pluginDirs: string[]; requirements: RequirementsMode; usage?: Usage };
+/** `usage` is set by callAgent once this run's CLI reply has parsed; every Result (and crash) after that carries it.
+ *  `agentArgs`: the merged claude args every call passes after its protocol part (harlo-64). */
+type Ctx = { agentBin: string; agentArgs: string[]; requirements: RequirementsMode; usage?: Usage };
 
 /** harlo-61: the requirements shape Define emits. `plain` is `{criteria, runbook}`; `dod` is the contract
  *  dod/lib/contract.sh enforces (`{works_when, requirements: [...]}`). Only Define reads it. */
@@ -94,7 +101,7 @@ const readState = (port: "define" | "implement"): Record<string, Session> => {
 /** Records this reply's session and its session-total cost, so the next resumed call can take the difference.
  *  `lastQuestion` (define only) overwrites the prior one, or is dropped once the reply carries no question. */
 const saveSession = (
-  port: "define" | "implement", state: Record<string, Session>, delivery: string, reply: AgentReply, lastQuestion?: string,
+  port: "define" | "implement", state: Record<string, Session>, delivery: string, reply: ClaudeReply, lastQuestion?: string,
 ): void => {
   if (!reply.session_id) return;
   const total = figureOf(reply.total_cost_usd);
@@ -105,11 +112,6 @@ const saveSession = (
 };
 
 // ── The agent binary ──
-type AgentReply = {
-  is_error: boolean; result: string; structured_output?: unknown; session_id?: string;
-  usage?: Record<string, unknown>; total_cost_usd?: unknown; duration_ms?: unknown; num_turns?: unknown;
-};
-
 /** A reported figure, or undefined when absent or not a non-negative finite number (never trusted blindly). */
 const figureOf = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -124,7 +126,7 @@ const figureOf = (value: unknown): number | undefined =>
  *   duration_ms                       → durationMs
  *   num_turns                         → turns
  */
-const USAGE_FIELDS: [keyof Usage, (reply: AgentReply) => unknown][] = [
+const USAGE_FIELDS: [keyof Usage, (reply: ClaudeReply) => unknown][] = [
   ["inputTokens", (r) => r.usage?.input_tokens],
   ["outputTokens", (r) => r.usage?.output_tokens],
   ["cacheReadTokens", (r) => r.usage?.cache_read_input_tokens],
@@ -136,7 +138,7 @@ const USAGE_FIELDS: [keyof Usage, (reply: AgentReply) => unknown][] = [
 
 /** This call's Usage: fields the reply left out stay out; undefined when it reported none. `costBefore` is the
  *  session's cost total before this call (0 for a fresh session, undefined when a resumed one's is unknown). */
-const usageOf = (reply: AgentReply, costBefore: number | undefined): Usage | undefined => {
+const usageOf = (reply: ClaudeReply, costBefore: number | undefined): Usage | undefined => {
   const usage: Usage = {};
   for (const [name, read] of USAGE_FIELDS) {
     const value = figureOf(read(reply));
@@ -174,24 +176,15 @@ type CallAgentArgs = {
   ctx: Ctx; prompt: string; schema: unknown; resume: Session | undefined; cwd?: string; disallowedTools?: string[];
 };
 
-/** Every real call runs unattended, so permission mode is always the loosest available
- *  (`bypassPermissions`, not `acceptEdits`) — there is no person at a terminal to approve anything, and
- *  --disallowedTools is what actually keeps Define/Check from touching files, not the permission mode. Found
- *  by dogfooding M1.12: threading a per-call permission-mode override through every call site added
- *  plumbing for a value that should just always be this. */
-const callAgent = async ({ ctx, prompt, schema, resume, cwd, disallowedTools }: CallAgentArgs): Promise<AgentReply> => {
-  const args = [
-    ctx.agentBin, "-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema), "--safe-mode",
-    "--permission-mode", "bypassPermissions",
-    ...ctx.pluginDirs.flatMap((dir) => ["--plugin-dir", dir]),
-    ...(resume ? ["--resume", resume.session] : []),
-    ...(disallowedTools && disallowedTools.length > 0 ? ["--disallowedTools", ...disallowedTools] : []),
-  ];
-  const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
-  // M1.8 spike: even a non-zero exit (e.g. auth failure) still prints one valid JSON object, so stdout is
-  // always parsed as JSON first; the branch is on `is_error`, never on the exit code.
-  const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  const reply = JSON.parse(out) as AgentReply;
+/** Every real call runs unattended, so the default permission mode is the loosest available
+ *  (`bypassPermissions`, not `acceptEdits`; overridable via --agent-arg, harlo-64) — there is no person at a
+ *  terminal to approve anything, and --disallowedTools is what actually keeps Define/Check from touching files,
+ *  not the permission mode. Found by dogfooding M1.12: threading a per-call permission-mode override through every
+ *  call site added plumbing for a value that should just always be this. */
+const callAgent = async ({ ctx, prompt, schema, resume, cwd, disallowedTools }: CallAgentArgs): Promise<ClaudeReply> => {
+  const reply = await runClaude({
+    agentBin: ctx.agentBin, agentArgs: ctx.agentArgs, prompt, schema, resume: resume?.session, disallowedTools, cwd,
+  });
   ctx.usage = usageOf(reply, resume ? resume.costUsd : 0);
   return reply;
 };
@@ -203,7 +196,7 @@ const usageEvidence = (ctx: Ctx): { evidence?: EvidenceItem[] } =>
 /** Define/Implement/Check success paths: the agent's raw reply text, surfaced as evidence (P9: opaque, never read
  *  by the core) so a human can later judge the real reasoning behind the structured body, then the usage item.
  *  The reasoning is omitted when empty, and never on the failure path (which already surfaces it via `info`). */
-const evidenceOf = (ctx: Ctx, reply: AgentReply): { evidence?: EvidenceItem[] } => {
+const evidenceOf = (ctx: Ctx, reply: ClaudeReply): { evidence?: EvidenceItem[] } => {
   const evidence: EvidenceItem[] = [
     ...(reply.result ? [{ label: "reasoning", text: reply.result }] : []), ...(usageEvidence(ctx).evidence ?? []),
   ];
@@ -669,7 +662,7 @@ const implementRun = async (ctx: Ctx, stdin: Stdin): Promise<unknown> => {
   const withFeedback = payload.feedback !== undefined;
   const schema = withFeedback ? implementFeedbackSchema : implementSchema;
 
-  let reply: AgentReply;
+  let reply: ClaudeReply;
   try {
     reply = await callAgent({ ctx, prompt, schema, resume: session, cwd: workspace });
   } catch (error) {
@@ -876,7 +869,7 @@ type PassOutcome =
  *  gave it, just scoped to this one pass. */
 const runCheckPass = async (options: { ctx: Ctx; prompt: string; workspace: string }): Promise<PassOutcome> => {
   const { ctx, prompt, workspace } = options;
-  const passCtx: Ctx = { agentBin: ctx.agentBin, pluginDirs: ctx.pluginDirs, requirements: ctx.requirements };
+  const passCtx: Ctx = { agentBin: ctx.agentBin, agentArgs: ctx.agentArgs, requirements: ctx.requirements };
   // P8: Check runs independently of the worker that implemented — always a fresh session, so no `--resume`
   // and no read of either `define`'s or `implement`'s state file, ever. Each pass below is its own fresh call
   // too, so neither can lean on the other's reasoning (harlo-58: review must be structurally independent).
@@ -979,31 +972,20 @@ const RUN: Record<StepPort, (ctx: Ctx, stdin: Stdin) => Promise<unknown>> = {
 };
 const cancelOp = async (): Promise<unknown> => ({ status: "ok", body: {} }); // nothing runs in the background
 
-/** argv after the script: `[--agent-bin <path>] [--plugin-dir <path>]... [--requirements plain|dod] <port> <op>`;
- *  --agent-bin defaults to `claude` on PATH; --plugin-dir is repeatable and defaults to none (a clean --safe-mode
- *  agent); --requirements defaults to `plain`, and any other value throws rather than falling back (harlo-61). */
+/** argv after the script: `[--agent-bin=<path>] [--requirements=plain|dod] [--agent-arg=<token>]... <port> <op>`,
+ *  parsed by the shared, strict parseAgentArgv (harlo-64, cli.ts), so an unknown option (e.g. the pre-harlo-64
+ *  `--plugin-dir`) throws; --requirements defaults to `plain`, and any other value throws rather than falling
+ *  back (harlo-61). */
 const parseArgs = (
   args: string[],
-): { agentBin: string; pluginDirs: string[]; requirements: RequirementsMode; port: string | undefined; op: string | undefined } => {
-  let agentBin = "claude";
-  let requirements: RequirementsMode = "plain";
-  const pluginDirs: string[] = [];
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === "--agent-bin") { agentBin = args[i + 1] ?? agentBin; i += 1; }
-    else if (args[i] === "--plugin-dir") { if (args[i + 1] !== undefined) pluginDirs.push(args[i + 1] as string); i += 1; }
-    else if (args[i] === "--requirements") {
-      const mode = args[i + 1];
-      if (!(REQUIREMENTS_MODES as readonly (string | undefined)[]).includes(mode)) {
-        throw new Error(`--requirements must be one of ${REQUIREMENTS_MODES.join(", ")}; got ${mode === undefined ? "nothing" : JSON.stringify(mode)}`);
-      }
-      requirements = mode as RequirementsMode;
-      i += 1;
-    }
-    else positional.push(args[i] as string);
+): { agentBin: string; agentArgs: string[]; requirements: RequirementsMode; port: string | undefined; op: string | undefined } => {
+  const { agentBin, agentArgs, options, positionals } = parseAgentArgv(args, ["requirements"]);
+  const mode = options.requirements ?? "plain";
+  if (!(REQUIREMENTS_MODES as readonly string[]).includes(mode)) {
+    throw new Error(`--requirements must be one of ${REQUIREMENTS_MODES.join(", ")}; got ${JSON.stringify(mode)}`);
   }
-  const [port, op] = positional;
-  return { agentBin, pluginDirs, requirements, port, op };
+  const [port, op] = positionals;
+  return { agentBin, agentArgs, requirements: mode as RequirementsMode, port, op };
 };
 
 const main = async (ctx: Ctx): Promise<unknown> => {
@@ -1027,7 +1009,7 @@ const startup = (() => {
     process.exit(2);
   }
 })();
-const ctx: Ctx = { agentBin: startup.agentBin, pluginDirs: startup.pluginDirs, requirements: startup.requirements };
+const ctx: Ctx = { agentBin: startup.agentBin, agentArgs: startup.agentArgs, requirements: startup.requirements };
 try {
   console.log(JSON.stringify(await main(ctx)));
 } catch (error) {

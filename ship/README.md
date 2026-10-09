@@ -71,7 +71,8 @@ a profile `env` value:
 |---|---|---|
 | `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
 | `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
-| `src/adapters/principal/claude.ts` | principal | `--agent-bin <path>` (defaults to `claude` on PATH) |
+| `src/adapters/agent/claude/index.ts` | define, implement, check | `--agent-bin=<path>` (defaults to `claude` on PATH), `--requirements=plain\|dod`, repeatable `--agent-arg=<--flag[=value]>` (a claude flag, e.g. `--agent-arg=--plugin-dir=<dir>`; see [docs/adapters.md](docs/adapters.md#how-the-claude-adapters-run-claude-isolation-defaults-and---agent-arg-harlo-64)). `env/setup.ts` writes it bare: add these by editing `ship.config.json` |
+| `src/adapters/principal/claude.ts` | principal | `--agent-bin=<path>` (defaults to `claude` on PATH), repeatable `--agent-arg=<--flag[=value]>`, as above |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
 ## Set up ship in another repo
