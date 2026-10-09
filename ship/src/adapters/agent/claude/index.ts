@@ -11,7 +11,7 @@
 //
 // `run` builds a prompt, then calls `<agent-bin> -p <prompt> --output-format json --json-schema <schema>
 // [--resume <session-id>] <agent args> [--disallowedTools Edit Write NotebookEdit]` (M1.8 spike shape) via
-// cli.ts's runClaude — the same parser, argv and spawn principal/claude.ts uses — and branches on `is_error` vs
+// cli/claude/run.ts's runClaude — the same parser, argv and spawn principal/claude.ts uses — and branches on `is_error` vs
 // `.structured_output`. The protocol part (`-p`, `--output-format`, `--json-schema`, `--resume`,
 // `--disallowedTools`) is adapter-owned; `<agent args>` is the isolation default set merged with the configured
 // `--agent-arg`s. By default `--permission-mode bypassPermissions` is passed on every call: these are unattended
@@ -62,7 +62,7 @@ import type { CheckPayload, DefinePayload, ImplementFeedback, ImplementPayload }
 import { schemaFor } from "../../../../src/contracts/ports";
 import { check } from "../../../../src/contracts/validate";
 import { STEP_PORTS, type StepPort } from "../../../../src/core/ports/agent";
-import { type ClaudeReply, parseAgentArgv, runClaude } from "./cli";
+import { type ClaudeReply, parseAgentArgv, runClaude } from "../../cli/claude/run";
 
 /** `usage` is set by callAgent once this run's CLI reply has parsed; every Result (and crash) after that carries it.
  *  `agentArgs`: the merged claude args every call passes after its protocol part (harlo-64). */
@@ -973,7 +973,7 @@ const RUN: Record<StepPort, (ctx: Ctx, stdin: Stdin) => Promise<unknown>> = {
 const cancelOp = async (): Promise<unknown> => ({ status: "ok", body: {} }); // nothing runs in the background
 
 /** argv after the script: `[--agent-bin=<path>] [--requirements=plain|dod] [--agent-arg=<token>]... <port> <op>`,
- *  parsed by the shared, strict parseAgentArgv (harlo-64, cli.ts), so an unknown option (e.g. the pre-harlo-64
+ *  parsed by the shared, strict parseAgentArgv (harlo-64, cli/claude/run.ts), so an unknown option (e.g. the pre-harlo-64
  *  `--plugin-dir`) throws; --requirements defaults to `plain`, and any other value throws rather than falling
  *  back (harlo-61). */
 const parseArgs = (

@@ -245,9 +245,9 @@ describe("agent-claude adapter: define", () => {
     expect(stdout).toEqual({ status: "question", about: "clarify", prompt: "Is Y done too?" });
   });
 
-  test("always passes --permission-mode bypassPermissions, unconditionally", async () => {
-    // Unattended calls have no person at a terminal to approve anything, so the loosest mode is always
-    // correct — this is not conditional on the op the way --disallowedTools is.
+  test("passes --permission-mode bypassPermissions by default", async () => {
+    // Unattended calls have no person at a terminal to approve anything, so the loosest mode is the default
+    // for every op (unlike --disallowedTools); --agent-arg can override it (harlo-64).
     const home = tempDir("ship-agent-home-");
     const fx = tempDir("ship-agent-fx-");
     const log = join(fx, "log.jsonl");
@@ -1587,7 +1587,7 @@ describe("agent-claude adapter: --agent-arg (harlo-64)", () => {
     return { stdout, stderr, exitCode, called: existsSync(log) };
   };
 
-  for (const flag of ["--print", "--output-format", "--json-schema", "--resume", "--disallowedTools", "--disallowed-tools"]) {
+  for (const flag of ["--print", "--output-format", "--json-schema", "--resume", "--disallowedTools", "--disallowed-tools", "--verbose", "--continue", "--session-id", "--fork-session", "--input-format"]) {
     test(`harlo-64: --agent-arg=${flag} fails at startup naming ${flag}`, async () => {
       const { stdout, stderr, exitCode, called } = await startWith([`--agent-arg=${flag}=x`]);
       expect(exitCode).toBe(2);
@@ -1617,11 +1617,11 @@ describe("agent-claude adapter: --agent-arg (harlo-64)", () => {
     const log = join(fx, "log.jsonl");
     const agentReplies = repliesFile(fx, { is_error: false, result: "…", structured_output: { criteria: ["c"], runbook: ["r"] } });
     const mcp = '{"mcpServers":{"docs":{"command":"npx","args":["some-mcp"]}}}';
-    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, agentArgs: [`--mcp-config=${mcp}`, "--verbose"] });
+    await call({ port: "define", op: "run", payload: {}, home, agentReplies, log, agentArgs: [`--mcp-config=${mcp}`, "--add-dir=/tmp/x"] });
     const argv = readLog(log)[0]!;
     expect(argv.filter((a) => a === "--mcp-config")).toHaveLength(1);
     expect(argv[argv.indexOf("--mcp-config") + 1]).toBe(mcp);
-    expect(argv).toContain("--verbose");
+    expect(argv).toContain("--add-dir");
     expect(argv).toContain("--strict-mcp-config");
   });
 

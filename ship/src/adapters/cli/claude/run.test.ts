@@ -1,6 +1,6 @@
 // harlo-64: how the claude-running adapters run claude — argv parsing, isolation defaults, `--agent-arg` merge.
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_AGENT_ARGS, PROTECTED_FLAGS, claudeArgv, mergeAgentArgs, parseAgentArg, parseAgentArgv } from "./cli";
+import { DEFAULT_AGENT_ARGS, PROTECTED_FLAGS, claudeArgv, mergeAgentArgs, parseAgentArg, parseAgentArgv } from "./run";
 
 const DEFAULT_ARGV = [
   "--setting-sources", "project", "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
@@ -18,8 +18,8 @@ describe("agent args (harlo-64)", () => {
   });
 
   test("harlo-64: a token without = is a boolean flag", () => {
-    expect(parseAgentArg("--verbose")).toEqual({ flag: "--verbose" });
-    expect(mergeAgentArgs([], [parseAgentArg("--verbose")])).toEqual(["--verbose"]);
+    expect(parseAgentArg("--disable-slash-commands")).toEqual({ flag: "--disable-slash-commands" });
+    expect(mergeAgentArgs([], [parseAgentArg("--disable-slash-commands")])).toEqual(["--disable-slash-commands"]);
   });
 
   test("harlo-64: a configured flag replaces every default occurrence; repeated configured flags all survive", () => {
@@ -33,8 +33,8 @@ describe("agent args (harlo-64)", () => {
   });
 
   test("harlo-64: a flag with no default is appended after the defaults, in configured order", () => {
-    const argv = mergeAgentArgs(DEFAULT_AGENT_ARGS, ["--model=opus", "--verbose"].map(parseAgentArg));
-    expect(argv).toEqual([...DEFAULT_ARGV, "--model", "opus", "--verbose"]);
+    const argv = mergeAgentArgs(DEFAULT_AGENT_ARGS, ["--model=opus", "--add-dir=/tmp/x"].map(parseAgentArg));
+    expect(argv).toEqual([...DEFAULT_ARGV, "--model", "opus", "--add-dir", "/tmp/x"]);
   });
 
   test("harlo-64: --permission-mode is overridable", () => {
@@ -50,6 +50,14 @@ describe("agent args (harlo-64)", () => {
     });
   }
 
+  for (const flag of ["--verbose", "--continue", "--session-id", "--fork-session", "--input-format"]) {
+    test(`harlo-64: ${flag} is protected and rejected, naming it`, () => {
+      expect(PROTECTED_FLAGS).toContain(flag);
+      expect(() => parseAgentArg(`${flag}=x`)).toThrow(flag);
+      expect(() => parseAgentArg(flag)).toThrow(flag);
+    });
+  }
+
   test("harlo-64: a token not starting with -- is rejected, naming it", () => {
     expect(() => parseAgentArg("-p")).toThrow('"-p"');
     expect(() => parseAgentArg("plugin-dir=/a")).toThrow('"plugin-dir=/a"');
@@ -57,11 +65,11 @@ describe("agent args (harlo-64)", () => {
 
   test("harlo-64: parseAgentArgv reads --agent-bin, one-token --agent-args, extra options and positionals", () => {
     const parsed = parseAgentArgv(
-      ["--agent-bin=/bin/fake", "--agent-arg=--plugin-dir=/a", "--requirements", "dod", "--agent-arg=--verbose", "define", "run"],
+      ["--agent-bin=/bin/fake", "--agent-arg=--plugin-dir=/a", "--requirements", "dod", "--agent-arg=--add-dir=/tmp/x", "define", "run"],
       ["requirements"],
     );
     expect(parsed).toEqual({
-      agentBin: "/bin/fake", agentArgs: [...DEFAULT_ARGV, "--plugin-dir", "/a", "--verbose"],
+      agentBin: "/bin/fake", agentArgs: [...DEFAULT_ARGV, "--plugin-dir", "/a", "--add-dir", "/tmp/x"],
       options: { requirements: "dod" }, positionals: ["define", "run"],
     });
   });

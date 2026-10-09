@@ -2,7 +2,7 @@
 // Model Principal: an unattended `claude` CLI answers every decide/ask gate instead of a person, so a queue
 // can run autonomously with nobody at a terminal. argv: [--agent-bin=<path>] [--agent-arg=<--flag[=value]>]...
 // principal <op>, parsed by the shared parseAgentArgv and run by the shared runClaude (harlo-64,
-// agent/claude/cli.ts: the same parser, isolation defaults and invocation agent/claude/index.ts uses); --agent-bin defaults to `claude` on PATH (a fake executable in
+// cli/claude/run.ts: the same parser, isolation defaults and invocation agent/claude/index.ts uses); --agent-bin defaults to `claude` on PATH (a fake executable in
 // tests); each --agent-arg passes one claude flag through to every CLI call `decide`/`ask` makes. A bad flag is a
 // startup failure (exit 2, before stdin is read).
 //   decide, ask → build a prompt from the gate's evidence/options, call the CLI with a `--json-schema` that
@@ -14,7 +14,7 @@ import type { Decide, GateEvidence, Stdin } from "../../../src/contracts/common"
 import type { AskPayload, CancelPayload, NotifyPayload } from "../../../src/contracts/ports";
 import { schemaFor } from "../../../src/contracts/ports";
 import { check } from "../../../src/contracts/validate";
-import { type ClaudeReply, parseAgentArgv, runClaude } from "../agent/claude/cli";
+import { type ClaudeReply, parseAgentArgv, runClaude } from "../cli/claude/run";
 
 /** `requirements` is opaque to the core (harlo-58): rendered as pretty-printed JSON, same as any other evidence
  *  the adapter doesn't interpret — never assumes a `criteria`/`runbook` shape inside it. */

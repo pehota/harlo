@@ -2,7 +2,7 @@
 // both parse their argv with `parseAgentArgv` and call the CLI with `runClaude`, so the argv, the isolation
 // defaults and the spawn are the same everywhere; reply interpretation (usage, sessions, answers) stays in each
 // adapter. Adapter argv: `[--agent-bin=<path>] [--agent-arg=<--flag[=value]>]... [<extra string options>] <port>
-// <op>`, parsed strictly by node:util, so an unknown option throws. Unit-tested in cli.test.ts.
+// <op>`, parsed strictly by node:util, so an unknown option throws. Unit-tested in run.test.ts.
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 
 /** One claude flag, with its value when it takes one (`--strict-mcp-config` takes none). */
@@ -20,10 +20,14 @@ export const DEFAULT_AGENT_ARGS: readonly AgentArg[] = [
 ];
 
 /** The adapter's own protocol depends on these, so configuring one is a startup error, never an override:
- *  output parsing (`--output-format`, `--json-schema`), session continuity (`--resume`), the prompt (`--print`)
- *  and Define/Check's read-only guard (`--disallowedTools` in either spelling). */
+ *  output parsing (`--output-format`, `--json-schema`; `--verbose` turns `--output-format json` into a message
+ *  array the reply parser can't read), session ownership (`--resume`; `--continue`, `--session-id` and
+ *  `--fork-session` break it — Check must always start fresh (P8), Define/Implement own their session ids), the
+ *  prompt (`--print`; `--input-format` changes how it is read) and Define/Check's read-only guard
+ *  (`--disallowedTools` in either spelling). */
 export const PROTECTED_FLAGS: readonly string[] = [
   "--print", "--output-format", "--json-schema", "--resume", "--disallowedTools", "--disallowed-tools",
+  "--verbose", "--continue", "--session-id", "--fork-session", "--input-format",
 ];
 
 /** One `--agent-arg` value: `--flag=value` splits on the FIRST `=` (the value may contain more), `--flag` alone

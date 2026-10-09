@@ -181,7 +181,7 @@ where `<base>` is the payload's `base` (the Delivery's main line, see above) and
 ## How the claude adapters run `claude`: isolation defaults and `--agent-arg` (harlo-64)
 
 `agent/claude/index.ts` and `principal/claude.ts` run the CLI the same way, through
-one shared module, `agent/claude/cli.ts`: the same argv parser, the same argv and
+one shared module, `cli/claude/run.ts`: the same argv parser, the same argv and
 the same spawn. Each adapter keeps only how it reads the reply.
 
 **argv of every call:**
@@ -229,7 +229,11 @@ flags: the four built-in `cc-plugin-*` plugins, the user's global CLAUDE.md head
 - `--permission-mode` is overridable (at your own risk).
 - **Protected**, rejected: `--print` (and `-p`, which fails the `--` rule),
   `--output-format`, `--json-schema`, `--resume`, `--disallowedTools`,
-  `--disallowed-tools`. The adapter's own protocol depends on them.
+  `--disallowed-tools`, `--verbose` (turns `--output-format json` into a message
+  array the reply parser can't read), `--continue`, `--session-id`,
+  `--fork-session` (break session ownership: Check always starts fresh, Define
+  and Implement own their session ids), `--input-format` (changes how the
+  prompt is read). The adapter's own protocol depends on them.
 
 **Failure:** a bad token, a protected flag, or an unknown adapter option (e.g. the
 pre-harlo-64 `--plugin-dir <dir>`) fails at startup: exit 2, before stdin is read,
@@ -389,8 +393,9 @@ change to what the model is asked for.
   `--allowedTools`/`--permission-mode` had several of its own `Bash` calls
   denied by this machine's existing shell hook (it rewrites `find`/`ls` to
   `rtk find`/`rtk ls`, and those got denied under the default headless
-  permission set). **Resolved by M1.12 dogfooding:** every real call now
-  always passes `--permission-mode bypassPermissions` (see the "Skill/plugin
+  permission set). **Resolved by M1.12 dogfooding:** every real call
+  passes `--permission-mode bypassPermissions` by default, overridable via
+  `--agent-arg` (see the harlo-64 section above, the "Skill/plugin
   contamination" bullet below and `agent/claude/index.ts`'s header comment)
   — there is no person at a terminal to approve anything, so the loosest
   mode is simply correct. **[verified]** this unblocks Implement, which

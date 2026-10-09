@@ -225,6 +225,11 @@ describe("principal/claude", () => {
 describe("principal/claude adapter: startup flags (harlo-64)", () => {
   for (const [name, flags, named] of [
     ["a protected --agent-arg", ["--agent-arg=--json-schema={}"], "--json-schema"],
+    ["a protected --verbose", ["--agent-arg=--verbose"], "--verbose"],
+    ["a protected --continue", ["--agent-arg=--continue"], "--continue"],
+    ["a protected --session-id", ["--agent-arg=--session-id=x"], "--session-id"],
+    ["a protected --fork-session", ["--agent-arg=--fork-session"], "--fork-session"],
+    ["a protected --input-format", ["--agent-arg=--input-format=stream-json"], "--input-format"],
     ["the removed adapter --plugin-dir option", ["--plugin-dir", "/a/dod"], "--plugin-dir"],
   ] as const) {
     test(`harlo-64: ${name} fails at startup, naming it`, async () => {
