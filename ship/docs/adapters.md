@@ -494,3 +494,50 @@ process launched from an interactive coding session (not a login shell):
   If it ever changes, switch to an explicit GraphQL query that reads the position.
 - Project mode still skips drafts, pull requests and other repos' issues, and
   lists at most 1000 items.
+
+## Telemetry adapters: `tty` and `otel` (harlo-63)
+
+The optional machine-config `telemetry` argv gets each Delivery lifecycle event
+(`{delivery, name, op, phase, elapsedMs}`, `src/runner/telemetry.ts`) on stdin
+as `telemetry notify`, fire-and-forget: the Runner waits at most 500ms per event
+and ignores the exit. Two sinks ship:
+
+| Adapter | Args | Sends |
+|---|---|---|
+| `telemetry/tty.ts` | none | one `[telemetry] <delivery> <name> <op> <phase> <elapsedMs>ms` line on its own stdout |
+| `telemetry/otel.ts` | `--endpoint=<url>`, repeatable `--header=<name>=<value>`, repeatable `--resource=<key>=<value>` | one OTLP/HTTP JSON trace export per event, to any OTLP backend |
+
+`otel.ts` argv (all configuration; nothing is read from the environment):
+
+- `--endpoint=<url>`: the OTLP/HTTP base URL, e.g. `http://localhost:4318`.
+  `/v1/traces` is appended. Required.
+- `--header=<name>=<value>`: an export request header, for auth, e.g.
+  `--header=Authorization=Bearer <token>`. Split on the first `=`.
+- `--resource=<key>=<value>`: a resource attribute, e.g.
+  `--resource=service.name=ship`. Pass `service.name`, or backends show
+  `unknown_service`.
+
+```json
+"telemetry": ["bun", "<ship>/src/adapters/telemetry/otel.ts", "--endpoint=http://localhost:4318", "--resource=service.name=ship"]
+```
+
+Mapping: one Delivery is one trace (trace id = the first 16 bytes of
+sha256(delivery id)), so no state is kept between events. Each event is one
+INTERNAL span named `<name> <phase>`, ending now and starting `elapsedMs` earlier:
+
+| `phase` | Span |
+|---|---|
+| `start` | zero-length: when the step/gate began |
+| `awaiting` | a heartbeat covering the wait so far (a gate waiting on the Principal) |
+| `resolved` | the whole step/gate, from start to outcome |
+
+Attributes: `ship.delivery`, `ship.name`, `ship.op`, `ship.phase`,
+`ship.elapsed_ms` (`elapsedMs`, unchanged).
+
+- Best-effort: unsupported argv, a bad event, an unreachable, slow or failing
+  endpoint all exit 0 with the ack `{}` (reason on stderr). The request times out
+  after 300ms, inside the Runner's fire-wait.
+- `SHIP_OTEL_E2E=1 bun test test/e2e/telemetry-otel.test.ts` runs a real
+  OpenTelemetry Collector (`otel/opentelemetry-collector`, podman or docker) and
+  checks the exported spans. Without `SHIP_OTEL_E2E=1` it skips, so `bun run
+  check` needs no container runtime; with it, a collector that cannot start fails.

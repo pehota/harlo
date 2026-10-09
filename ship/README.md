@@ -73,6 +73,8 @@ a profile `env` value:
 | `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
 | `src/adapters/agent/claude/index.ts` | define, implement, check | `--agent-bin=<path>` (defaults to `claude` on PATH), `--requirements=plain\|dod`, repeatable `--agent-arg=<--flag[=value]>` (a claude flag, e.g. `--agent-arg=--plugin-dir=<dir>`; see [docs/adapters.md](docs/adapters.md#how-the-claude-adapters-run-claude-isolation-defaults-and---agent-arg-harlo-64)). `env/setup.ts` writes it bare: add these by editing `ship.config.json` |
 | `src/adapters/principal/claude.ts` | principal | `--agent-bin=<path>` (defaults to `claude` on PATH), repeatable `--agent-arg=<--flag[=value]>`, as above |
+| `src/adapters/telemetry/tty.ts` | telemetry | none (one line per event on its own stdout) |
+| `src/adapters/telemetry/otel.ts` | telemetry | `--endpoint=<url>` (OTLP/HTTP base, `/v1/traces` appended), repeatable `--header=<name>=<value>` (auth, e.g. `--header=Authorization=Bearer <token>`), repeatable `--resource=<key>=<value>` (resource attributes; pass `service.name`). Each event is one span `<name> <phase>` in one trace per Delivery; see [docs/adapters.md](docs/adapters.md#telemetry-adapters-tty-and-otel-harlo-63). `SHIP_OTEL_E2E=1 bun test test/e2e/telemetry-otel.test.ts` runs it against a real collector (podman or docker) |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
 ## Set up ship in another repo
