@@ -238,9 +238,11 @@ DIFF_HASH=$(dod_diff_hash "$PROJECT_DIR" "$CONTRACT_BASELINE_SHA")
 # dod-reviewer" — the main loop's turn can end (triggering Stop) while a
 # spawned reviewer is still in flight, and telling the agent to "run
 # /dod:verify" when it already did is misleading, not just repetitive.
+# The same applies to a stale result left over from a previous round.
+VERIFYING_MSG="verification is already running (waiting on the independent reviewer) — wait for it to finish, write the result, then stop again. Do not re-run /dod:verify from scratch."
 if [ ! -f "$RESULT_FILE" ]; then
   if [ "$STATE_STATE" = "verifying" ]; then
-    gate__block "no-result" "verification is already running (waiting on the independent reviewer) — wait for it to finish, write the result, then stop again. Do not re-run /dod:verify from scratch."
+    gate__block "no-result" "$VERIFYING_MSG"
   else
     gate__block "no-result" "task DoD present but no verification result exists for this changeset — run /dod:verify, then stop again."
   fi
@@ -251,6 +253,9 @@ result_read "$RESULT_FILE" || {
 }
 
 if [ "$RESULT_DIFF_HASH" != "$DIFF_HASH" ]; then
+  if [ "$STATE_STATE" = "verifying" ]; then
+    gate__block "no-result" "$VERIFYING_MSG"
+  fi
   gate__block "no-result" "verification result does not match the current changeset — run /dod:verify, then stop again."
 fi
 

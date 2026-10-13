@@ -693,8 +693,8 @@ give for free.
 
 **`state` is wording-only.** `/dod:verify` sets it `"verifying"` before doing
 anything else and back to `"idle"` right after `result_write` succeeds.
-`gate.sh`'s branch 7 reads it only to pick which "no result" message to
-print — "wait, it's already running" vs. "run /dod:verify" — never to change
+`gate.sh`'s branch 7 reads it only to pick which "no result" (or stale
+result) message to print — "wait, it's already running" vs. "run /dod:verify" — never to change
 the block/release decision, which stays governed entirely by `result.json`'s
 existence and diff-hash match. Found live-testing (2026-09-17,
 `dod-e2e-test`): the main loop's turn can end (triggering `Stop`) while a

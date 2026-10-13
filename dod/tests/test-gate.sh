@@ -344,6 +344,43 @@ else
   bad "branch7: stale result (diff changed) blocks" "$OUT"
 fi
 
+# --- branch 7 stale result + state=verifying -> tells agent to wait ---
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0}]'
+echo "more edits" >> "$REPO/root.txt"
+state_set_state "$REPO/.dod/main/state.json" "verifying"
+OUT=$(run_gate "$REPO")
+is_block "$OUT" || bad "branch7: stale result + verifying blocks" "$OUT"
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"already running"*"wait"*) ok "branch7: stale result + state=verifying -> tells agent to wait" ;;
+  *) bad "branch7: stale result + state=verifying -> tells agent to wait" "$REASON" ;;
+esac
+
+# --- branch 7 stale result + state=idle -> tells agent to run /dod:verify ---
+REPO=$(dod__test_make_repo)
+open_contract "$REPO" "main"
+bash "$DIR0/../scripts/dod-claim.sh" "$REPO" "main" >/dev/null 2>&1
+BASELINE=$(git -C "$REPO" rev-parse HEAD)
+DH=$(dod_diff_hash "$REPO" "$BASELINE")
+result_write "$REPO/.dod/main/result.json" \
+  --diff-hash "$DH" --baseline-sha "$BASELINE" --round 1 \
+  --requirements '[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0}]'
+echo "more edits" >> "$REPO/root.txt"
+OUT=$(run_gate "$REPO")
+is_block "$OUT" || bad "branch7: stale result + idle blocks" "$OUT"
+REASON=$(printf '%s' "$OUT" | jq -r '.reason' 2>/dev/null)
+case "$REASON" in
+  *"run /dod:verify"*) ok "branch7: stale result + state=idle -> tells agent to run /dod:verify" ;;
+  *) bad "branch7: stale result + state=idle -> tells agent to run /dod:verify" "$REASON" ;;
+esac
+
 # --- branch 1: stop_hook_active + same category as last block -> release -----
 REPO=$(dod__test_make_repo)
 open_contract "$REPO" "main"
