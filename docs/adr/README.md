@@ -15,10 +15,6 @@
 - [0004 — Context is split by timing: a define-time brief and a review-time impact trace](0004-context-brief-and-impact-trace.md) —
   a fresh collector writes project standards and invariants into a context brief at
   define time; the reviewer derives change impact itself from the diff.
-- [0005 — dod's own CLI is auto-approved by a PreToolUse hook](0005-auto-approve-dod-cli.md) —
-  every skill step is one `bash <plugin>/scripts/dod.sh <verb>` call, and a PreToolUse
-  hook allows exactly that shape (literal arguments only); anything else falls through
-  to the normal permission prompt.
 
 > **ADRs 0001–0003 are marked `superseded`.** They record decisions for the
 > pre-v2 `dod/` implementation (recoverable at tag `dod-v1-final`), which
