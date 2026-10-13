@@ -52,6 +52,25 @@ case "$ERR" in *"no contract"*"/dod:define"*) ok "contract-read without a contra
 cli diff-hash
 [ "$RC" -ne 0 ] && ok "diff-hash without a contract: non-zero" || bad "diff-hash without a contract: non-zero" "$RC"
 
+# --- brief-path doubles as /dod:define's preflight -----------------------------
+# Outside a git repo: fails (exit 1), no output on stdout.
+NOGIT=$(dod__test_mktemp_d); CLEANUP_DIRS="$CLEANUP_DIRS $NOGIT"
+OUT=$(cd "$NOGIT" && bash "$CLI" brief-path 2>"$ERR_DIR/err"); RC=$?
+eq "brief-path outside a git repo: exit 1" "1" "$RC"
+eq "brief-path outside a git repo: nothing on stdout" "" "$OUT"
+case "$(cat "$ERR_DIR/err")" in *"no task key"*) ok "brief-path outside a git repo: clear message" ;; *) bad "brief-path outside a git repo: clear message" "$(cat "$ERR_DIR/err")" ;; esac
+# jq missing: exit 1, message names the install command. PATH holds only
+# symlinks to what dod.sh needs before the jq check (bash, git, dirname...)
+# so jq is genuinely absent.
+NOJQ=$(dod__test_mktemp_d); CLEANUP_DIRS="$CLEANUP_DIRS $NOJQ"
+for t in bash git dirname cat sed grep tr head awk uname; do
+  p=$(command -v "$t") && ln -s "$p" "$NOJQ/$t"
+done
+OUT=$(cd "$SUB" && PATH="$NOJQ" bash "$CLI" brief-path 2>"$ERR_DIR/err"); RC=$?
+eq "brief-path without jq: exit 1" "1" "$RC"
+case "$(cat "$ERR_DIR/err")" in *"jq not found"*"brew install jq"*) ok "brief-path without jq: names the install command" ;; *) bad "brief-path without jq: names the install command" "$(cat "$ERR_DIR/err")" ;; esac
+rm -f "$ERR_DIR/err"
+
 # --- brief-path ---------------------------------------------------------------
 cli brief-path
 eq "brief-path: absolute path under <root>/.dod/<key>" "$KEY_DIR/brief.md" "$OUT"

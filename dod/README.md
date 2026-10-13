@@ -55,7 +55,8 @@ The skills run every dod step as one Bash call to the plugin's own CLI,
 `bash "<plugin root>/scripts/dod.sh" <verb> [args]` (verbs: `brief-path`,
 `contract-write`, `contract-read`, `state-set`, `diff-hash`, `cache-get`,
 `cache-set`, `baseline-worktree`, `changed-standards`, `result-write`,
-`record-decisions`, `claim`). The CLI resolves the repo and task key itself
+`record-decisions`, `claim`; `brief-path` doubles as `/dod:define`'s
+preflight — it fails outside a git repo or without `jq`). The CLI resolves the repo and task key itself
 and delegates to `lib/*.sh` — each Bash call is a fresh shell, so no
 variables are carried between calls.
 
@@ -76,7 +77,7 @@ A plugin cannot ship permission rules, so the plugin's PreToolUse hook
   still prompt (unless your own rules allow them): a dod call chained with
   anything else or using `$`/globs outside single quotes, the project's own
   check commands `/dod:verify` runs (tests, lint, e2e — also inside the
-  baseline worktree), and `/dod:define`'s preflight `git rev-parse`.
+  baseline worktree).
 
 ## Manual escape hatch
 

@@ -376,7 +376,8 @@ requirements.
 `bash "<plugin root>/scripts/dod.sh" <verb> …` — each Bash tool call is a
 fresh shell, so the CLI resolves the repo (`dod_repo_root "$PWD"`) and task
 key (`dod_task_key`) itself and nothing is carried between calls. The
-collector's `brief_path` comes from `dod.sh brief-path`; the contract is
+collector's `brief_path` comes from `dod.sh brief-path`, which doubles as
+`/dod:define`'s preflight (it fails outside a git repo or without `jq`); the contract is
 written by `dod.sh contract-write`, whose `--baseline-sha` defaults to HEAD
 (so baseline and write are one call) and `--session-id` to
 `$CLAUDE_CODE_SESSION_ID`. `hooks/approve.sh` approves these calls, so they

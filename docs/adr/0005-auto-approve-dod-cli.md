@@ -74,8 +74,9 @@ A plugin *can* ship a PreToolUse hook, and a PreToolUse hook can answer
   snapshots HEAD as the baseline itself, at write time.
 - **Still prompts.** These keep the user's normal permission rules: the
   project's own check commands that `/dod:verify` runs (also inside the
-  baseline worktree), `/dod:define`'s `git rev-parse` preflight, and any
-  dod call written outside the grammar.
+  baseline worktree), and any dod call written outside the grammar.
+  `/dod:define`'s preflight is `dod.sh brief-path`, which fails outside a
+  git repo or without `jq`, so it does not prompt.
 - **The skills rely on `${CLAUDE_PLUGIN_ROOT}` being expanded to the
   plugin's absolute path** in the command the agent runs. The hook does not
   accept a literal `${CLAUDE_PLUGIN_ROOT}`: it's a variable whose value the

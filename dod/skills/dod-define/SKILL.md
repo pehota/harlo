@@ -24,9 +24,15 @@ from one call to the next; the CLI resolves the repo and task key itself.
 Run each exactly in that shape, alone: no `;`/`&&`/pipes/`$(...)` around it,
 so it runs without a permission prompt (`dod/README.md`).
 
-1. **Preflight.** Confirm this is a git repository (`git rev-parse --git-dir`).
-   If not, refuse and say why — do not open a contract outside a git repo.
-   Confirm `jq` is on PATH; if missing, refuse and name the install command.
+1. **Preflight.** Run the call below. It prints the absolute
+   `<repo root>/.dod/<task key>/brief.md` — keep it for step 2 — and doubles
+   as the preflight: it fails (exit 1, message on stderr) outside a git
+   repository, on a detached HEAD, or when `jq` is not on PATH. If it fails,
+   refuse, relay the message (it names the install command for `jq`) and do
+   not open a contract.
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" brief-path
+   ```
 
 2. **Capture the task — and decide whether it is clear.** If the user gave
    task text as an argument, use it verbatim (`task_source: "argument"`).
@@ -46,12 +52,8 @@ so it runs without a permission prompt (`dod/README.md`).
    invocation for this environment), in the background, with:
    ```
    task       : <the agreed task text>
-   brief_path : <the path printed by the call below>
+   brief_path : <the path printed by step 1>
    ```
-   ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" brief-path
-   ```
-   (prints the absolute `<repo root>/.dod/<task key>/brief.md`).
    It writes the context brief — the project standards and domain invariants
    relevant to this task — and returns one line of JSON:
    `{"applicable":true,"path":"..."}` or `{"applicable":false,"reason":"..."}`.

@@ -17,7 +17,10 @@
 # evals or executes its arguments; they are passed to lib functions as data.
 #
 # Verbs:
-#   brief-path                    absolute path of this task's context brief
+#   brief-path                    absolute path of this task's context brief;
+#                                 doubles as /dod:define's preflight — like every
+#                                 verb it fails (exit 1) outside a git repo or
+#                                 without jq
 #   contract-write <flags…>       contract_write flags; path and --task-key are
 #                                 computed, --baseline-sha defaults to HEAD,
 #                                 --session-id to $CLAUDE_CODE_SESSION_ID
@@ -61,7 +64,7 @@ case "$VERB" in
   *) usage ;;
 esac
 
-command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
+command -v jq >/dev/null 2>&1 || die "jq not found on PATH — install it (macOS: brew install jq; Debian/Ubuntu: apt-get install jq)"
 REPO=$(dod_repo_root "$PWD")
 TASK_KEY=$(dod_task_key "$REPO") \
   || die "no task key: $REPO is not a git repo or HEAD is detached (dod keys tasks by branch)"
