@@ -38,55 +38,45 @@ REQS='[{"id":"tests","type":"check","cmd":"true","expect_exit":0,"source":"proto
 PASS_REQS='[{"id":"tests","type":"check","verdict":"pass","cmd":"true","exit":0},{"id":"review","type":"judgement","verdict":"pass","findings":[]}]'
 
 # --- the skill commands, each asserted verbatim in its SKILL.md --------------
-dod__test_skill_line "$DEFINE_SKILL" 'REPO=$(dod_repo_root "$PWD")'; D_REPO="$SKILL_LINE"
-dod__test_skill_line "$DEFINE_SKILL" 'TASK_KEY=$(dod_task_key "$REPO")'; D_KEY="$SKILL_LINE"
-dod__test_skill_line "$DEFINE_SKILL" 'contract_write "$REPO/.dod/$TASK_KEY/contract.json"'; D_CW="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'REPO=$(dod_repo_root "$PWD")'; V_REPO="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'TASK_KEY=$(dod_task_key "$REPO")'; V_KEY="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'contract_read "$REPO/.dod/$TASK_KEY/contract.json"'; V_CR="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'dod_diff_hash "$REPO" "$CONTRACT_BASELINE_SHA"'; V_HASH="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'RFILE="$REPO/.dod/$TASK_KEY/result.json"'; V_RF="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'ROUND=$(result_next_round "$RFILE" "$CONTRACT_BASELINE_SHA")'; V_ROUND="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"'; V_CLAIM="$SKILL_LINE"
+# Each is one dod.sh call; every call below runs in its own fresh shell, as
+# the Bash tool does — nothing carried between calls.
+CLI_LINE='bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh"'
+dod__test_skill_line "$DEFINE_SKILL" "$CLI_LINE contract-write"; D_CW="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE contract-read"; V_CR="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE result-write --requirements"; V_RW="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE state-set idle"; V_IDLE="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE claim"; V_CLAIM="$SKILL_LINE"
+
+# run_skill <cwd> <session> <line> — one Bash tool call: cwd as given, no
+# CLAUDE_PROJECT_DIR, the session's CLAUDE_CODE_SESSION_ID.
+run_skill() {
+  (
+    cd "$1" || exit 1
+    unset CLAUDE_PROJECT_DIR
+    export CLAUDE_CODE_SESSION_ID="$2"
+    eval "$3"
+  ) >/dev/null
+}
 
 # skill_define <cwd> <session> — /dod:define step 8 from the Bash tool:
 # cwd as given, no CLAUDE_PROJECT_DIR, the session's CLAUDE_CODE_SESSION_ID.
 skill_define() {
-  (
-    cd "$1" || exit 1
-    unset CLAUDE_PROJECT_DIR
-    export CLAUDE_CODE_SESSION_ID="$2"
-    HEAD_SHA=$(git rev-parse HEAD)
-    eval "$D_REPO"; eval "$D_KEY"
-    eval "$D_CW"' --task-key "$TASK_KEY" --task "scenario task" --task-source argument --session-id "$2" --works-when "It works when the gate closes" --baseline-sha "$HEAD_SHA" --brief "$NA_BRIEF" --requirements "$REQS"'
-  )
+  run_skill "$1" "$2" "$D_CW"' --task "scenario task" --task-source argument --works-when "It works when the gate closes" --brief "$NA_BRIEF" --requirements "$REQS"'
 }
 
-# skill_verify <cwd> <session> — /dod:verify steps 1, 3, 6, 7 with every
-# requirement passing: hash, write result, mark idle, claim.
+# skill_verify <cwd> <session> — /dod:verify steps 1, 6, 7 with every
+# requirement passing: read, write result (the CLI hashes the diff and
+# computes the round), mark idle, claim.
 skill_verify() {
-  (
-    cd "$1" || exit 1
-    unset CLAUDE_PROJECT_DIR
-    export CLAUDE_CODE_SESSION_ID="$2"
-    eval "$V_REPO"; eval "$V_KEY"; eval "$V_CR"
-    eval "DIFF_HASH=\$($V_HASH)"
-    eval "$V_RF"; eval "$V_ROUND"
-    result_write "$RFILE" --diff-hash "$DIFF_HASH" --baseline-sha "$CONTRACT_BASELINE_SHA" \
-      --round "$ROUND" --requirements "$PASS_REQS"
-    state_set_state "$REPO/.dod/$TASK_KEY/state.json" "idle"
-    eval "$V_CLAIM"
-  )
+  run_skill "$1" "$2" "$V_CR"
+  run_skill "$1" "$2" "$V_RW"' "$PASS_REQS"'
+  run_skill "$1" "$2" "$V_IDLE"
+  run_skill "$1" "$2" "$V_CLAIM"
 }
 
 # skill_claim <cwd> <session> — dod-verify step 7 alone.
 skill_claim() {
-  (
-    cd "$1" || exit 1
-    unset CLAUDE_PROJECT_DIR
-    export CLAUDE_CODE_SESSION_ID="$2"
-    eval "$V_REPO"; eval "$V_KEY"; eval "$V_CLAIM"
-  )
+  run_skill "$1" "$2" "$V_CLAIM"
 }
 
 # hook_track <root> <cwd> <session> <prompt_id> <file> — PostToolUse Edit.

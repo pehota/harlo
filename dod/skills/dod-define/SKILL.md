@@ -17,6 +17,13 @@ safety net for when you fail, not the plan.
 
 ## Steps
 
+Every dod command below is ONE Bash call to the dod CLI,
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" <verb> …` — each Bash tool call
+is a fresh shell, so nothing (no variable, no sourced function) survives
+from one call to the next; the CLI resolves the repo and task key itself.
+Run each exactly in that shape, alone: no `;`/`&&`/pipes/`$(...)` around it,
+so it runs without a permission prompt (`dod/README.md`).
+
 1. **Preflight.** Confirm this is a git repository (`git rev-parse --git-dir`).
    If not, refuse and say why — do not open a contract outside a git repo.
    Confirm `jq` is on PATH; if missing, refuse and name the install command.
@@ -39,8 +46,12 @@ safety net for when you fail, not the plan.
    invocation for this environment), in the background, with:
    ```
    task       : <the agreed task text>
-   brief_path : <REPO>/.dod/<TASK_KEY>/brief.md   (absolute; REPO and TASK_KEY as in step 8)
+   brief_path : <the path printed by the call below>
    ```
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" brief-path
+   ```
+   (prints the absolute `<repo root>/.dod/<task key>/brief.md`).
    It writes the context brief — the project standards and domain invariants
    relevant to this task — and returns one line of JSON:
    `{"applicable":true,"path":"..."}` or `{"applicable":false,"reason":"..."}`.
@@ -181,43 +192,47 @@ safety net for when you fail, not the plan.
    realize a contract should exist (a follow-up `/dod:define` after the fact),
    say so plainly rather than silently back-dating the baseline.
 
-7. **Record the baseline**, immediately after confirmation, immediately
-   before writing the contract:
-   ```
-   HEAD_SHA=$(git rev-parse HEAD)
-   ```
-   Minimise the window between snapshotting HEAD and allowing edits.
+7. **Record the baseline and write the contract — one call, immediately
+   after confirmation.** `contract-write` (step 8) snapshots `HEAD` as the
+   baseline itself, at the moment it writes the contract — run it right
+   after the user's "yes", before any edit. Minimise the window between
+   snapshotting HEAD and allowing edits.
 
-8. **Write the contract** via `dod/lib/contract.sh`'s `contract_write` — do
-   not construct or edit `contract.json` any other way (N6: `contract.sh` is
-   the sole owner):
+8. **Write the contract** via the dod CLI, which delegates to
+   `dod/lib/contract.sh`'s `contract_write` — do not construct or edit
+   `contract.json` any other way (N6: `contract.sh` is the sole owner). Run
+   it as **one Bash call, on one line** (no `\` line continuations, no
+   `;`/`&&`/pipes/`$(...)`, no shell variables):
 
    ```bash
-   . "${CLAUDE_PLUGIN_ROOT}/lib/contract.sh"
-   . "${CLAUDE_PLUGIN_ROOT}/lib/gitref.sh"
-
-   REPO=$(dod_repo_root "$PWD")
-   TASK_KEY=$(dod_task_key "$REPO")
-   contract_write "$REPO/.dod/$TASK_KEY/contract.json" \
-     --task-key "$TASK_KEY" \
-     --task "<task text>" \
-     --task-source "argument|conversation" \
-     --session-id "<session id if known, else empty>" \
-     --works-when "It works when <observable outcome>" \
-     --baseline-sha "$HEAD_SHA" \
-     --brief '<the collector's verdict JSON from step 2, unchanged>' \
-     --requirements '[
-       {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected","proves":"<which part of works_when>"},
-       {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>","proves":"<...>"},
-       {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","proves":"<the works_when outcome it observes>"},
-       {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol","proves":"<...>"},
-       {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["<doc path 1>","<doc path 2>"],"reason":"<why these docs need updating>","proves":"<...>"}
-     ]' \
-     --waivers '[{"id":"lint","reason":"user: prototype spike"}]'
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" contract-write --task '<task text>' --task-source argument --works-when 'It works when <observable outcome>' --brief '<the collector verdict JSON from step 2, unchanged>' --requirements '<requirements JSON array>' --waivers '<waivers JSON array>'
    ```
-   `REPO` is the git top-level, never `$PWD` itself — the Bash tool's cwd
-   may be a subdir, and the hooks key `.dod/` on the top-level too; every
-   `.dod/` path is anchored at `$REPO`.
+   The CLI resolves the repo (the git top-level of the Bash tool's cwd,
+   never a subdir — the hooks key `.dod/` on the top-level too) and the
+   task key itself, writes `<REPO>/.dod/<TASK_KEY>/contract.json`, sets
+   `--baseline-sha` to `HEAD` (unless you pass one — the amend path below)
+   and `--session-id` to the session's own id, and prints the path and the
+   baseline SHA.
+
+   **Quoting.** Wrap every argument in single quotes. A literal `'` cannot
+   appear inside single quotes: inside JSON write it as `\u0027` (JSON's escape for it); in a plain
+   text argument (`--task`, `--works-when`) use double quotes for that
+   argument instead, with no `$`, backtick or `\` in it. Newlines are fine
+   inside single quotes. Anything else (an unquoted metacharacter, `$`, a
+   chained command) still runs, but costs the user a permission prompt.
+
+   `--task-source` is `argument` or `conversation` (step 2). The
+   `--requirements` array, one entry per requirement:
+   ```json
+   [
+     {"id":"tests","type":"check","cmd":"<detected cmd>","expect_exit":0,"source":"auto-detected","proves":"<which part of works_when>"},
+     {"id":"e2e","type":"check","cmd":"<e2e cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<why it applies>","proves":"<...>"},
+     {"id":"scenario","type":"check","cmd":"<scenario test cmd>","expect_exit":0,"source":"task","applicable":true,"reason":"<what behavior it exercises>","proves":"<the works_when outcome it observes>"},
+     {"id":"review","type":"judgement","agent":"dod-reviewer","source":"protocol","proves":"<...>"},
+     {"id":"docs","type":"check","cmd":null,"expect_exit":null,"source":"task","applicable":true,"doc_paths":["<doc path 1>","<doc path 2>"],"reason":"<why these docs need updating>","proves":"<...>"}
+   ]
+   ```
+   and `--waivers`, e.g. `[{"id":"lint","reason":"user: prototype spike"}]`.
    If e2e is inapplicable (step 4), its entry takes this shape instead —
    `cmd` and `expect_exit` **both `null`**, `applicable:false`, and a
    non-empty `reason`; never mix an `applicable:true`/`false` field with the
@@ -278,18 +293,20 @@ Amend it: re-run steps 2–6 (step 2 without the collector spawn — see below;
 capture, `works_when`, proofs, waivers,
 **confirm the table again** — an
 amend changes what "done" means, so it needs the same confirmation a fresh
-open does) before `contract_write` for the same `task_key`. There is no
+open does) before `contract-write` for the same `task_key`. There is no
 separate "fresh task" flag — amend always overwrites the existing contract
 for this `task_key`, same confirmation gate either way.
 
 - **Reuse the existing brief.** Do not re-spawn the collector: pass the open
-  contract's brief (`$CONTRACT_BRIEF` from `contract_read`) unchanged as
+  contract's brief (the `brief` field of
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" contract-read`) unchanged as
   `--brief`. Only a legacy contract without a brief (it reads as
   `applicable:false`, "contract predates the context brief") spawns the
   collector as in step 2.
 - **Scope-creep "accept & amend"** (the user accepted a `/dod:verify`
   scope-creep finding into the task): widen the task to cover the accepted
-  change, and keep the baseline — skip step 7 and pass
-  `--baseline-sha "$CONTRACT_BASELINE_SHA"`, so the review still covers
+  change, and keep the baseline — pass
+  `--baseline-sha '<baseline_sha from contract-read>'` to `contract-write`
+  (it then keeps that baseline instead of snapshotting HEAD), so the review still covers
   every change since the task began. The next `/dod:verify` reviews it in
   `full` mode (its step 5), since the creep stop skipped lenses 2-6.

@@ -33,39 +33,51 @@ independent review.
 
 ## Steps
 
+Every dod command below is ONE Bash call to the dod CLI,
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" <verb> …` — each Bash tool call
+is a fresh shell, so nothing (no variable, no sourced function) survives
+from one call to the next; the CLI resolves the repo (the git top-level,
+never the Bash tool's cwd itself — it may be a subdir, and the gate keys
+`.dod/` on the top-level too) and the task key itself, and computes the diff
+hash and round internally. Run each exactly in that shape, alone: no
+`;`/`&&`/pipes/`$(...)` around it, so it runs without a permission prompt
+(`dod/README.md`). Wrap arguments in single quotes; inside JSON, write a
+literal `'` as its JSON escape `\u0027`, never `'\''`.
+
 1. **Load the contract.** Assert `status == "open"`:
    ```bash
-   . "${CLAUDE_PLUGIN_ROOT}/lib/contract.sh"
-   . "${CLAUDE_PLUGIN_ROOT}/lib/result.sh"
-   . "${CLAUDE_PLUGIN_ROOT}/lib/gitref.sh"
-   . "${CLAUDE_PLUGIN_ROOT}/lib/state.sh"
-
-   REPO=$(dod_repo_root "$PWD")
-   TASK_KEY=$(dod_task_key "$REPO")
-   contract_read "$REPO/.dod/$TASK_KEY/contract.json"
-   state_read "$REPO/.dod/$TASK_KEY/state.json"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" contract-read
    ```
-   `REPO` is the git top-level, never `$PWD` itself — the Bash tool's cwd
-   may be a subdir, and the gate keys `.dod/` on the top-level too. Every
-   `.dod/` path and repo argument below is `$REPO`.
-   If no contract is open, tell the user to run `/dod:define` first — do
-   not mark verification in progress for a contract that doesn't exist.
+   It prints one JSON object: the contract (`status`, `task`,
+   `works_when`, `baseline_sha`, `requirements`, `waivers`, `brief`, …),
+   `state` (`state`, `decisions`, `decided_diff_hash`) and `result` — the
+   latest `result.json` (`diff_hash`, `round`, `requirements`,
+   `advisory_ids`, `creep_ids`), or `null` if none. Below, "the contract's
+   X" means field X of this output; re-run it whenever you need a value
+   again, never carry one in a shell variable.
+   If it exits non-zero (no contract), or `status` is not `"open"`, tell the
+   user to run `/dod:define` first — do not mark verification in progress
+   for a contract that doesn't exist.
 
 2. **Mark verification in progress**, once step 1 confirmed a contract is
    actually open:
    ```bash
-   state_set_state "$REPO/.dod/$TASK_KEY/state.json" "verifying"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" state-set verifying
    ```
    This, before the check battery or the reviewer runs, is what lets the
    gate tell you "wait, it's already running" instead of "run /dod:verify"
    if your turn ends (e.g. the background reviewer is still in flight)
    before the result gets written below.
 
-3. **Hash the diff.** `dod_diff_hash "$REPO" "$CONTRACT_BASELINE_SHA"` — the
-   same function `gate.sh` uses, against the same baseline (never `HEAD`: a
-   commit moves HEAD and would silently invalidate every prior result even
-   when the working tree is unchanged). This value becomes the result's
-   trust key.
+3. **Hash the diff.** The CLI hashes the diff itself wherever one is
+   needed (`cache-get`, `cache-set`, `result-write`), with `dod_diff_hash`
+   against the contract's `baseline_sha` — the same function `gate.sh`
+   uses, against the same baseline (never `HEAD`: a commit moves HEAD and
+   would silently invalidate every prior result even when the working tree
+   is unchanged). This value becomes the result's trust key. To see it:
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" diff-hash
+   ```
 
 4. **Run each `check` requirement's command.** First, the `e2e` and
    `scenario` requirements specifically: for each, if its `applicable` field
@@ -81,7 +93,7 @@ independent review.
    **not** attempt to run anything for it here — its verdict is decided in
    step 5 by whether `dod-reviewer` confirms every path in its `doc_paths`
    was actually updated; carry `doc_paths` through to the reviewer call
-   unchanged (it's already part of `$CONTRACT_REQUIREMENTS`) and set `docs`'s
+   unchanged (it's already part of the contract's `requirements`) and set `docs`'s
    final `verdict` from the reviewer's findings: `"fail"` if any finding in
    the reviewer's `findings` array carries `requirement_id: "docs"` with
    `severity: "blocking"`, else `"pass"`. At review depth `scope` (step 5)
@@ -93,22 +105,25 @@ independent review.
 
    For every other `check` requirement (and an applicable `e2e` or
    `scenario`), check
-   whether the contract waives it (`CONTRACT_WAIVERS`, from step 1's
-   `contract_read`):
+   whether the contract waives it (the contract's `waivers`, step 1):
    if the requirement's `id` appears there, set `verdict` to `"waived"` and
    `reason` to the waiver's own `reason` text — do **not** run the command
    at all, and do not consult or populate the cache for a waived
    requirement (there is no exit code to cache). Otherwise, look up the
    cache:
    ```bash
-   CACHED=$(state_cache_get "$REPO/.dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD")
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" cache-get '<cmd>'
    ```
-   On a hit, reuse `$CACHED` as `verdict` and skip re-running the command —
+   It prints the cached verdict (`pass` | `fail`) on a hit, `miss` on a
+   miss. On a hit, reuse it as `verdict` and skip re-running the command —
    the key is `(diff_hash, cmd)`, so any change to the diff already changes
-   `DIFF_HASH` and misses the cache automatically; nothing to invalidate by
+   the diff hash and misses the cache automatically; nothing to invalidate by
    hand. On a miss, run the command, capture its exit code, set `verdict` to
-   `"pass"` if `exit == expect_exit` else `"fail"`, then
-   `state_cache_set "$REPO/.dod/$TASK_KEY/state.json" "$DIFF_HASH" "$CMD" "$verdict"`.
+   `"pass"` if `exit == expect_exit` else `"fail"`, then record it:
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" cache-set '<cmd>' pass
+   ```
+   (`fail` for a failing one).
    Keep the command's output on a miss — needed for `/dod:verify`'s own
    summary.
 
@@ -116,19 +131,21 @@ independent review.
    resolve whether the failure is pre-existing or something this changeset
    introduced:
    ```bash
-   WT=$(dod_baseline_worktree "$REPO" "$TASK_KEY" "$CONTRACT_BASELINE_SHA")
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" baseline-worktree
    ```
-   If `WT` resolves, re-run **that one failing command** inside it (`cd "$WT"
-   && <cmd>`, or the tool-appropriate equivalent — never the main working
+   It prints the worktree's path. If it does, re-run **that one failing
+   command** with that path as its working directory (e.g. `cd <path> &&
+   <cmd>` — the project's own command, so the user's permission rules
+   apply to it as usual), or the tool-appropriate equivalent — never the main working
    tree). Record the outcome as `baseline_verdict`: `"pass"` if it exits
    `expect_exit` there too (meaning the failure is **new**, introduced by
    this changeset — no escape, must fix), `"fail"` if it also fails at
    baseline (**pre-existing** — boyscout default is still to fix it, but it
    is not something this session broke). If the worktree can't be created
-   (`WT` empty), omit `baseline_verdict` entirely rather than guessing — do
+   (the call exits non-zero), omit `baseline_verdict` entirely rather than guessing — do
    not report "pre-existing" without having actually run the command at
    baseline. The worktree is a `git worktree` sharing this repo's `.git` and
-   its own separate checkout at `$REPO/.dod/$TASK_KEY/baseline-worktree` — created
+   its own separate checkout at `<repo root>/.dod/<task key>/baseline-worktree` — created
    once per task and reused across every failing check in every round;
    `gate.sh` tears it down when the task passes (branch 10).
 
@@ -140,14 +157,14 @@ independent review.
 
    **Every round, first compute the reviewer's context inputs:**
    ```bash
-   CHANGED_STANDARDS=$(dod_changed_standards "$REPO" "$CONTRACT_BASELINE_SHA")
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" changed-standards
    ```
-   - `brief` — from `$CONTRACT_BRIEF`: its `path` if `applicable:true` (a
-     relative one, from an older contract, resolved against `$REPO`), else
-     `n/a: <its reason>`.
-   - `changed_standards` — `$CHANGED_STANDARDS` (a JSON array, recomputed
-     every round, never carried over).
-   - `depth` — `scope` if `$CONTRACT_WAIVERS` has an entry with
+   - `brief` — from the contract's `brief`: its `path` if `applicable:true`
+     (a relative one, from an older contract, resolved against the contract's
+     `repo`), else `n/a: <its reason>`.
+   - `changed_standards` — the JSON array `changed-standards` printed
+     (recomputed every round, never carried over).
+   - `depth` — `scope` if the contract's `waivers` has an entry with
      `id: "review"` (the user consented to a scope-only review), else `full`.
 
    **Round 1** (no prior `result.json`, or the prior result's round is being
@@ -156,13 +173,13 @@ independent review.
    contain a blocking `lens:"scope"`, `kind:"creep"` finding, i.e. that review
    stopped at the scope lens and lenses 2-6 never ran): spawn in `full` mode.
    ```
-   baseline_sha : $CONTRACT_BASELINE_SHA
+   baseline_sha : <the contract's baseline_sha>
    mode         : full
-   task         : $CONTRACT_TASK
-   works_when   : $CONTRACT_WORKS_WHEN
-   requirements : $CONTRACT_REQUIREMENTS
+   task         : <the contract's task>
+   works_when   : <the contract's works_when>
+   requirements : <the contract's requirements>
    brief        : <brief path | n/a: reason>
-   changed_standards : $CHANGED_STANDARDS
+   changed_standards : <changed-standards output>
    depth        : full | scope
    ```
 
@@ -173,15 +190,15 @@ independent review.
    something, and is verifying again): spawn in `delta_reconfirm` mode,
    passing the prior round's blocking findings back as `reconfirm`:
    ```
-   baseline_sha : $CONTRACT_BASELINE_SHA
+   baseline_sha : <the contract's baseline_sha>
    mode         : delta_reconfirm
-   delta_from   : <prior result's diff_hash>
+   delta_from   : <prior result's diff_hash (contract-read's result.diff_hash)>
    reconfirm    : <prior round's review findings with severity "blocking", except lens "scope">
-   task         : $CONTRACT_TASK
-   works_when   : $CONTRACT_WORKS_WHEN
-   requirements : $CONTRACT_REQUIREMENTS
+   task         : <the contract's task>
+   works_when   : <the contract's works_when>
+   requirements : <the contract's requirements>
    brief        : <brief path | n/a: reason>
-   changed_standards : $CHANGED_STANDARDS
+   changed_standards : <changed-standards output>
    depth        : full | scope
    ```
    Leave `lens: "scope"` findings out of `reconfirm` — the scope check
@@ -190,8 +207,8 @@ independent review.
    amend — the next round is always Round 1 (`full`), so the original
    changeset gets every lens and an impact trace.
 
-   **After the user's advisory decision** (`state_read` gives a non-empty
-   `$STATE_DECISIONS`, see "Advisory decision" below): add
+   **After the user's advisory decision** (contract-read's `state.decisions` is
+   non-empty, see "Advisory decision" below): add
    `blocking_only : true` to either mode's inputs — the reviewer reports
    blocking findings only.
 
@@ -205,31 +222,32 @@ independent review.
    any finding has `severity: "blocking"` or any `reconfirm` entry has
    `status != "fixed"`, else `"pass"`.
 
-6. **Write the result, then mark verification done.** Via `dod/lib/result.sh`'s
-   `result_write` — do not construct or edit `result.json` any other way (N6):
+6. **Write the result, then mark verification done.** Via the CLI, which
+   delegates to `dod/lib/result.sh`'s `result_write` — do not construct or
+   edit `result.json` any other way (N6). The CLI computes the diff hash and
+   the round (`result_next_round`) itself and takes the baseline from the
+   contract; you pass only the requirements' verdicts, written out as
+   literal JSON in one single-quoted argument:
 
    ```bash
-   RFILE="$REPO/.dod/$TASK_KEY/result.json"
-   ROUND=$(result_next_round "$RFILE" "$CONTRACT_BASELINE_SHA")
-   REQUIREMENTS=$(jq -nc --arg depth "$REVIEW_DEPTH" \
-       --argjson findings "$REVIEW_FINDINGS" \
-       --argjson impact_trace "$REVIEW_IMPACT_TRACE" '[
-       {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
-       {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
-       {"id":"review","type":"judgement","verdict":"pass|fail","depth":$depth,"findings":$findings,"impact_trace":$impact_trace},
-       {"id":"docs","type":"check","verdict":"pass|fail|n/a","doc_paths":[...]}
-     ]')
-   result_write "$RFILE" \
-     --diff-hash "$DIFF_HASH" \
-     --baseline-sha "$CONTRACT_BASELINE_SHA" \
-     --round "$ROUND" \
-     --requirements "$REQUIREMENTS"
-   state_set_state "$REPO/.dod/$TASK_KEY/state.json" "idle"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" result-write --requirements '<requirements JSON array>'
    ```
-   `$REVIEW_FINDINGS` is the reviewer's `findings` array from step 5,
-   unchanged — every finding keeps its `lens` and, for scope findings, its
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" state-set idle
+   ```
+   The requirements array, one entry per requirement:
+   ```json
+   [
+     {"id":"tests","type":"check","verdict":"pass|fail","cmd":"...","exit":N},
+     {"id":"lint","type":"check","verdict":"waived","cmd":"...","reason":"user: prototype spike"},
+     {"id":"review","type":"judgement","verdict":"pass|fail","depth":"<reviewer depth>","findings":[<reviewer findings>],"impact_trace":[<reviewer impact_trace>]},
+     {"id":"docs","type":"check","verdict":"pass|fail|n/a","doc_paths":[...]}
+   ]
+   ```
+   The `review` entry's `findings` is the reviewer's `findings` array from
+   step 5, copied unchanged — every finding keeps its `lens` and, for scope findings, its
    `kind` (the gate reads `lens:"scope"` + `kind:"creep"` to stop instead of
-   asking for a fix). `$REVIEW_DEPTH` and `$REVIEW_IMPACT_TRACE` are the
+   asking for a fix). Its `depth` and `impact_trace` are the
    reviewer's `depth` string and `impact_trace` array, also unchanged
    (`impact_trace` is `[]` after a creep stop or at depth `scope`) — the
    `review` entry records them as `docs/design-v2.md` §6.4 documents;
@@ -242,7 +260,7 @@ independent review.
 7. **Arm the claim latch** — the gate only engages once the agent has
    declared the task done:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" claim
    ```
 
 8. **Print the pass table.** One row per requirement — **every** requirement,
@@ -290,12 +308,12 @@ independent review.
      one exception, see "After verify"). The gate's block
      message will restate check failures; don't wait for it to inform the
      user.
-   - **All pass, advisories, `$STATE_DECISIONS` is `[]`** (the user has not
+   - **All pass, advisories, the contract's `state.decisions` is `[]`** (the user has not
      decided yet). The contract stays open awaiting the user. Show **one**
      advisory table, every advisory once: id, file:line, short summary, and
      your fix/skip recommendation with its reason. Ask the user to decide fix or skip per
      id, then stop — the gate lets you stop while the decision is pending.
-   - **All pass, and no advisories or `$STATE_DECISIONS` non-empty.** Tell
+   - **All pass, and no advisories or `state.decisions` non-empty.** Tell
      the user the DoD is satisfied; the gate closes the contract when you
      stop. The decision is asked once per contract: once recorded, raise no
      advisory as a decision again — not even a new one this round.
@@ -317,15 +335,13 @@ records or gates one.
 ## Advisory decision
 
 On the user's reply to step 8's advisory table, record one decision per
-advisory id of that result, through `lib/state.sh` only (N6). It rejects a
-reply that leaves an advisory undecided — ask again for the missing ones:
+advisory id of that result (contract-read's `result.advisory_ids`), through
+the CLI, which delegates to `lib/state.sh` (N6) and then re-arms the claim
+latch. It rejects a reply that leaves an advisory undecided (non-zero exit,
+nothing recorded) — ask again for the missing ones:
 
 ```bash
-result_read "$REPO/.dod/$TASK_KEY/result.json"
-state_record_decisions "$REPO/.dod/$TASK_KEY/state.json" \
-  '[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]' \
-  "$RESULT_DIFF_HASH" "$RESULT_ADVISORY_IDS"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh" record-decisions '[{"id":"a1","decision":"fix"},{"id":"a2","decision":"skip"}]'
 ```
 
 - **All skip** → stop; the gate closes the contract.

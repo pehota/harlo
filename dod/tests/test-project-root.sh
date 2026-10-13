@@ -40,29 +40,23 @@ ROOT=$(cd "$REPO" && pwd -P)
 SUB="$ROOT/ship"
 
 # --- skill side: cwd = subdir, no CLAUDE_PROJECT_DIR (Bash tool env) --------
-dod__test_skill_line "$DEFINE_SKILL" 'REPO=$(dod_repo_root "$PWD")'; L_REPO="$SKILL_LINE"
-dod__test_skill_line "$DEFINE_SKILL" 'TASK_KEY=$(dod_task_key "$REPO")'; L_KEY="$SKILL_LINE"
-dod__test_skill_line "$DEFINE_SKILL" 'contract_write "$REPO/.dod/$TASK_KEY/contract.json"'; L_CW="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'REPO=$(dod_repo_root "$PWD")'
-dod__test_skill_line "$VERIFY_SKILL" 'TASK_KEY=$(dod_task_key "$REPO")'
-dod__test_skill_line "$VERIFY_SKILL" 'contract_read "$REPO/.dod/$TASK_KEY/contract.json"'; L_CR="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'RFILE="$REPO/.dod/$TASK_KEY/result.json"'; L_RF="$SKILL_LINE"
-dod__test_skill_line "$VERIFY_SKILL" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod-claim.sh" "$REPO" "$TASK_KEY"'; L_CLAIM="$SKILL_LINE"
+# Each skill step is one dod.sh call in a fresh shell; the CLI resolves the
+# root itself (dod_repo_root "$PWD").
+CLI_LINE='bash "${CLAUDE_PLUGIN_ROOT}/scripts/dod.sh"'
+dod__test_skill_line "$DEFINE_SKILL" "$CLI_LINE brief-path"; L_BRIEF="$SKILL_LINE"
+dod__test_skill_line "$DEFINE_SKILL" "$CLI_LINE contract-write"; L_CW="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE contract-read"; L_CR="$SKILL_LINE"
+dod__test_skill_line "$VERIFY_SKILL" "$CLI_LINE claim"; L_CLAIM="$SKILL_LINE"
 
-SKILL_OUT=$(
-  cd "$SUB" || exit 1
-  unset CLAUDE_PROJECT_DIR
-  eval "$L_REPO"; eval "$L_KEY"
-  eval "$L_CW"' --task-key "$TASK_KEY" --task t --task-source argument --session-id s --works-when w --baseline-sha "$(git rev-parse HEAD)" --brief "$NA_BRIEF" --requirements "$REQS"'
-  eval "$L_CR"
-  eval "$L_RF"
-  eval "$L_CLAIM"
-  printf '%s|%s|%s|%s' "$REPO" "$TASK_KEY" "$CONTRACT_STATUS" "$RFILE"
-)
-eq "skill: REPO resolves to the git top-level from a subdir" "$ROOT" "${SKILL_OUT%%|*}"
-eq "skill: contract readable back at <root>/.dod" "open" "$(printf '%s' "$SKILL_OUT" | cut -d'|' -f3)"
-eq "skill: result path is under <root>/.dod" "$ROOT/.dod/main/result.json" "${SKILL_OUT##*|}"
+skill() { ( cd "$SUB" || exit 1; unset CLAUDE_PROJECT_DIR; eval "$1" ); }
+
+eq "skill: brief path is under <root>/.dod" "$ROOT/.dod/main/brief.md" "$(skill "$L_BRIEF")"
+skill "$L_CW"' --task t --task-source argument --works-when w --brief "$NA_BRIEF" --requirements "$REQS"' >/dev/null
 [ -f "$ROOT/.dod/main/contract.json" ] && ok "skill: contract written to <root>/.dod" || bad "skill: contract written to <root>/.dod" "missing"
+CR_OUT=$(skill "$L_CR")
+eq "skill: REPO resolves to the git top-level from a subdir" "$ROOT" "$(printf '%s' "$CR_OUT" | jq -r '.repo')"
+eq "skill: contract readable back at <root>/.dod" "open" "$(printf '%s' "$CR_OUT" | jq -r '.status')"
+skill "$L_CLAIM" >/dev/null
 state_read "$ROOT/.dod/main/state.json"
 eq "skill: claim armed the latch under <root>/.dod" "true" "$STATE_LATCHED"
 
