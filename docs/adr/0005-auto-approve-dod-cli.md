@@ -69,7 +69,7 @@ A plugin *can* ship a PreToolUse hook, and a PreToolUse hook can answer
   `jq` is absent, the user sees the prompt they saw before. Nothing blocks.
 - **The skills changed mechanics, not behaviour.** Every step is a one-line
   CLI call with JSON in single quotes (a literal `'` in JSON is written
-  `'`). `contract-read` prints the contract, state and latest result
+  as `\u0027`, JSON's escape for it). `contract-read` prints the contract, state and latest result
   as JSON, so nothing needs to be carried between calls. `contract-write`
   snapshots HEAD as the baseline itself, at write time.
 - **Still prompts.** These keep the user's normal permission rules: the
