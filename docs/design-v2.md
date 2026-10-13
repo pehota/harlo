@@ -121,6 +121,7 @@ flowchart TB
       SESS["<b>session.sh</b> · SessionStart<br/>preflight deps · cancel on /clear · error banner"]
       TRACK["<b>track.sh</b> · PostToolUse<br/>log edited files · nudge if no DoD"]
       GATE["<b>gate.sh</b> · Stop<br/>decision tree · block or release"]
+      APPROVE["<b>approve.sh</b> · PreToolUse(Bash)<br/>allow dod.sh calls · else fall through"]
     end
     subgraph LIB["lib/ — one file owns one artefact (N6)"]
       CONTRACTLIB["contract.sh · schema+read+write"]
@@ -133,6 +134,7 @@ flowchart TB
       DEFINE["<b>/dod:define</b><br/>derive typed requirements"]
       VERIFY["<b>/dod:verify</b><br/>run checks · orchestrate judgements"]
     end
+    CLI["<b>scripts/dod.sh</b><br/>one-line CLI · resolves repo + task_key"]
     REVIEWER["<b>dod-reviewer</b><br/>fresh-context subagent<br/>runs git diff itself"]
     subgraph STATE["&lt;git top-level&gt;/.dod/&lt;branch&gt;/ — git-ignored"]
       CONTRACT[("contract.json")]
@@ -147,10 +149,11 @@ flowchart TB
   TOOL["Project toolchain"]
 
   DEV --> CC
-  CC --> SESS & TRACK & GATE
+  CC --> SESS & TRACK & GATE & APPROVE
   CC --> DEFINE & VERIFY
   HOOKS -.-> LIB
-  SKILLS -.-> LIB
+  SKILLS -->|"one Bash call per step"| CLI
+  CLI -.-> LIB
 
   DEFINE -->|writes| CONTRACT
   VERIFY -->|writes| RESULT
@@ -171,7 +174,7 @@ flowchart TB
   classDef agent fill:#f8cecc,stroke:#b85450,color:#000
   classDef store fill:#e1d5e7,stroke:#9673a6,color:#000
   classDef ext fill:#999,stroke:#6b6b6b,color:#fff
-  class SESS,TRACK,GATE,CONTRACTLIB,RESULTLIB,STATELIB,GITREF,IO hook
+  class SESS,TRACK,GATE,APPROVE,CLI,CONTRACTLIB,RESULTLIB,STATELIB,GITREF,IO hook
   class DEFINE,VERIFY skill
   class REVIEWER agent
   class CONTRACT,RESULT,SSTATE,WT,ERR store
@@ -196,6 +199,8 @@ Claude Code runs concurrent hooks on the same event **in parallel, last write
 wins**. Splitting `SessionStart` (preflight + clear-cancel + error banner) or
 `PostToolUse` (edit log + nudge) into separate scripts would race against
 itself. One event, one script.
+`approve.sh` is the one `PreToolUse` script: it only ever answers "allow" for
+dod's own CLI or stays silent (ADR 0005).
 
 ### No preventive container — self-invoke is primary, the human is the fallback
 
@@ -354,9 +359,11 @@ itself each time it blocks.
   ├─ schema validator ──── reject malformed · reject vague-without-check
   ├─ confirmation gate ──── print the verification table, incl. the context
   │                        brief line · BLOCK on yes/adjust/cancel (D29)
-  ├─ baseline recorder ─── HEAD sha + dirty file list
-  └─ contract_write ────── via lib/contract.sh, `--brief` from the collector's
-                           verdict, then confirm one-line: "open"
+  ├─ baseline recorder ─── HEAD sha, snapshotted by `dod.sh contract-write`
+  │                        itself at write time (amend: the kept baseline)
+  └─ contract_write ────── `dod.sh contract-write` → lib/contract.sh, `--brief`
+                           from the collector's verdict, then confirm
+                           one-line: "open"
 ```
 
 Ordering matters: **the baseline is recorded last**, immediately before the
@@ -364,6 +371,16 @@ contract is written, minimising the window between snapshotting HEAD and
 allowing edits — and now **after** the confirmation gate, since a rejected or
 adjusted table must not have already snapshotted HEAD for the wrong
 requirements.
+
+**Mechanics (ADR 0005).** Every skill step is one Bash call,
+`bash "<plugin root>/scripts/dod.sh" <verb> …` — each Bash tool call is a
+fresh shell, so the CLI resolves the repo (`dod_repo_root "$PWD"`) and task
+key (`dod_task_key`) itself and nothing is carried between calls. The
+collector's `brief_path` comes from `dod.sh brief-path`; the contract is
+written by `dod.sh contract-write`, whose `--baseline-sha` defaults to HEAD
+(so baseline and write are one call) and `--session-id` to
+`$CLAUDE_CODE_SESSION_ID`. `hooks/approve.sh` approves these calls, so they
+run without a permission prompt.
 
 ### 5.3 `/dod:verify` components
 
@@ -391,6 +408,17 @@ requirements.
 **The diff hasher is shared.** If the gate and the verifier ever computed the
 hash differently, the gate would reject every result. One function, one file.
 
+**Mechanics (ADR 0005).** Each component is one `dod.sh` call:
+`contract-read` (contract + state + latest result as JSON — the round 1 vs
+round 2 decision and `delta_from` read its `result`), `state-set
+verifying|idle`, `cache-get`/`cache-set <cmd>` (diff hash computed
+internally, against the contract baseline), `baseline-worktree`,
+`changed-standards`, `result-write --requirements '<json>'` (diff hash and
+`result_next_round` computed internally, baseline from the contract),
+`claim`, and `record-decisions '<json>'` (records the advisory decision,
+then re-arms the latch). The reviewer's findings go into `result-write`'s
+JSON verbatim.
+
 ---
 
 ## 6. C4 — Level 4: Code
@@ -401,7 +429,9 @@ hash differently, the gate would reject every result. One function, one file.
 dod/
 ├── hooks/
 │   ├── session.sh      SessionStart + SessionEnd — preflight · cancel-on-clear · error banner
+│   ├── prompt.sh       UserPromptSubmit — no-DoD nudge · pending advisory reminder
 │   ├── track.sh        PostToolUse   — log edits · nudge
+│   ├── approve.sh      PreToolUse    — auto-approve dod.sh calls (ADR 0005)
 │   └── gate.sh         Stop          — decision tree
 ├── lib/
 │   ├── contract.sh     ▸ SCHEMA + contract_read/write/validate   ← owns contract.json
@@ -409,6 +439,9 @@ dod/
 │   ├── state.sh        ▸ SCHEMA + state_read/write + mutators    ← owns state.json
 │   ├── gitref.sh       branch_key · diff_hash · baseline worktree
 │   └── io.sh           fail_open · block · release · template render
+├── scripts/
+│   ├── dod.sh          the skills' one-line CLI → lib/*.sh (ADR 0005)
+│   └── dod-claim.sh    arm the claim latch (dod.sh claim delegates here)
 ├── templates/
 │   ├── block-no-result.txt
 │   ├── block-findings.txt
@@ -429,7 +462,8 @@ writes — task-specific harness state next to `contract.json`/`result.json`/
 **N6 enforcement rule:** nothing outside `lib/contract.sh` may `jq` into
 `contract.json`; likewise for `result.sh` and `state.sh`. Checkable by grep in
 CI. A consequence: the skills **cannot compose JSON themselves** — `/dod:define`
-calls `contract_write`, it does not emit jq from prose. An LLM hand-writing JSON
+calls `contract_write` (through `dod.sh contract-write`, which never parses
+an artefact itself either), it does not emit jq from prose. An LLM hand-writing JSON
 that the gate parses is precisely where a determinism harness would leak.
 
 ### 6.2 `gate.sh` exit contract
