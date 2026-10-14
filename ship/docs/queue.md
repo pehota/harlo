@@ -33,7 +33,8 @@ bun <ship>/env/queue.ts [--repo <path>] [--interval <ms>] [--grace <ms>] \
 - `--repo <path>` — the repo. Default: the cwd's git root. `ship` and the
   pollers run with the repo root as their working directory (`ship` reads
   `ship.config.json` from there), so the queue works from anywhere.
-- `--interval <ms>` — sleep between passes while a Delivery runs. Default 5000.
+- `--interval <ms>` — sleep between passes while a Delivery runs; also how
+  often progress prints while `ship next` runs a step chain. Default 5000.
 - `--grace <ms>`, `--max-runtime <ms>` — forwarded to `poll/stalled.ts` only
   when given.
 - `--lock <path>` — the lockfile. Default `.ship-queue.lock` in the repo root.
@@ -42,6 +43,15 @@ The State adapter is the one ship uses: `<repo>/ship.config.json` →
 `projectId` → `$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json`
 → `state`. A missing or invalid file exits 1, naming the file and suggesting
 `bun <ship>/env/setup.ts`. `bin/ship` is this checkout's.
+
+### Output
+
+While `ship next` runs a step chain it returns only at a gate, so the queue
+polls `ship status` every `--interval` and prints one `<delivery> at=…
+awaiting=…` line per open Delivery meanwhile (a failed poll is skipped).
+
+Each finished Delivery prints one line, `<delivery>: done at=<closed|abandoned>`,
+after its progress lines.
 
 ### Overrides (optional)
 
@@ -52,9 +62,6 @@ The State adapter is the one ship uses: `<repo>/ship.config.json` →
 
 Given both and no `--repo`, nothing is resolved: every call runs in the
 working directory and the lock defaults to `.ship-queue.lock` there.
-
-Each finished Delivery prints one line, `<delivery>: done at=<closed|abandoned>`,
-after its progress lines.
 
 ## Exit codes
 

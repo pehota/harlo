@@ -11,6 +11,7 @@ import { answer, defined, implemented, lifecycle, ok, verdict } from "../test/fi
 const ROOT = join(import.meta.dir, "..");
 const BIN = join(ROOT, "bin", "ship");
 const QUEUE = join(import.meta.dir, "queue.ts");
+const SLOW = join(ROOT, "test", "fixtures", "slow-adapter.ts");
 
 type Project = ReturnType<typeof lifecycle>;
 const projects: Project[] = [];
@@ -219,6 +220,44 @@ describe("queue", () => {
     expect(trackerFile(p, "k")).toContain("abandoned: k still ready after its Delivery ended");
     expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
   }, 60_000);
+});
+
+describe("queue progress while `ship next` runs a step chain", () => {
+  /** Define (the first step `ship next` runs) answers after `delay` ms, via the real adapter protocol. */
+  const slowDefine = (reply: string, delay = 1000) => ({ define: ["bun", SLOW, String(delay), reply] });
+  const slowProject = (reply: string) => {
+    const p = lifecycle(EVERY_STEP_OK, LEAVES_READY, { items: { a: "ready" }, adapters: slowDefine(reply) });
+    projects.push(p);
+    return p;
+  };
+  const progress = (line: string) => /^a-1 at=\S+ awaiting=/.test(line);
+
+  test("in-flight `<delivery> at=… awaiting=…` lines print while the slow step runs, none after the final done", async () => {
+    const p = slowProject(JSON.stringify(defined));
+    const human = gatekeeper(p);
+    const ran = await queue(p, "--interval 100");
+    await human.halt();
+
+    expect(ran.exit).toBe(0);
+    const lines = ran.stdout.split("\n");
+    const doneAt = lines.indexOf("a-1: done at=closed");
+    expect(doneAt).toBeGreaterThan(-1);
+    // `ship next` held the step ~1s: several polls land before drive-loop's first pass could even start
+    const inFlight = lines.slice(0, doneAt).filter(progress);
+    expect(inFlight.filter((l) => l.includes("at=define")).length).toBeGreaterThanOrEqual(2);
+    expect(lines.slice(doneAt + 1).filter(progress)).toEqual([]); // nothing after the final done line
+    expect((await p.ship("next")).out).toMatchObject({ delivery: null });
+  }, 60_000);
+
+  test("a slow `ship next` that exits nonzero: exit 1, stderr names exit 5 and the Delivery, no progress after", async () => {
+    const p = slowProject("exit:1");
+    const ran = await queue(p, "--interval 100");
+
+    expect(ran.exit).toBe(1);
+    expect(ran.stderr).toContain("ship next: exit 5 (Delivery a-1)");
+    expect(ran.stdout.split("\n").filter((l) => progress(l) && l.includes("at=define")).length).toBeGreaterThanOrEqual(2);
+    expect(existsSync(join(p.dir, ".ship-queue.lock"))).toBe(false);
+  }, 30_000);
 });
 
 describe("queue from a set-up repo (no plumbing flags)", () => {

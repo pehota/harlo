@@ -10,6 +10,10 @@
 // Before the first `ship next` it drives every already-open Delivery (`ship status`, no arg) to terminal:
 // orphans of an earlier, interrupted run go first, so the queue never starts a second Delivery alongside one.
 //
+// Progress while `ship next` runs: it executes the whole step chain in-process and returns only at a gate, so the
+// queue polls `ship status` every `--interval` meanwhile and prints each open Delivery's `<delivery> at=… awaiting=…`
+// line, as driveDelivery does. A failed poll is skipped; none prints once `ship next` has settled.
+//
 // Re-pick guard: a WorkItem whose status never leaves `ready` (no `policy.tracker.steps` entry moves it, and
 // its outcome mapping sets no status) would be picked again forever. A key picked a second time in one run gets
 // its new Delivery stopped as `abandoned` with that reason, and the queue exits 3 (1 if that stop fails: the
@@ -113,6 +117,37 @@ const shipJson = async <T>(options: Options, args: string[]): Promise<T> => {
   return JSON.parse(ran.stdout) as T;
 };
 
+/** One `<delivery> at=… awaiting=…` line per open Delivery, from a `ship status` poll; none if the poll fails. */
+const progressLines = async (options: Options): Promise<string[]> => {
+  try {
+    const ran = await runShip(options.ship, ["status"], options.cwd);
+    if (ran.exitCode !== 0) return [];
+    const { deliveries } = JSON.parse(ran.stdout) as StatusBody;
+    return deliveries.map(({ delivery, at, awaiting }) => `${delivery} at=${at} awaiting=${awaiting}`);
+  } catch {
+    return []; // progress is best-effort: it must never break the queue
+  }
+};
+
+/** Awaits `work`, printing progress every `--interval` while it is in flight and never after it settles. */
+const withProgress = async <T>(options: Options, work: Promise<T>): Promise<T> => {
+  let settled = false;
+  const poll = async () => {
+    while (!settled) {
+      await Bun.sleep(options.interval);
+      if (settled) return;
+      const lines = await progressLines(options);
+      if (!settled) lines.forEach((line) => console.log(line));
+    }
+  };
+  void poll();
+  try {
+    return await work;
+  } finally {
+    settled = true;
+  }
+};
+
 /** Removes the lockfile only while it still holds this run's token: never another run's lock. */
 const releaseLock = (lock: string, token: string): void => {
   try {
@@ -157,7 +192,9 @@ const drain = async (options: Options): Promise<number> => {
   for (const { delivery } of orphans.deliveries) await driveToEnd(delivery);
 
   for (;;) {
-    const { delivery } = await shipJson<{ delivery: DeliveryId | null }>(options, ["next"]);
+    const { delivery } = await withProgress(
+      options, shipJson<{ delivery: DeliveryId | null }>(options, ["next"]),
+    );
     if (delivery === null) return 0;
     const key = keyOf(delivery);
     if (handled.has(key)) {
