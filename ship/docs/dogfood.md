@@ -7,10 +7,14 @@ locations, and each is protected differently.
 |---|---|---|
 | `tracker/*.md` | one WorkItem per file (`<key>.md`) | its **own git repo**, created inside `tracker/` by the md tracker adapter |
 | `state/<delivery-id>/*.json` | the Delivery's snapshot + journal, one file per version | **reconstructable**: not backed up, and rebuilt by re-running |
-| `machine.json` | the machine-level config | **re-authorable** from the project's `ship.config.json` |
+| `machine.json` | the machine-level config | **re-authorable** by hand |
 
 `state/` and `machine.json` are deliberately not git-tracked, and no cron, launchd or backup
 script exists. The only repo is the one inside `tracker/`.
+
+Outside it, `agent/claude/index.ts` keeps its Define and Implement session ids in
+`~/.local/state/ship/agent-claude/{define,implement}.json`, keyed by Delivery. They are
+disposable: lost, the next call starts a fresh session.
 
 ## Tracker: git history
 
@@ -77,8 +81,13 @@ jq -j '.state.workItem | . as $w
 
 If the file is in the tracker repo, `git -C $D/tracker diff` shows only what differs (typically the lost comment lines).
 
-## machine.json: re-author from `ship.config.json`
+## machine.json: re-author it
 
-`machine.json` holds no data that exists nowhere else. If it is lost, write it again from the
-project's `ship.config.json` (`projectId`, `adapters`, `policy`; see the README). Nothing in it
-needs recovering.
+`machine.json` holds no data that exists nowhere else, but it cannot be derived from
+`ship.config.json`: the two layers have disjoint keys. If it is lost, write it again by hand —
+`principal` (argv), `state` (the files adapter's argv with `--dir <dogfood>/state`) and
+`capabilities.{define,implement,check}.env.USER` (see the README). Do not re-run `env/setup.ts` for this: it writes
+`~/.config/ship/<projectId>.json` (state defaulting to `~/.local/state/ship/<projectId>/state`), and refuses
+while `ship.config.json` exists unless `--force`, which would overwrite the dogfood one. A setup-generated
+`~/.config/ship/<projectId>.json` can serve as a template to copy from.
+Nothing in it needs recovering.

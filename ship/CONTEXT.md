@@ -30,7 +30,13 @@ _Avoid_: phase, stage, task
 
 **Acceptance criteria**:
 What must be true for a WorkItem to count as delivered, agreed in Define.
-_Avoid_: Definition of Done (dod's term), requirements
+_Avoid_: Definition of Done (dod's term)
+
+**Requirements**:
+What Define outputs and the core carries unchanged to Implement, Check, Verify
+and every gate's evidence, opaque to the core. Its shape is the Define adapter's
+choice: e.g. `{criteria, runbook}` (plain) or `{works_when, requirements[]}` (dod).
+_Avoid_: spec, contract
 
 **Changeset**:
 The changes a Delivery makes to the project, as a whole.
@@ -58,12 +64,14 @@ _Avoid_: checkpoint, approval step
 
 **Minimum Principal**:
 The least kind of Principal a gate accepts — or a kind of decision within a
-gate accepts: a model, or only a person.
+gate accepts: a model, or only a person. The core only passes it to the
+Principal as `min`; it never checks who answered.
 _Avoid_: permission level, role
 
 **Blocked**:
 A Delivery whose step could not run even after its retries, waiting for the
-Principal to choose retry or stop.
+Principal to choose retry or stop. Blocked more than `maxBlockedRetries` times
+in a row (default 3), it is Abandoned without asking.
 _Avoid_: stuck, failed, errored
 
 **Abandoned**:
@@ -128,7 +136,8 @@ _Avoid_: response, reply, callback
 
 **Delivery signal**:
 A signal addressed to a Delivery as a whole rather than to a command, such as
-start, stop, or a change to its WorkItem.
+start, stop, a change to its WorkItem, or `blocked_recovery` (retry or stop
+from Blocked).
 _Avoid_: event, notification
 
 **Runner**:

@@ -30,12 +30,13 @@ Two layers with disjoint keys. Each layer's schema rejects the other's keys.
 | Layer | File | Holds |
 |---|---|---|
 | Project | `ship.config.json` in the working directory | `projectId`, `adapters` (argv per project port), `policy` |
-| Machine | `$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json` | `principal`, `state` (argv), `secrets`, `capabilities` |
+| Machine | `$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json` | `principal`, `state` (argv), optional `telemetry` (argv), `secrets`, `capabilities` |
 
 - **Adapter argv** is a prefix. The Runner appends `<port> <op>`.
 - **Project ports:** `tracker`, `workspace`, `define`, `implement`, `check`,
   `integrate`, `deploy`, `verify`. All eight are required.
-- **Machine ports:** `principal`, `state`.
+- **Machine ports:** `principal`, `state`; optional `telemetry` (a best-effort
+  event sink the Runner fires, not a core port).
 - **`policy`:** only `policy.tracker.outcomes` is required. It must give a
   `status` for `delivered` and `accepted_with_failure` (Close awaits it), and
   map every stop outcome in `policy.outcomes` with `"comment": true` (a stop's
@@ -44,6 +45,7 @@ Two layers with disjoint keys. Each layer's schema rejects the other's keys.
 | `policy` key | Default |
 |---|---|
 | `fixRounds` | `2` |
+| `maxBlockedRetries` | `3` — blocked more times than this in a row, the Delivery is abandoned without asking |
 | `retryCap` | `{ "default": 1 }`, per step or gate by name |
 | `minimum` | `person` for every gate and Blocked; Decision: `scope` person, `advisory` model; `question` per `about`, unknown `about` → person |
 | `outcomes` (stop outcomes) | `["rolled_back", "abandoned"]` |
@@ -70,10 +72,16 @@ a profile `env` value:
 | Adapter | Port | Args |
 |---|---|---|
 | `src/adapters/state/files.ts` | state | `--dir <dir>` (`~` expanded) |
+| `src/adapters/tracker/md.ts` | tracker | `--dir <dir>` (one `<key>.md` per WorkItem; commits each write to its own git repo inside `<dir>`) |
+| `src/adapters/tracker/github.ts` | tracker | `[--repo <owner/name>] [--ready-label <name>] [--status-labels <a,b,...>] [--project <n>] [--project-owner <owner>] [--status-field <name>]` (drives `gh`) |
+| `src/adapters/tracker/jira.ts` | tracker | `[--base-url <url>] [--jql <query>]` (`--jql` is required for `next`, which throws "next needs --jql" without it; `read` does not need it). `read` and `next` only (`update`/`comment` are `failed`), so `env/setup.ts` does not offer it |
+| `src/adapters/workspace/worktree.ts` | workspace | `--main <branch> --root <dir>` (worktree `<root>/<delivery>` on branch `ship/<delivery>`) |
+| `src/adapters/integrate/local.ts` | integrate | `--root <dir>` (the Main line checkout: rebase, `merge --ff-only`, push if it has a remote) |
+| `src/adapters/ask/principal/index.ts` | deploy, verify | none (asks the Principal: `live`/`not_live`, `pass`/`fail`) |
 | `src/adapters/principal/tty.ts` | principal | none (always `/dev/tty`) |
 | `src/adapters/agent/claude/index.ts` | define, implement, check | `--agent-bin=<path>` (defaults to `claude` on PATH), `--requirements=plain\|dod`, repeatable `--agent-arg=<--flag[=value]>` (a claude flag, e.g. `--agent-arg=--plugin-dir=<dir>`; see [docs/adapters.md](docs/adapters.md#how-the-claude-adapters-run-claude-isolation-defaults-and---agent-arg-harlo-64)). `env/setup.ts` writes it bare: add these by editing `ship.config.json` |
 | `src/adapters/principal/claude.ts` | principal | `--agent-bin=<path>` (defaults to `claude` on PATH), repeatable `--agent-arg=<--flag[=value]>`, as above |
-| `src/adapters/telemetry/tty.ts` | telemetry | none (one line per event on its own stdout) |
+| `src/adapters/telemetry/tty.ts` | telemetry | none. Prints one line per event on its own stdout, but the Runner spawns telemetry sinks with stdout ignored (`src/runner/telemetry.ts`), so the line is discarded |
 | `src/adapters/telemetry/otel.ts` | telemetry | `--endpoint=<url>` (OTLP/HTTP base, `/v1/traces` appended), repeatable `--header=<name>=<value>` (auth, e.g. `--header=Authorization=Bearer <token>`), repeatable `--resource=<key>=<value>` (resource attributes; pass `service.name`). Each event is one span `<name> <phase>` in one trace per Delivery; see [docs/adapters.md](docs/adapters.md#telemetry-adapters-tty-and-otel-harlo-63). `SHIP_OTEL_E2E=1 bun test test/e2e/telemetry-otel.test.ts` runs it against a real collector (podman or docker) |
 | `src/adapters/fake.ts` | any | `--script <file>`. **Tests only.** |
 
@@ -94,7 +102,7 @@ bun /abs/path/harlo/ship/env/setup.ts --yes     # every default, no prompts
 | Tracker | `github` if `origin` is on GitHub, else `md`; or own path |
 | GitHub: repo, project number, project owner, ready status, status labels | `origin`'s `owner/name`; no project (label mode); repo owner; `Todo` (project) / `ready` (labels); `In Progress,Done` (project options) / `in_progress,done` (labels) |
 | md: tracker dir | `~/.local/state/ship/<projectId>/tracker` (created) |
-| Workspace, Define, Implement, Check, Integrate, Deploy, Verify, Principal, State | the one fully implemented adapter; or own path |
+| Workspace, Define, Implement, Check, Integrate, Deploy, Verify, Principal, State | the one fully implemented adapter, except Principal: `tty` (default) or `claude` (an unattended model); or own path |
 | Main line | the current branch; or an existing local branch; or a new one (created from HEAD) |
 | Push `<branch>` to `<remote>` with upstream? `[y/N]` | no. Only for a new Main line on a repo with a remote (`origin`, else the first), and only in a run that already asked something |
 | Worktrees root | `<git root>/.ship/worktrees` (hidden: `bun test` skips it; a non-hidden root inside the repo gets a warning) |
@@ -107,7 +115,7 @@ Only adapters that implement every op of their port are listed (Jira is not, yet
 
 - `<git root>/ship.config.json`: all eight project ports, Integrate `--root` = where the Main line is checked out
   (see below), and a policy that moves a picked item to in progress (`In Progress` / `in_progress`), done on delivery, a comment on every stop.
-- `~/.config/ship/<projectId>.json`: tty Principal, file State, `USER` for the Claude steps.
+- `~/.config/ship/<projectId>.json`: the chosen Principal (tty by default), file State, `USER` for the Claude steps.
 - `.ship/` as a line in the repo's `info/exclude` (once).
 
 It refuses to overwrite either file without `--force` (exit 1, nothing written), then loads both
@@ -146,7 +154,7 @@ bun <ship>/env/judge.ts                    # list the repo's Deliveries; add <de
 Both find the configs as `ship` does: the repo's `ship.config.json`, then `$SHIP_MACHINE_CONFIG`, else
 `~/.config/ship/<projectId>.json`. From outside the repo, add `--repo <path>`.
 
-The tty Principal reads `/dev/tty`: run the queue in a real terminal.
+With the tty Principal (the default), it reads `/dev/tty`: run the queue in a real terminal.
 
 **Where Integrate lands.** It merges into the branch checked out at its `--root`, so setup points `--root` at the Main line:
 
@@ -162,7 +170,8 @@ The tty Principal reads `/dev/tty`: run the queue in a real terminal.
 |---|---|
 | `ship start <key>` | Reads the WorkItem, then creates Delivery `<key>-<attempt>`. Rejected while the key has an open Delivery. |
 | `ship next` | Asks the tracker for the next key (`null` → nothing to do), then as `start`. |
-| `ship signal <delivery> <id> <result-json>` | Delivers a Result for command `<id>`. An id not awaited is ignored and journaled. |
+| `ship signal <delivery> <id> <result-json>` | Delivers a Result for command `<id>`, validated against the awaited op's Result schema (exit 1 if invalid). An id not awaited is ignored and journaled. |
+| `ship signal <delivery> --blocked retry\|stop [--comment <text>]` | Retries or stops a Blocked Delivery, as the Blocked decide's answer would. Ignored and journaled anywhere but Blocked. |
 | `ship stop <delivery> <outcome> <reason>` | Abandons the Delivery. `<outcome>` must be in `policy.outcomes`. |
 | `ship changed <delivery>` | Re-reads the WorkItem from the tracker and applies the change. |
 | `ship status [<delivery>]` | Read-only. No argument: every open Delivery. With one: that Delivery, even if Closed or Abandoned. |

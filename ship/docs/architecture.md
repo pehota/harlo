@@ -4,7 +4,9 @@ Status: draft, from the design grilling of 2026-09-25. Amended 2026-09-28 from
 implementation planning (A1–A5, `status`, configuration layers; see
 [`plan.md`](plan.md) §8.1). Amended 2026-09-28 by the user: a changed WorkItem
 before Land goes back to Define, not to the Accept gate (plan.md §8.1
-decision 15). Terms are defined in [`../CONTEXT.md`](../CONTEXT.md).
+decision 15). Re-synced to the code 2026-10-22 (docs audit: Minimum Principal
+not enforced, Blocked auto-abandon, Telemetry). Terms are defined in
+[`../CONTEXT.md`](../CONTEXT.md).
 
 ship carries one WorkItem from a tracker to a verified production release.
 A deterministic core drives a fixed lifecycle; everything that varies between
@@ -30,7 +32,7 @@ storage) sits behind ports and is filled by adapters chosen in config.
 ```mermaid
 flowchart LR
   trig["Trigger source<br/>(person, cron, webhook, agent)"]
-  pr["Principal<br/>(person on Telegram / terminal,<br/>or advisor model)"]
+  pr["Principal<br/>(person at a terminal,<br/>or advisor model)"]
   ship(["ship<br/>delivers one WorkItem"])
   tr["Tracker<br/>(Jira, md files, GitHub issues)"]
   ag["Coding agent<br/>(Claude Code, …)"]
@@ -77,10 +79,13 @@ flowchart TB
     W["Workspace<br/>setup · teardown"]
   end
 
+  TE["Telemetry (optional)<br/>notify · Runner-fired, best-effort<br/>not a core port"]
+
   T --> R
   R --> L
   R --> D & I & C & G & P & V
   R --> TR & PR & S & W
+  R -.-> TE
 ```
 
 Each port is served by an **executable adapter** chosen in config, speaking a
@@ -93,9 +98,12 @@ One adapter may serve several ports and share whatever it likes between them
 (e.g. one coding-agent adapter serving Define, Implement and Check — within P8).
 Tracker writes are tracker data, never part of a Delivery's changeset: they
 never go through the Workspace or the Land gate. Where they land is the Tracker
-adapter's concern — e.g. a markdown-file adapter configured per project writes
-either to a file outside the repo, or commits only the task file directly to
-the main line.
+adapter's concern — e.g. the markdown-file adapter (`tracker/md.ts`) writes
+to the directory given by `--dir` (normally outside the repo) and commits each
+write to its own git repo inside that directory.
+Telemetry is not a port the core knows: the Runner fires each lifecycle event
+(`start`, `awaiting`, `resolved`) at the optional machine `telemetry` adapter,
+best-effort, and ignores how it ends (`src/runner/telemetry.ts`).
 Tools such as an MCP `ask` server for in-step questions are adapter internals;
 the core only sees the resulting `question` signal.
 
@@ -171,7 +179,7 @@ Rules:
   `sent` entry; a Runner that dies while a synchronous adapter runs leaves an
   orphaned adapter whose Result is lost, and a `sent` entry with no outcome.
   The environment detects these from the journal (never sent, process gone,
-  or alive past a per-port `maxRuntime`: "hung?"), so the core stays
+  or alive past `maxRuntime`: "hung?"), so the core stays
   clock-free and never reads these entries.
 - An `accepted` answer only means "no Result yet"; the Runner still sends the
   remaining commands. An adapter crash is journaled, the remaining commands are
@@ -215,7 +223,9 @@ stateDiagram-v2
   Blocked
   note left of Blocked
     from any step or gate: failed past cap;
-    retry → that step; stop → Abandoned
+    retry → that step; stop → Abandoned;
+    blocked more than maxBlockedRetries times
+    in a row → Abandoned, Principal not asked
   end note
   Abandoned --> [*]
 
@@ -234,7 +244,7 @@ stateDiagram-v2
 | State | Entered when | Leaves by |
 |---|---|---|
 | waiting (flag on a step) | a command is outstanding | its signal |
-| Blocked | a step stays `failed` past its retry cap | Principal signal `retry` (re-issue the step; blocked at Implement, a `retry` comment goes with it as `feedback`) or `stop` |
+| Blocked | a step stays `failed` past its retry cap | Principal signal `retry` (re-issue the step; blocked at Implement, a `retry` comment goes with it as `feedback`) or `stop`; entered more than `policy.maxBlockedRetries` (default 3) times in a row, it abandons at once instead |
 | Abandoned (terminal) | `stop{outcome, reason}` from any non-terminal state | — |
 | Closed (terminal) | Teardown finishes | — |
 
@@ -261,6 +271,10 @@ stateDiagram-v2
   Outcomes decided outside arrive typed in `stop{outcome}`. The Tracker is
   updated per outcome from config. A stop outcome must comment (config rule):
   its reason is kept on the WorkItem for inspection.
+- **Terminal notifications.** Reaching Closed fires `principal.notify{text:
+  "closed: <outcome>"}`. Abandoning fires the outcome's `tracker.update` and
+  `tracker.comment` when policy maps them, then `principal.notify{text:
+  "abandoned: <outcome>[: <reason>]"}`.
 
 | Outcome | Tracker (example config) |
 |---|---|
@@ -274,7 +288,7 @@ stateDiagram-v2
 | State | Signal | Core does |
 |---|---|---|
 | Integrate | conflict (`question`) | answer "resolved" → re-issue Integrate; "rework" → Implement |
-| Blocked | on entry | issue Principal `decide{retry \| stop}`, giving `retry` an id |
+| Blocked | on entry | `blockedCount` + 1; past `policy.maxBlockedRetries` (default 3) abandon with reason `<node> blocked <n> times in a row (maxBlockedRetries <m>)`, asking nothing; else issue Principal `decide{retry \| stop}`, giving `retry` an id. From the 2nd consecutive block the evidence carries the note `This is retry attempt <n> at this gate.` `blockedCount` survives `retry` and resets when a step or gate is entered |
 | Blocked | Principal adapter `failed` | stay Blocked, issue nothing (the failed decide is not retried); the environment alerts; only a Delivery signal moves it |
 | Blocked | Principal `retry` + comment, blocked at Implement | re-issue the saved `blockedCmd` with the comment as `payload.feedback` (appended to any it had), otherwise unchanged; Implement gets it as a PRINCIPAL DIRECTIVE (harlo-62) |
 | Blocked | Principal `retry` + comment, blocked anywhere else | re-issue the saved `blockedCmd` unchanged; the comment is dropped, journaled `ignored_comment` |
@@ -306,6 +320,7 @@ attempt is the number of that WorkItem's earlier Deliveries in State plus one.
 | Decision | findings from the change check (scope, advisories) | person for scope, model for advisories |
 | Land | integrate onto the main line (may deploy) | person |
 | Failure | release check or deploy failed: fix forward, or accept | person |
+| Blocked (a state, not a gate) | `retry` or `stop` | person |
 
 **Questions from steps** are not gates: a step raises `question{prompt, about, options?}`,
 the core routes it to the Principal with its context (P9) and sends the answer
@@ -314,8 +329,12 @@ model for `clarify`, person for `login` or `conflict`; an unknown `about` gets
 person.
 
 Minimum Principal per gate (and per decision kind: `scope`, `advisory`) is
-configurable; the long-term aim is model Principals for all gates. A gate's
-options are core constants, because the core branches on them.
+configurable; the long-term aim is model Principals for all gates. The core
+does not enforce it: it only passes it as `min` in each `decide`/`ask` payload,
+and journals the answer's `by` without checking it. Honouring `min` is the
+Principal adapter's job; `principal/tty.ts` shows it, `principal/claude.ts`
+ignores it and answers every gate as `model`. A gate's options are core
+constants, because the core branches on them.
 
 ## Waiting and waking
 
@@ -344,14 +363,17 @@ sequenceDiagram
 
 The same shape covers every wait: a Principal's answer, a finished agent step,
 a CI run, a merged pull request, a manual homelab deploy confirmed by reply.
+The shipped Principals (`principal/tty.ts`, `principal/claude.ts`) do not use
+it: they answer synchronously, their stdout is the Result.
 
 If the Runner dies after the save but before the send, `land-1` is awaited but
 has no `sent` entry. If it dies while a synchronous adapter runs, the adapter
 is orphaned: it keeps running, and its Result is lost when it exits. The stall
 check counts the process alive only while its pid's start time still matches
 `started`; it flags the command once the process is gone with no Result,
-`accepted` or `adapter_error`, or as "hung?" while it runs past its port's
-`maxRuntime` (the environment's config and clock). A `sent` entry from another
+`accepted` or `adapter_error`, or as "hung?" while it runs past `maxRuntime`
+(the environment's config and clock; `env/poll/stalled.ts` takes one
+poller-wide `--max-runtime`/`--grace`, not one per port). A `sent` entry from another
 host is flagged as "unknown host", never skipped. A person sends the Result by
 hand or sends `stop`, and may terminate the orphan by its `(pid, started)`
 pair. An `accepted` command is not pid-checked: its work continues
@@ -375,8 +397,8 @@ is the Delivery's position. It never calls the core.
 
 | Layer | Holds |
 |---|---|
-| Project (`ship.config.json` in the repo) | adapter per project port, minimum Principal per gate and per decision kind (incl. question `about`) and for Blocked, stop outcomes, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N |
-| Machine (`$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json`) | Principal channel, State adapter, secrets, capability profile per port |
+| Project (`ship.config.json` in the repo) | adapter per project port, minimum Principal per gate and per decision kind (incl. question `about`) and for Blocked, stop outcomes, Tracker status per step and outcome, retry cap per step and gate, fix-round limit N, `maxBlockedRetries` (default 3) |
+| Machine (`$SHIP_MACHINE_CONFIG`, else `~/.config/ship/<projectId>.json`) | Principal channel, State adapter, optional Telemetry sink, secrets, capability profile per port |
 
 Gate options are core constants, not config. Listeners (bot, webhook, cron)
 are not configured in ship: the environment runs them (P6).
@@ -404,7 +426,7 @@ bypassed permissions require a sandboxed workspace (0006).
 | Stack | Bun + TypeScript + ajv |
 | Parallelism | multiple core invocations, each in its own workspace (e.g. a git worktree) provided by the Workspace port |
 | Retries | the core re-issues a `failed` command up to a per-step or per-gate cap, immediately; delays and backoff are the environment's |
-| Input | `start <workItem>`, `next`, `signal <delivery> <id> <result>`, `stop <delivery> <outcome> <reason>`, `changed <delivery>`; read-only `status [<delivery>]` |
+| Input | `start <workItem>`, `next`, `signal <delivery> <id> <result>`, `signal <delivery> --blocked retry\|stop [--comment <text>]`, `stop <delivery> <outcome> <reason>`, `changed <delivery>`; read-only `status [<delivery>]` |
 | State | snapshot + journal |
 | Identity | Tracker adapter returns a stable, slug-safe WorkItem key; Delivery = `<key>-<attempt>` (e.g. `PROJ-123-2`); command id = `<delivery>/<name>-<n>`, name = the step or gate, `ask`, `blocked`, or a fire op such as `notify` (e.g. `PROJ-123-2/land-1`) |
 | Location | `ship/` bundle in harlo |

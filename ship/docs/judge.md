@@ -100,7 +100,8 @@ retries and an intervening clarifying question).
 ## "What ACs did Define actually generate?"
 
 Run with `--step define`. The **last** `define-N` block's OUTPUT (Criteria /
-Runbook) is the one Implement actually worked from — earlier `define-N`
+Runbook for plain-mode requirements; any other shape, e.g. dod mode, prints as
+one `Requirements: <json>` line) is the one Implement actually worked from — earlier `define-N`
 blocks are prior rounds or retries, not the final ACs.
 
 On `freetext-signal-1`, that's `define-4`'s OUTPUT (`define-1`/`define-2`

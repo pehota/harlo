@@ -13,6 +13,6 @@ id comparison.
 
 - One signal is applied per Delivery at a time.
 - A Result whose command id is not awaited is ignored; Delivery signals
-  (`start`, `stop`, `workItem_changed`) are matched by Delivery only.
-- A command made moot by a Delivery signal is cancelled with `cancel{id}`.
+  (`start`, `stop`, `workItem_changed`, `blocked_recovery`) are matched by Delivery only.
+- A command made moot by a Delivery signal is cancelled with `cancel{target}`.
 - Staying reachable (bot, webhook) is the environment's concern, not the core's.

@@ -2,8 +2,8 @@
 
 An adapter is one executable. It serves one or more ports. The Runner spawns
 it once per command, feeds it JSON on stdin, and reads one JSON line from
-stdout. Types: [`plan.md`](plan.md) §3.1–§3.2, schemas in
-[`../src/contracts/`](../src/contracts/). Terms: [`../CONTEXT.md`](../CONTEXT.md).
+stdout. Types and schemas: [`../src/contracts/`](../src/contracts/) (the frozen
+original is [`plan.md`](plan.md) §3.1–§3.2). Terms: [`../CONTEXT.md`](../CONTEXT.md).
 
 ## The contract
 
@@ -178,6 +178,16 @@ where `<base>` is the payload's `base` (the Delivery's main line, see above) and
   missing, and no agent call is made. The adapter never assumes a branch name.
   With no declared paths, a missing `base` changes nothing.
 
+**Check's changeset rule (harlo-53).** Check requires the changeset to be
+`ship/<delivery>@<sha>` with `<sha>` on that branch in the workspace. Anything
+else (another branch, a commit only on the main line) is `failed` before any
+agent call: it is not work Integrate would land.
+
+**Define repeating its question.** Re-issued with an `answer`, a Define that asks
+the identical question again is `failed` (`define repeated its question after
+being answered`), not another `question`: the answer did not register, and
+re-asking would loop.
+
 ## How the claude adapters run `claude`: isolation defaults and `--agent-arg` (harlo-64)
 
 `agent/claude/index.ts` and `principal/claude.ts` run the CLI the same way, through
@@ -299,6 +309,13 @@ where it goes, is the `comments` map of each `principal.decide` payload (see bel
 `principal/claude.ts` takes `[--agent-bin=<path>] [--agent-arg=<token>]...
 principal <op>` and runs `claude` exactly as described in "How the claude adapters
 run `claude`" above (no `--resume`, no `--disallowedTools`).
+
+- It ignores `min` and answers every `decide` and `ask` as `by: "model"`; the
+  core never checks `by` against `min` (see architecture, Gates).
+- An answer outside the options, a CLI error or a reply with no structured
+  output is `failed` (nothing changed). There is no fallback to a person.
+- `notify` and `cancel` call no CLI: they ack `{}` at once.
+- A `comment` is kept only when the answer's route is not `dropped`.
 
 Payload: `{on, options, comments, min, evidence}`. `comments` has one entry per
 option, saying where a comment on that answer goes:
@@ -435,7 +452,7 @@ committed yet, or a crash if a commit already happened per the
 crash-vs-`failed` rule above) vs. `structured_output` present (→ map its
 fields to the op's `ok`/`question` body).
 
-## Dogfood driver run findings (M1.13, `env/drive.ts` + `env/text-to-signal-mapper.ts`)
+## Dogfood driver run findings (M1.13, `env/drive.ts` + the text-to-signal mapper, now `src/adapters/principal/match.ts`)
 
 Found running `env/drive.ts` unattended against a real `claude` agent, in a background
 process launched from an interactive coding session (not a login shell):
@@ -449,8 +466,9 @@ process launched from an interactive coding session (not a login shell):
   directly (any cwd, any process ancestry, backgrounded or not) succeeds. Bisected with
   `env -i PATH=... HOME=... claude -p ...` — adding `USER` alone is sufficient; no other
   var was needed. **Workaround, no code change:** set `capabilities.<port>.env.USER` in
-  machine config for `define`/`implement`/`check` (or whichever ports run the real
-  agent). No fix landed in `runner/spawn.ts` — flagged here rather than silently
+  machine config for every port that runs the real `claude`. `env/setup.ts` now
+  writes it for `define`/`implement`/`check` only: with `principal/claude.ts`, add
+  `capabilities.principal.env.USER` by hand. No fix landed in `runner/spawn.ts` — flagged here rather than silently
   broadening the stripped env, since that's a real security boundary (P5) and widening
   it deserves its own decision, not a side effect of one dogfood session's auth method.
 - **The Decision gate's `keep_going` comment did not reach Implement as an
@@ -480,6 +498,16 @@ process launched from an interactive coding session (not a login shell):
 - Put the `id` wherever an external system lets you tag work (branch, PR, message),
   so a later `ship signal` can carry it back.
 
+## Other shipped adapters
+
+| Adapter | Port, ops | argv | Quirks |
+|---|---|---|---|
+| `tracker/md.ts` | tracker: read, next, update, comment | `--dir <dir>` | `<dir>/<key>.md` outside the repo only; each write is one commit to a git repo it creates inside `<dir>` (a git failure only warns); `comment` appends below `<!-- ship:log -->`, so `body` never changes |
+| `tracker/jira.ts` | tracker: read, next | `[--base-url <url>] [--jql <query>]` | Jira Cloud REST v3; env `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`; `update`/`comment` are `failed`, so `env/setup.ts` does not offer it; `--jql` needs `ORDER BY` for a deterministic `next` |
+| `workspace/worktree.ts` | workspace: setup, teardown | `--main <branch> --root <dir>` | worktree `<root>/<delivery>` on `ship/<delivery>` off `--main`, in the repo it runs in; idempotent on the worktree being on disk |
+| `integrate/local.ts` | integrate: run | `--root <dir>` | rebase `ship/<delivery>` onto the Main line, `merge --ff-only` in `--root`, push if it has a remote; a conflict aborts the rebase and asks `{about: "conflict"}` |
+| `ask/principal/index.ts` | deploy, verify: run | none | a manual stand-in: asks `{about: "manual"}` with `live`/`not_live` (deploy) or `pass`/`fail` (verify); the answer becomes the verdict, a negative one also a finding |
+
 ## `tracker.next` order (GitHub tracker)
 
 `tracker/github.ts` picks the next key differently per mode:
@@ -500,11 +528,13 @@ process launched from an interactive coding session (not a login shell):
 The optional machine-config `telemetry` argv gets each Delivery lifecycle event
 (`{delivery, name, op, phase, elapsedMs}`, `src/runner/telemetry.ts`) on stdin
 as `telemetry notify`, fire-and-forget: the Runner waits at most 500ms per event
-and ignores the exit. Two sinks ship:
+and ignores the exit. It spawns the sink with stdout and stderr ignored, and with
+the Runner's own environment: there is no capability profile for telemetry.
+Two sinks ship:
 
 | Adapter | Args | Sends |
 |---|---|---|
-| `telemetry/tty.ts` | none | one `[telemetry] <delivery> <name> <op> <phase> <elapsedMs>ms` line on its own stdout |
+| `telemetry/tty.ts` | none | one `[telemetry] <delivery> <name> <op> <phase> <elapsedMs>ms` line on its own stdout, which the Runner discards (stdout ignored), so nothing shows |
 | `telemetry/otel.ts` | `--endpoint=<url>`, repeatable `--header=<name>=<value>`, repeatable `--resource=<key>=<value>` | one OTLP/HTTP JSON trace export per event, to any OTLP backend |
 
 `otel.ts` argv (all configuration; nothing is read from the environment):
@@ -528,7 +558,7 @@ INTERNAL span named `<name> <phase>`, ending now and starting `elapsedMs` earlie
 | `phase` | Span |
 |---|---|
 | `start` | zero-length: when the step/gate began |
-| `awaiting` | a heartbeat covering the wait so far (a gate waiting on the Principal) |
+| `awaiting` | a heartbeat covering the wait so far: every 5s while any command is in flight, plus one immediately when a gate's awaited `decide` starts |
 | `resolved` | the whole step/gate, from start to outcome |
 
 Attributes: `ship.delivery`, `ship.name`, `ship.op`, `ship.phase`,

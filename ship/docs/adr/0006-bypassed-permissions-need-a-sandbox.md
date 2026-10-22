@@ -1,7 +1,9 @@
 # Bypassed permissions require a sandboxed workspace
 
 Real coding-agent calls (M1.9–M1.11, `src/adapters/agent/claude/index.ts`) run
-unattended with `--permission-mode bypassPermissions`: no person is at a
+unattended with `--permission-mode bypassPermissions` (so does the model
+Principal, `src/adapters/principal/claude.ts`, through the shared
+`src/adapters/cli/claude/run.ts` defaults): no person is at a
 terminal to approve anything, so a mode that would otherwise prompt is
 useless there, and the loosest mode is simply correct for automation. This
 removes every one of Claude Code's own safety prompts, not only around the

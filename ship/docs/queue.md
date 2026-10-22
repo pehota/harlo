@@ -102,8 +102,9 @@ Delivery alongside an open one.
 Each pass also runs `poll/stalled.ts` (the same check `env/drive.ts` prints
 for a human). If it flags the current Delivery's awaited step **"dead"**
 (its process is gone and no `result`/`accepted`/`adapter_error` entry was
-ever journaled for it), the queue stops that Delivery as abandoned right
-away:
+ever journaled for it) on two consecutive passes, for the same awaited id,
+the queue stops that Delivery as abandoned (one pass is not enough: a fast
+adapter can exit just before its outcome entry lands):
 
 ```bash
 ship stop <delivery> abandoned "<awaiting id>: dead (stalled, no outcome entry)"
